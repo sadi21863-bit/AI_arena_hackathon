@@ -16,11 +16,8 @@ export interface InferenceRequest {
   max_tokens?: number;
 }
 
-export interface Env {
-  DB: D1Database;
-  AI: Ai;
-  GROQ_API_KEY: string;
-}
+import type { Env } from "./env";
+export type { Env } from "./env";
 
 // Task -> candidate model per provider, from spec §5. Kept explicit rather
 // than derived, so a model swap is a one-line change here, not a

@@ -1,14 +1,18 @@
 /**
  * Worker entry point — spec §10.
  *
- * This is a Week 0/1 stub, not the full API. It exists so `wrangler dev`
- * has something real to load and so `routeInference` (src/router.ts) has a
- * wired-up caller to test against once the inference_pool gate passes.
- * Building out the rest of the routes in spec §10's table is Week 1 scope
- * per the roadmap (§17) — don't treat this file as complete.
+ * Week 2 scope adds the agent system's own routes (agents, ideas, critique)
+ * on top of Week 0/1's health checks and inference passthrough. Still not
+ * the full §10 table — /events/*, /archive/query, and /admin/* are later
+ * weeks' scope per the roadmap (§17).
  */
 
-import { routeInference, type Env, type TaskType } from "./router";
+import { routeInference, type TaskType } from "./router";
+import type { Env } from "./env";
+import { requireAgentToken } from "./auth";
+import { listAgents, getAgent, isAgentId } from "./agents/personas";
+import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
+import { recallMemory } from "./agents/memory";
 
 export type { Env };
 
@@ -17,9 +21,9 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
-        return new Response("OK", { status: 200 });
-      }
-      if (url.pathname === "/health") {
+      return new Response("OK", { status: 200 });
+    }
+    if (url.pathname === "/health") {
       return Response.json({ status: "ok", spec_version: "8.0" });
     }
 
@@ -33,6 +37,49 @@ export default {
         return Response.json({ error: "all_tiers_exhausted_or_failed" }, { status: 503 });
       }
       return Response.json(result);
+    }
+
+    if (url.pathname === "/agents" && request.method === "GET") {
+      return Response.json(await listAgents(env));
+    }
+
+    const agentMatch = url.pathname.match(/^\/agents\/([^/]+)$/);
+    if (agentMatch && request.method === "GET") {
+      const agent = await getAgent(env, agentMatch[1]);
+      if (!agent) return Response.json({ error: "not_found" }, { status: 404 });
+
+      // spec §10: GET /agents/{id} is "Agent profile + memory" — ?recall=
+      // is optional since embedding a query costs an AI call every request.
+      const recallQuery = url.searchParams.get("recall");
+      const memory = recallQuery ? await recallMemory(env, agentMatch[1], recallQuery) : undefined;
+
+      return Response.json({ ...agent, memory });
+    }
+
+    if (url.pathname === "/ideas" && request.method === "GET") {
+      const eventId = url.searchParams.get("event_id");
+      const query = eventId
+        ? env.DB.prepare(`SELECT * FROM archive_ideas WHERE event_id = ? ORDER BY created_at DESC`).bind(eventId)
+        : env.DB.prepare(`SELECT * FROM archive_ideas ORDER BY created_at DESC LIMIT 100`);
+      const result = await query.all();
+      return Response.json(result.results);
+    }
+
+    if (url.pathname === "/ideas" && request.method === "POST") {
+      if (!requireAgentToken(request, env)) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const body = await request.json<PostIdeaInput>();
+      if (!isAgentId(body.agentId)) return Response.json({ error: "unknown_agent_id" }, { status: 400 });
+      const id = await postIdea(env, body);
+      return Response.json({ id }, { status: 201 });
+    }
+
+    const critiqueMatch = url.pathname.match(/^\/ideas\/([^/]+)\/critique$/);
+    if (critiqueMatch && request.method === "POST") {
+      if (!requireAgentToken(request, env)) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const body = await request.json<Omit<CritiqueInput, "ideaId">>();
+      if (!isAgentId(body.agentId)) return Response.json({ error: "unknown_agent_id" }, { status: 400 });
+      const id = await critiqueIdea(env, { ...body, ideaId: critiqueMatch[1] });
+      return Response.json({ id }, { status: 201 });
     }
 
     return new Response("Not found", { status: 404 });
