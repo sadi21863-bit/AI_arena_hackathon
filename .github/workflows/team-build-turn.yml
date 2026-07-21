@@ -66,6 +66,10 @@ jobs:
         # rootfs) — only the network boundary is intentionally open here,
         # and only to named endpoints, not "network=none vs. wide open" as a
         # binary choice.
+        #
+        # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
+        # $HOME/.local on startup; the read-only rootfs has no writable
+        # /home, so it needs to land inside the tmpfs already mounted at /tmp.
         run: |
           docker run --rm \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
@@ -73,6 +77,7 @@ jobs:
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
             --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
             -e GROQ_API_KEY \
+            -e HOME=/tmp \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
