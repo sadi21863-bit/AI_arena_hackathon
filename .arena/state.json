@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "build_pipeline",
+  "current_gate": "week1_cloudflare_foundation",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -21,13 +21,19 @@
       "threshold": "Groq (primary tier, spec \u00a76) succeeds on judging AND architecture task-shaped prompts. Workers AI status is recorded but not required to pass."
     },
     "build_pipeline": {
-      "status": "not_run",
-      "checked_at": null,
-      "details": null,
+      "status": "pass",
+      "checked_at": "2026-07-21T10:12:18.620711+00:00",
+      "details": {
+        "run_id": 29821178150,
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/sadi21863-bit/AI_arena_hackathon/actions/runs/29821178150",
+        "run_started_at": "2026-07-21T10:10:08Z"
+      },
       "threshold": "The .github/workflows/team-build-turn.yml workflow completes successfully at least once, per spec \u00a78"
     },
     "week1_cloudflare_foundation": {
-      "status": "blocked",
+      "status": "ready",
       "checked_at": null,
       "details": null
     },
