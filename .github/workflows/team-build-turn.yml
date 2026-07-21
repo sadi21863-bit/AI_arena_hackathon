@@ -37,6 +37,13 @@ concurrency:
   group: build-turn-${{ github.event.inputs.team || github.event.client_payload.team }}
   cancel-in-progress: false
 
+# The default GITHUB_TOKEN is read-only unless a repo/org's Actions settings
+# override it — don't rely on that being set globally, since a fresh repo
+# won't have it. Declare write access explicitly so "Commit progress"'s
+# `git push` (spec §8) works regardless of the repo-level default.
+permissions:
+  contents: write
+
 jobs:
   build-turn:
     runs-on: ubuntu-latest # 4 CPU / 16GB RAM / 14GB SSD on public repos, confirmed July 2026
@@ -82,12 +89,18 @@ jobs:
         # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
+        #
+        # --user "$(id -u):$(id -g)" (not a hardcoded 1000:1000): /workspace
+        # is bind-mounted from the runner's checkout, owned by the runner's
+        # actual uid — a mismatched uid can't write into it even though the
+        # bind mount itself is :rw, since real file-mode bits still apply.
+        # Still never uid 0, so the non-root intent (spec §7) holds either way.
         run: |
           docker run --rm \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
-            --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
+            --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
             -e CF_ACCOUNT_ID \
             -e CF_API_TOKEN \
             -e HOME=/tmp \
@@ -121,7 +134,7 @@ jobs:
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
             --network=none --read-only \
             --tmpfs /tmp:noexec,nosuid,size=200m,mode=1777 \
-            --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
+            --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
