@@ -8,9 +8,11 @@ name: Team Build Turn
 # between turns.
 #
 # Agent driver: OpenCode (opencode.ai), confirmed real/active/MIT-licensed,
-# with native Groq support and a documented non-interactive `opencode run`
-# command meant for exactly this kind of scripted CI use. This replaces what
-# would otherwise be custom-built agent-loop code.
+# with a documented non-interactive `opencode run` command meant for exactly
+# this kind of scripted CI use, and a custom-provider config path
+# (docker/opencode.json, OPENCODE_CONFIG) for pointing it at Workers AI
+# instead of a natively-supported provider. This replaces what would
+# otherwise be custom-built agent-loop code.
 
 on:
   workflow_dispatch:
@@ -41,6 +43,16 @@ jobs:
     timeout-minutes: 120 # well under the 6-hour hard cap; a single turn should never need this long
     env:
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      # Workers AI, not Groq, runs the agent-work step below: OpenCode's own
+      # baseline request (system prompt + tool schemas) measures ~32-38K
+      # tokens, which exceeds every Groq free-tier model's TPM cap (max 12K,
+      # spec §5) on the very first call. Workers AI's 10K Neurons/day is a
+      # daily budget, not a per-minute token throttle, so it doesn't hit the
+      # same wall. GROQ_API_KEY above stays wired for whatever still uses it
+      # directly (§6 router, once Week 1 lands) — it's just not what
+      # opencode calls in this step anymore.
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
     steps:
       - name: Checkout team repo at current state
         uses: actions/checkout@v4
@@ -55,13 +67,13 @@ jobs:
         run: docker build -t arena-team-base:latest -f docker/Dockerfile.arena-team-base docker/
 
       - name: Phase A — agent work (scoped network)
-        # NETWORK NOTE, resolved deliberately: OpenCode needs to reach Groq's
-        # API to do anything, so it cannot run inside a --network=none
-        # container. This step's container gets network access, but SCOPED —
-        # in a real deployment, replace the runner's open network with the
-        # egress-proxy pattern, allowlisting only
-        # registry.npmjs.org, github.com, api.github.com, and api.groq.com.
-        # The container is still
+        # NETWORK NOTE, resolved deliberately: OpenCode needs to reach
+        # Workers AI's API to do anything, so it cannot run inside a
+        # --network=none container. This step's container gets network
+        # access, but SCOPED — in a real deployment, replace the runner's
+        # open network with the egress-proxy pattern, allowlisting only
+        # registry.npmjs.org, github.com, api.github.com, and
+        # api.cloudflare.com. The container is still
         # locked down on every other axis (cap-drop, non-root, read-only
         # rootfs) — only the network boundary is intentionally open here,
         # and only to named endpoints, not "network=none vs. wide open" as a
@@ -76,13 +88,14 @@ jobs:
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
             --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
-            -e GROQ_API_KEY \
+            -e CF_ACCOUNT_ID \
+            -e CF_API_TOKEN \
             -e HOME=/tmp \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
             opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
-              --model groq/openai/gpt-oss-120b \
+              --model workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast \
               --auto \
               --format json > opencode-turn.log
         # --auto approves OpenCode's own permission prompts (needed since

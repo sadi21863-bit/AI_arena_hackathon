@@ -17,6 +17,15 @@ RUN apk add --no-cache git=~2 curl bash && \
     rm -rf /var/cache/apk/*
 ENV PATH="/opt/opencode/bin:${PATH}"
 
+# Baked-in provider config, not one carried by each team's repo — every team
+# gets Workers AI wired up the same way regardless of what's in their
+# checkout. OPENCODE_CONFIG works independent of $HOME/project-root lookup,
+# which matters here since HOME gets pointed at the per-run tmpfs at runtime
+# (see team-build-turn.yml) and anything baked in under it would be hidden
+# by that mount.
+COPY opencode.json /opt/opencode/config/opencode.json
+ENV OPENCODE_CONFIG=/opt/opencode/config/opencode.json
+
 # Non-root user matching the --user=1000:1000 flag used in the build-turn
 # workflow (spec §7).
 RUN addgroup -g 1000 arena && adduser -D -u 1000 -G arena arena && \
