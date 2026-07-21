@@ -1,21 +1,19 @@
 /**
- * Deep Research — spec §3.1: "12 agents research from 12 lenses via Exa +
- * Tavily" during Days 1-2 of the ideathon.
- *
- * Tavily is the reliable primary (genuinely free forever, no card, 1,000
- * credits/month). Exa is best-effort supplementary semantic discovery — a
- * $10 one-time free credit with no recurring refill unless a card is added
- * (see the note on Env.EXA_API_KEY). If Exa fails for ANY reason (balance
- * exhausted, rate limited, down), this degrades to Tavily-only silently —
- * a research call must never fail an agent's turn because the bonus tier
- * ran dry.
+ * Deep Research — spec §3.1 names Exa + Tavily; this build runs on Tavily
+ * alone. Exa's free tier is a one-time $10 credit with no recurring refill
+ * unless a card is added, and after checking every realistic alternative
+ * (Cloudflare AI Search, Brave, Google Custom Search, Serper, self-hosting
+ * on a VM/VPS/Cloudflare Containers — see project memory, 2026-07-21) none
+ * beat Tavily's genuinely free-forever, no-card, 1,000-credits/month tier.
+ * Simpler to run one reliable provider than one reliable + one that quietly
+ * degrades.
  */
 
 import type { Env } from "../env";
 import { rememberMemory } from "./memory";
 
 export interface ResearchResult {
-  source: "tavily" | "exa";
+  source: "tavily";
   title: string;
   url: string;
   snippet: string;
@@ -36,19 +34,6 @@ async function searchTavily(env: Env, query: string, maxResults: number): Promis
   return { results, answer: data.answer };
 }
 
-async function searchExa(env: Env, query: string, maxResults: number): Promise<ResearchResult[]> {
-  const res = await fetch("https://api.exa.ai/search", {
-    method: "POST",
-    headers: { "x-api-key": env.EXA_API_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ query, numResults: maxResults, contents: { text: true } }),
-  });
-  if (!res.ok) return []; // exhausted balance, rate limited, etc. — never throw, just contribute nothing
-  const data: any = await res.json();
-  return (data.results ?? []).map((r: any) => ({
-    source: "exa" as const, title: r.title ?? r.url, url: r.url, snippet: (r.text ?? "").slice(0, 500),
-  }));
-}
-
 export interface DeepResearchInput {
   agentId: string;
   eventId: string;
@@ -63,19 +48,12 @@ export interface DeepResearchOutput {
 }
 
 export async function deepResearch(env: Env, input: DeepResearchInput): Promise<DeepResearchOutput> {
-  const maxResults = input.maxResults ?? 5;
-
-  const [tavily, exaResults] = await Promise.all([
-    searchTavily(env, input.query, maxResults),
-    searchExa(env, input.query, maxResults).catch(() => [] as ResearchResult[]),
-  ]);
-
-  const results = [...tavily.results, ...exaResults];
+  const { results, answer } = await searchTavily(env, input.query, input.maxResults ?? 5);
 
   const summaryText = [
     `Lens: ${input.lens}`,
     `Query: ${input.query}`,
-    tavily.answer ? `Summary: ${tavily.answer}` : null,
+    answer ? `Summary: ${answer}` : null,
     ...results.map((r) => `- ${r.title} (${r.url}): ${r.snippet}`),
   ].filter(Boolean).join("\n");
 
@@ -87,5 +65,5 @@ export async function deepResearch(env: Env, input: DeepResearchInput): Promise<
     text: summaryText.slice(0, 4000), // stay well under embedding model's input limits
   });
 
-  return { results, answer: tavily.answer };
+  return { results, answer };
 }
