@@ -92,6 +92,10 @@ jobs:
         # machine-parseable for the Observatory (spec §11) instead of just
         # human-readable TUI output.
 
+      - name: Show turn log (debug)
+        if: always()
+        run: cat opencode-turn.log 2>/dev/null || echo "opencode-turn.log not found"
+
       - name: Phase B — locked-down verification (network=none)
         # This step runs fully --network=none — it runs AFTER the agent's
         # network-needing work is done, testing/building the code that was
@@ -119,6 +123,7 @@ jobs:
           git push
 
       - name: Upload turn log as artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-turn-${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}
