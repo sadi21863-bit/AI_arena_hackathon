@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "week3_event_engine",
+  "current_gate": "week4_build_system",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -58,12 +58,20 @@
       }
     },
     "week3_event_engine": {
-      "status": "ready",
-      "checked_at": null,
-      "details": null
+      "status": "pass",
+      "checked_at": "2026-07-21T13:05:00.000000+00:00",
+      "details": {
+        "queue": "event_queue table, atomic UPDATE...RETURNING claiming (D1 has no FOR UPDATE SKIP LOCKED but doesn't need one — single-primary serialized writes), ported from ideaconnect",
+        "scheduler_executor_split": "scheduler.ts never calls an LLM, only decides what's due; executor.ts claims + dispatches + calls the router, ported from ideaconnect",
+        "phases_verified_live": ["deep_research (12 agents queued, real ones completed via the LIVE cron trigger autonomously, unprompted)", "ideation_critique (30 ideas + critiques generated, on-persona)", "architecture (real build plans generated matching spec's tech-stack/components/risks/fallback format)", "ready_for_judging (terminal, correctly stops scheduling)"],
+        "self_healing": "resetStuckItems verified — force-orphaned an in_progress row, confirmed it was reset to pending and successfully reprocessed within the same tick",
+        "real_bug_found_and_fixed": "router.ts TASK_MODELS had no Workers AI fallback for 'design'/'validate' task types, causing hard failures during a Groq burst instead of falling through per spec §6 — added the missing fallbacks",
+        "cron": "wrangler.toml [triggers] crons, every 5 min",
+        "not_in_scope": "hackathon team formation / build-turn GitHub Actions dispatch is week4_build_system per the roadmap"
+      }
     },
     "week4_build_system": {
-      "status": "blocked",
+      "status": "ready",
       "checked_at": null,
       "details": null
     },

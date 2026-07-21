@@ -9,11 +9,13 @@
 
 import { routeInference, type TaskType } from "./router";
 import type { Env } from "./env";
-import { requireAgentToken } from "./auth";
+import { requireAgentToken, requireAdminToken } from "./auth";
 import { listAgents, getAgent, isAgentId } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
+import { ensurePhaseWorkQueued, type EventRow } from "./events/scheduler";
+import { processQueue } from "./events/executor";
 
 export type { Env };
 
@@ -96,6 +98,57 @@ export default {
       return Response.json(result);
     }
 
+    const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
+    if (eventMatch && request.method === "GET") {
+      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first();
+      if (!event) return Response.json({ error: "not_found" }, { status: 404 });
+      return Response.json(event);
+    }
+
+    // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table
+    // as written (it lists /admin/models, /admin/trigger-build,
+    // /admin/metrics — none of which is "start an event"), but the event
+    // engine needs some way to create one, and this is the same auth class.
+    if (url.pathname === "/admin/events" && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const body = await request.json<{ type: "ideathon" | "hackathon" }>();
+      const id = `event_${crypto.randomUUID()}`;
+      await env.DB.prepare(
+        `INSERT INTO archive_events (id, type, start_date, status, created_at) VALUES (?, ?, datetime('now'), 'deep_research', datetime('now'))`
+      ).bind(id, body.type).run();
+      return Response.json({ id }, { status: 201 });
+    }
+
+    // Manual trigger for the same work the cron handler (scheduled()) does
+    // automatically — lets phase advancement + queue draining be verified
+    // and debugged without waiting for the real schedule.
+    const tickMatch = url.pathname.match(/^\/admin\/events\/([^/]+)\/tick$/);
+    if (tickMatch && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(tickMatch[1]).first<EventRow>();
+      if (!event) return Response.json({ error: "not_found" }, { status: 404 });
+      const phase = await ensurePhaseWorkQueued(env, event);
+      const result = await processQueue(env, 5);
+      return Response.json({ phase, ...result });
+    }
+
     return new Response("Not found", { status: 404 });
+  },
+
+  /**
+   * spec §17's "event engine" — periodically checks every non-terminal
+   * event's phase and drains a batch of due work. Self-healing (ported
+   * from ideaconnect's ensureDailyWorkQueued precedent): idempotent per
+   * phase, so a missed or overlapping tick never stalls or duplicates work.
+   */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const events = await env.DB.prepare(
+      `SELECT * FROM archive_events WHERE status NOT IN ('ready_for_judging', 'complete')`
+    ).all<EventRow>();
+
+    for (const event of events.results) {
+      await ensurePhaseWorkQueued(env, event);
+      await processQueue(env, 5);
+    }
   },
 };

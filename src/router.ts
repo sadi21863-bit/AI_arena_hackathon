@@ -24,10 +24,10 @@ export type { Env } from "./env";
 // scoring-function debugging session.
 const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   summarize: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  validate: { groq: "llama-3.1-8b-instant" },
-  test: { groq: "llama-3.1-8b-instant" },
+  validate: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  test: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   research: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  design: { groq: "llama-3.3-70b-versatile" },
+  design: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   code_generation: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   judging: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   architecture: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },

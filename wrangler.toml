@@ -26,9 +26,20 @@ index_name = "arena-archive-vectors"
 [ai]
 binding = "AI"
 
-# --- Secrets (set via `wrangler secret put` for the Worker, AND as a repo/org
-# Actions secret for team-build-turn.yml — same key, two places it's needed) ---
-# ADMIN_BEARER_TOKEN        — spec §7.1, validates /admin/* routes
-# GROQ_API_KEY              — spec §5/§6/§8, primary inference tier AND the
-#                             key OpenCode uses inside team-build-turn.yml
-# GITHUB_TOKEN              — spec §8, dispatches team-build-turn.yml runs (needs actions:write)
+# --- Event engine cron (Week 3, src/index.ts scheduled()) — ticks the
+# ideathon phase scheduler + drains a batch of queued agent work. 5 min,
+# matching the ideaconnect precedent for this exact pattern. ---
+[triggers]
+crons = ["*/5 * * * *"]
+
+# --- Secrets (set via `wrangler secret put`) ---
+# GROQ_API_KEY              — spec §5/§6, primary inference tier. Also set as a
+#                             repo/org Actions secret for team-build-turn.yml —
+#                             same key, two places it's needed.
+# ADMIN_BEARER_TOKEN        — spec §7.1, validates /admin/* routes. Hashed
+#                             copies live in D1's admin_tokens table (never
+#                             the raw value) — see src/auth.ts.
+# AGENT_API_TOKEN           — spec §10 "Agent token" auth, shared across all
+#                             12 agents (they're internal, not external users)
+# TAVILY_API_KEY            — spec §3.1 Deep Research (Tavily only — see
+#                             project memory on why Exa was dropped)
