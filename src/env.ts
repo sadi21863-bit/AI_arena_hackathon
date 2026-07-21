@@ -18,5 +18,13 @@ export interface Env {
   // card. Exa was tried and dropped (see project memory, 2026-07-21):
   // one-time $10 credit, no sustainable free refill, and no alternative
   // provider beat Tavily's terms after checking.
-  TAVILY_API_KEY: string;
+  //
+  // Three separate Tavily accounts (2026-07-21), round-robin'd in
+  // research.ts, to pool 3x the monthly credits (~2,700 effective) instead
+  // of relying on a single 1,000/month tier. TAVILY_API_KEY (singular)
+  // stays as a fallback alias for local/dev use if only one key is set.
+  TAVILY_API_KEY_1: string;
+  TAVILY_API_KEY_2: string;
+  TAVILY_API_KEY_3: string;
+  TAVILY_API_KEY?: string;
 }

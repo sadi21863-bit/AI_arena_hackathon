@@ -24,11 +24,27 @@ async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof 
 async function handleResearch(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
   const payload = item.payload ? JSON.parse(item.payload) : {};
   const lens = payload.lens ?? agent.lens;
-  // Deterministic query from role/lens rather than an extra LLM round-trip
-  // to generate one — keeps this task cheap; the agent's actual reasoning
+  // Deterministic queries from role/lens rather than an extra LLM round-trip
+  // to generate them — keeps this task cheap; the agent's actual reasoning
   // happens when it later uses this research to write an idea.
-  const query = `${agent.name}'s ${lens} lens: emerging opportunities, pain points, or gaps worth building a product around in 2026`;
-  await deepResearch(env, { agentId: agent.id, eventId: item.event_id, lens, query });
+  //
+  // Four angles, not one (2026-07-21 budget review — 3 pooled Tavily
+  // accounts give real room now; see research.ts's header comment for the
+  // math): opportunities, review of prior failures, target-user validation,
+  // and market/funding signals — broader grounding than a single query
+  // could give. deepResearch() enforces its own per-event/monthly budget on
+  // each call, so if any of these end up over budget it degrades
+  // gracefully — nothing here needs to know or care.
+  const queries = [
+    `${agent.name}'s ${lens} lens: emerging opportunities, pain points, or gaps worth building a product around in 2026`,
+    `${lens} lens: startups or products that recently failed, shut down, or were abandoned trying to solve this in 2025-2026, and why`,
+    `${lens} lens: real evidence of who specifically feels this pain today and how they currently work around it, 2026`,
+    `${lens} lens: recent funding, acquisitions, or market signals in 2025-2026 indicating real demand in this space`,
+  ];
+
+  for (const query of queries) {
+    await deepResearch(env, { agentId: agent.id, eventId: item.event_id, lens, query });
+  }
 }
 
 interface IdeaJson {
@@ -75,8 +91,20 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
 
+  // Ground the critique in something real rather than pure LLM opinion —
+  // budgetExceeded degrades to an empty result list, which the prompt
+  // below handles fine either way (no special-casing needed here).
+  const grounding = await deepResearch(env, {
+    agentId: agent.id, eventId: item.event_id, lens: agent.lens,
+    query: `existing products or direct competitors for: ${idea.title} — ${idea.one_liner}`,
+    maxResults: 3,
+  });
+  const groundingText = grounding.results.length
+    ? `Real competitor/precedent research:\n${grounding.results.map((r) => `- ${r.title}: ${r.snippet}`).join("\n")}\n\n`
+    : "";
+
   const text = await callAgent(env, agent, "validate",
-    `Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
+    `${groundingText}Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
     `Respond with ONLY a JSON object: {"strength": string, "weakness": string, "suggestion": string}. All three fields are required, spec §4.`
   );
 
