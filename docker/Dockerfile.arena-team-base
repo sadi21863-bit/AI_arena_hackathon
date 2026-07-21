@@ -1,0 +1,29 @@
+# arena-team-base — spec §7, §8
+#
+# Binary whitelist at runtime: node, npm, git, opencode, sh. curl+bash are
+# used to install OpenCode below, then explicitly removed in the same layer
+# (apk del) — they do NOT persist in the final image, keeping the binary
+# whitelist claim actually true rather than aspirational.
+#
+# This is the image both the agent-work step (scoped network) and the
+# locked-down verification step (--network=none) run from — see spec §8.
+
+FROM node:20-alpine
+
+RUN apk add --no-cache git=~2 curl bash && \
+    curl -fsSL https://opencode.ai/install | bash && \
+    mv /root/.opencode /opt/opencode 2>/dev/null || true && \
+    apk del curl bash && \
+    rm -rf /var/cache/apk/*
+ENV PATH="/opt/opencode/bin:${PATH}"
+
+# Non-root user matching the --user=1000:1000 flag used in the build-turn
+# workflow (spec §7).
+RUN addgroup -g 1000 arena && adduser -D -u 1000 -G arena arena && \
+    chmod -R a+rX /opt/opencode 2>/dev/null || true
+USER 1000:1000
+
+WORKDIR /workspace
+
+# No CMD/ENTRYPOINT baked in — each step in team-build-turn.yml passes its
+# own command.

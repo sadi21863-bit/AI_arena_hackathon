@@ -1,0 +1,21 @@
+{
+  "name": "the-arena",
+  "version": "8.0.0",
+  "private": true,
+  "description": "The Arena — monthly autonomous AI competition, no-VM architecture (see spec docx for full design)",
+  "scripts": {
+    "week0:inference-probe": "node week0-spike/inference_pool_probe.js",
+    "week0:check-inference-gate": "python3 scripts/check_inference_gate.py",
+    "week0:check-build-gate": "python3 scripts/check_build_pipeline_gate.py",
+    "loop:state": "cat .arena/state.json",
+    "dev:pages": "wrangler pages dev",
+    "dev:worker": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "d1:apply": "wrangler d1 execute arena-db --file=db/schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0",
+    "@cloudflare/workers-types": "^4.20250718.0",
+    "typescript": "^5.5.0"
+  }
+}

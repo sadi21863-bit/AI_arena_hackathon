@@ -1,0 +1,34 @@
+name = "arena-api"
+main = "src/index.ts"
+compatibility_date = "2026-07-17"
+
+# spec §2.2 — Cloudflare Workers, always-free layer
+[observability]
+enabled = true
+
+# --- D1 (spec §9, db/schema.sql) ---
+[[d1_databases]]
+binding = "DB"
+database_name = "arena-db"
+database_id = "REPLACE_AFTER_wrangler_d1_create"
+
+# --- R2 (spec §15.3 — cold archive tier) ---
+[[r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "arena-archive"
+
+# --- Vectorize (spec §2.2/§15 — confirmed free at this project's scale) ---
+[[vectorize]]
+binding = "ARCHIVE_VECTORS"
+index_name = "arena-archive-vectors"
+
+# --- Workers AI (spec §6 — second tier behind Groq in the pooled router) ---
+[ai]
+binding = "AI"
+
+# --- Secrets (set via `wrangler secret put` for the Worker, AND as a repo/org
+# Actions secret for team-build-turn.yml — same key, two places it's needed) ---
+# ADMIN_BEARER_TOKEN        — spec §7.1, validates /admin/* routes
+# GROQ_API_KEY              — spec §5/§6/§8, primary inference tier AND the
+#                             key OpenCode uses inside team-build-turn.yml
+# GITHUB_TOKEN              — spec §8, dispatches team-build-turn.yml runs (needs actions:write)

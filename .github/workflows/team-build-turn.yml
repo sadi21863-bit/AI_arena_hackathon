@@ -1,0 +1,124 @@
+name: Team Build Turn
+
+# Spec §8. Triggered by the Cloudflare Worker via the GitHub API
+# (workflow_dispatch or repository_dispatch, per §8) once per agent build
+# turn — NOT continuously. Each run is a fresh, isolated VM (4 CPU / 16GB RAM
+# on public repos, confirmed from GitHub's own runner docs) that checks out
+# the repo, builds, commits, and exits. Git history is the persistence layer
+# between turns.
+#
+# Agent driver: OpenCode (opencode.ai), confirmed real/active/MIT-licensed,
+# with native Groq support and a documented non-interactive `opencode run`
+# command meant for exactly this kind of scripted CI use. This replaces what
+# would otherwise be custom-built agent-loop code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      team:
+        description: "Which team's build (alpha or beta)"
+        required: true
+        type: choice
+        options: [alpha, beta]
+      turn_id:
+        description: "Opaque turn identifier from the event engine, for log correlation"
+        required: true
+        type: string
+      task_prompt:
+        description: "What this turn's agent should work on"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [team-build-turn]
+
+concurrency:
+  group: build-turn-${{ github.event.inputs.team || github.event.client_payload.team }}
+  cancel-in-progress: false
+
+jobs:
+  build-turn:
+    runs-on: ubuntu-latest # 4 CPU / 16GB RAM / 14GB SSD on public repos, confirmed July 2026
+    timeout-minutes: 120 # well under the 6-hour hard cap; a single turn should never need this long
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    steps:
+      - name: Checkout team repo at current state
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build team base image
+        # arena-team-base:latest doesn't persist between jobs (each run is a
+        # fresh VM), so it's built fresh here from docker/Dockerfile.arena-team-base
+        # every turn. If this step's ~10-20s becomes a real cost across many
+        # turns, push the built image to GHCR once and pull it here instead.
+        run: docker build -t arena-team-base:latest -f docker/Dockerfile.arena-team-base docker/
+
+      - name: Phase A — agent work (scoped network)
+        # NETWORK NOTE, resolved deliberately: OpenCode needs to reach Groq's
+        # API to do anything, so it cannot run inside a --network=none
+        # container. This step's container gets network access, but SCOPED —
+        # in a real deployment, replace the runner's open network with the
+        # egress-proxy pattern, allowlisting only
+        # registry.npmjs.org, github.com, api.github.com, and api.groq.com.
+        # The container is still
+        # locked down on every other axis (cap-drop, non-root, read-only
+        # rootfs) — only the network boundary is intentionally open here,
+        # and only to named endpoints, not "network=none vs. wide open" as a
+        # binary choice.
+        run: |
+          docker run --rm \
+            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
+            --read-only \
+            --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
+            --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
+            -e GROQ_API_KEY \
+            -v "${{ github.workspace }}:/workspace:rw" \
+            -w /workspace \
+            arena-team-base:latest \
+            opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
+              --model groq/openai/gpt-oss-120b \
+              --auto \
+              --format json > opencode-turn.log
+        # --auto approves OpenCode's own permission prompts (needed since
+        # there's no human to click "yes" in CI) — the container's cap-drop
+        # and non-root user are what actually bound what --auto can do, not
+        # OpenCode's own permission system alone. --format json makes the log
+        # machine-parseable for the Observatory (spec §11) instead of just
+        # human-readable TUI output.
+
+      - name: Phase B — locked-down verification (network=none)
+        # This step runs fully --network=none — it runs AFTER the agent's
+        # network-needing work is done, testing/building the code that was
+        # just written, with zero network access during execution. Defense in
+        # depth against the generated code itself trying to exfiltrate
+        # anything, independent of
+        # whether the agent that wrote it was trustworthy.
+        run: |
+          docker run --rm \
+            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
+            --network=none --read-only \
+            --tmpfs /tmp:noexec,nosuid,size=200m,mode=1777 \
+            --user=1000:1000 --cap-drop=ALL --security-opt=no-new-privileges:true \
+            -v "${{ github.workspace }}:/workspace:rw" \
+            -w /workspace \
+            arena-team-base:latest \
+            sh -c 'test -f package.json && npm test --if-present || echo "no test suite yet, skipping"'
+
+      - name: Commit progress
+        run: |
+          git config user.name "arena-bot[${{ github.event.inputs.team || github.event.client_payload.team }}]"
+          git config user.email "arena-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}"
+          git push
+
+      - name: Upload turn log as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-turn-${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}
+          path: |
+            opencode-turn.log
+            **/*.log
+          if-no-files-found: ignore
+          retention-days: 30

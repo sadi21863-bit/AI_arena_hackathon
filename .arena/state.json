@@ -1,0 +1,65 @@
+{
+  "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
+  "current_gate": "build_pipeline",
+  "gates": {
+    "inference_pool": {
+      "status": "pass",
+      "checked_at": "2026-07-21T07:08:05.533060+00:00",
+      "details": {
+        "groq_ok_tasks": [
+          "architecture",
+          "judging",
+          "summarize"
+        ],
+        "groq_required_tasks": [
+          "architecture",
+          "judging"
+        ],
+        "workers_ai_tested": true,
+        "workers_ai_any_ok": true
+      },
+      "threshold": "Groq (primary tier, spec \u00a76) succeeds on judging AND architecture task-shaped prompts. Workers AI status is recorded but not required to pass."
+    },
+    "build_pipeline": {
+      "status": "not_run",
+      "checked_at": null,
+      "details": null,
+      "threshold": "The .github/workflows/team-build-turn.yml workflow completes successfully at least once, per spec \u00a78"
+    },
+    "week1_cloudflare_foundation": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week2_agent_system": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week3_event_engine": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week4_build_system": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week5_archive_tribunal": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week6_observatory": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    },
+    "week7_closed_beta": {
+      "status": "blocked",
+      "checked_at": null,
+      "details": null
+    }
+  }
+}
