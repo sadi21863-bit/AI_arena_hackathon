@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "week4_build_system",
+  "current_gate": "week5_archive_tribunal",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -71,12 +71,26 @@
       }
     },
     "week4_build_system": {
-      "status": "ready",
-      "checked_at": null,
-      "details": null
+      "status": "pass",
+      "checked_at": "2026-07-22T04:35:00.000000+00:00",
+      "details": {
+        "github_org": "AI-arena-hackathon (spec §12: one org, one repo per hackathon team)",
+        "team_formation": "src/events/executor.ts handleTeamFormation — picks top 2 architecture_complete ideas by critique count from the parent ideathon, creates+scaffolds each team's repo, dispatches first build turn same day (spec §3.2 Day 1)",
+        "hackathon_phase_logic": "src/events/scheduler.ts hackathonPhaseForDay — team_formation (day 0) -> building (day 1-2, one dispatch/team/day) -> ready_for_judging (day 3+)",
+        "observatory_build_status": "GET /admin/events/:id/build-status (spec §11), polls GitHub Actions job status per team",
+        "bugs_found_and_fixed_via_live_testing": [
+          "@noble/hashes/blake2b import path stale for installed v2.2.0 (-> @noble/hashes/blake2.js)",
+          "auto_init:true on team repo creation collided with our own scaffold PUTs (GitHub requires sha to update a file auto_init already created) -- removed auto_init",
+          "parallel scaffold-file writes raced to create the repo's first commit/branch, causing intermittent 409s -- made sequential",
+          "dispatch.ts hardcoded ref:master but non-auto_init repos default to main"
+        ],
+        "verified_live": "created hackathon event_391eac5c-2523-4743-b9f5-76afeca3a8a7 from real ideathon event_2eaf0bb2-0f84-48b6-b781-7b5836e0a67a; both team repos created under AI-arena-hackathon, scaffolded, secrets set; both teams' first build-turn GitHub Actions runs completed with conclusion=success",
+        "known_gap_not_fixed": "team_formation is not safely retryable per-team if it fails partway through (a repo that already exists on retry causes a 422 name collision) -- worth hardening before real event usage, flagged not fixed to stay in Week 4 scope",
+        "also_did": "upgraded wrangler 3.90 -> 4.112 + @cloudflare/workers-types v5 peer dep, both required for continued Cloudflare API compatibility"
+      }
     },
     "week5_archive_tribunal": {
-      "status": "blocked",
+      "status": "ready",
       "checked_at": null,
       "details": null
     },
