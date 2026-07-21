@@ -95,7 +95,7 @@ jobs:
             -w /workspace \
             arena-team-base:latest \
             opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
-              --model workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast \
+              --model workers-ai/@cf/openai/gpt-oss-120b \
               --auto \
               --format json > opencode-turn.log
         # --auto approves OpenCode's own permission prompts (needed since

@@ -9,8 +9,8 @@
         "apiKey": "{env:CF_API_TOKEN}"
       },
       "models": {
-        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": {
-          "name": "Llama 3.3 70B (Workers AI)"
+        "@cf/openai/gpt-oss-120b": {
+          "name": "GPT-OSS 120B (Workers AI)"
         }
       }
     }
