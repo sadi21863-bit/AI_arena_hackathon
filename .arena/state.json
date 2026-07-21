@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "week2_agent_system",
+  "current_gate": "week3_event_engine",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -46,12 +46,19 @@
       }
     },
     "week2_agent_system": {
-      "status": "ready",
-      "checked_at": null,
-      "details": null
+      "status": "pass",
+      "checked_at": "2026-07-21T12:15:00.000000+00:00",
+      "details": {
+        "agents_seeded": 12,
+        "interaction_types": ["idea", "comment", "critique", "propose_collaboration", "form_alliance", "merge", "revise"],
+        "rag_memory": "Vectorize-backed, agent-scoped recall verified (0.79-0.83 similarity on relevant queries, confirmed no cross-agent leakage)",
+        "research": "Tavily primary (free forever, no card) + Exa best-effort supplement ($10 one-time credit, no card — degrades gracefully to Tavily-only once exhausted, see src/env.ts note)",
+        "verified_live": ["GET /agents", "GET /agents/{id}", "GET/POST /ideas", "POST /ideas/{id}/critique", "POST /research"],
+        "not_in_scope_yet": "ideathon/hackathon phase scheduling is week3_event_engine"
+      }
     },
     "week3_event_engine": {
-      "status": "blocked",
+      "status": "ready",
       "checked_at": null,
       "details": null
     },

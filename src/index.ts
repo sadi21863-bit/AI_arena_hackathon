@@ -13,6 +13,7 @@ import { requireAgentToken } from "./auth";
 import { listAgents, getAgent, isAgentId } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory } from "./agents/memory";
+import { deepResearch, type DeepResearchInput } from "./agents/research";
 
 export type { Env };
 
@@ -80,6 +81,19 @@ export default {
       if (!isAgentId(body.agentId)) return Response.json({ error: "unknown_agent_id" }, { status: 400 });
       const id = await critiqueIdea(env, { ...body, ideaId: critiqueMatch[1] });
       return Response.json({ id }, { status: 201 });
+    }
+
+    // Not in spec §10's API table — Deep Research (§3.1) is meant to be
+    // triggered internally by the Week 3 event engine, which can just call
+    // deepResearch() directly since it's the same Worker. This route exists
+    // for verification and manual triggering, gated the same as the other
+    // agent-write routes.
+    if (url.pathname === "/research" && request.method === "POST") {
+      if (!requireAgentToken(request, env)) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const body = await request.json<DeepResearchInput>();
+      if (!isAgentId(body.agentId)) return Response.json({ error: "unknown_agent_id" }, { status: 400 });
+      const result = await deepResearch(env, body);
+      return Response.json(result);
     }
 
     return new Response("Not found", { status: 404 });

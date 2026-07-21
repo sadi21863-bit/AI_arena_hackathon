@@ -12,7 +12,7 @@ import type { Env } from "../env";
 
 const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"; // matches the Vectorize index's preset dimensions
 
-export type MemoryType = "idea" | "comment" | "critique" | "reflection";
+export type MemoryType = "idea" | "comment" | "critique" | "reflection" | "research";
 
 export interface MemoryRecord {
   id: string; // stable id, e.g. `${interactionId}` or `${ideaId}`

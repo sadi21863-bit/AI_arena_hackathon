@@ -14,4 +14,12 @@ export interface Env {
   // token" auth) — these are internal system agents, not external users, so
   // per-agent tokens would be complexity the spec doesn't ask for.
   AGENT_API_TOKEN: string;
+  // Deep Research (spec §3.1). TAVILY_API_KEY is the reliable primary —
+  // genuinely free forever, no card. EXA_API_KEY is best-effort: $10
+  // one-time free credit, no recurring refill without a card on file (see
+  // CLAUDE.md / project memory on this decision, 2026-07-21) — research.ts
+  // must degrade gracefully to Tavily-only once it's exhausted, not fail
+  // the agent's turn.
+  TAVILY_API_KEY: string;
+  EXA_API_KEY: string;
 }
