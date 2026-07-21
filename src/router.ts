@@ -88,10 +88,16 @@ async function tryWorkersAI(env: Env, model: string, req: InferenceRequest): Pro
   if (used >= DAILY_CAPS["workers_ai"]) return null;
 
   const result: any = await env.AI.run(model as any, { messages: [{ role: "user", content: req.prompt }] });
-  // Real Neuron cost should come from AI Gateway's logged usage, not guessed —
-  // this placeholder (300) needs replacing with real numbers once the
-  // inference_pool Week 0 gate passes (see CLAUDE.md standing rules).
-  await recordUsage(env, "workers_ai", model, req.task_type, 300);
+  // env.AI.run()'s response carries the real per-call cost in result.usage.neurons
+  // (confirmed 2026-07-21 against the raw HTTP API: a 94-token exchange on
+  // llama-3.3-70b-instruct-fp8-fast cost ~9.99 neurons). Use it directly
+  // instead of a flat guess — request sizes vary enough (see Week 0 probe
+  // results: 94-345 tokens across task types) that a single constant would
+  // always be wrong in one direction.
+  // Round up (not just round) so summing many calls never under-counts
+  // against DAILY_CAPS — units_used is INTEGER, the raw value isn't.
+  const neurons = Math.ceil(result?.usage?.neurons ?? 300); // fallback only if the field is ever absent
+  await recordUsage(env, "workers_ai", model, req.task_type, neurons);
   return result?.response ?? null;
 }
 

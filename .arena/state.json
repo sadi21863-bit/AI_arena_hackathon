@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "week1_cloudflare_foundation",
+  "current_gate": "week2_agent_system",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -33,12 +33,20 @@
       "threshold": "The .github/workflows/team-build-turn.yml workflow completes successfully at least once, per spec \u00a78"
     },
     "week1_cloudflare_foundation": {
-      "status": "ready",
-      "checked_at": null,
-      "details": null
+      "status": "pass",
+      "checked_at": "2026-07-21T10:55:00.000000+00:00",
+      "details": {
+        "worker": "https://arena-api.sadi21863.workers.dev",
+        "pages": "https://arena-frontend-cg4.pages.dev",
+        "d1": "arena-db (ec8d6eb2-d284-420c-9bde-39643a8138d3), schema applied, 7 tables",
+        "r2_bucket": "arena-archive",
+        "vectorize_index": "arena-archive-vectors (preset @cf/baai/bge-base-en-v1.5)",
+        "inference_router": "src/router.ts, verified live via POST /inference (Groq primary)",
+        "verified_live": ["GET /health", "GET /healthz", "POST /inference"]
+      }
     },
     "week2_agent_system": {
-      "status": "blocked",
+      "status": "ready",
       "checked_at": null,
       "details": null
     },

@@ -10,7 +10,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "arena-db"
-database_id = "REPLACE_AFTER_wrangler_d1_create"
+database_id = "ec8d6eb2-d284-420c-9bde-39643a8138d3"
 
 # --- R2 (spec §15.3 — cold archive tier) ---
 [[r2_buckets]]
