@@ -16,6 +16,7 @@ import { recallMemory } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
 import { ensurePhaseWorkQueued, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
+import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
 
@@ -111,11 +112,15 @@ export default {
     // engine needs some way to create one, and this is the same auth class.
     if (url.pathname === "/admin/events" && request.method === "POST") {
       if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
-      const body = await request.json<{ type: "ideathon" | "hackathon" }>();
+      const body = await request.json<{ type: "ideathon" | "hackathon"; parentEventId?: string }>();
+      if (body.type === "hackathon" && !body.parentEventId) {
+        return Response.json({ error: "hackathon events require parentEventId (the ideathon it advanced from)" }, { status: 400 });
+      }
       const id = `event_${crypto.randomUUID()}`;
+      const initialStatus = body.type === "hackathon" ? "team_formation" : "deep_research";
       await env.DB.prepare(
-        `INSERT INTO archive_events (id, type, start_date, status, created_at) VALUES (?, ?, datetime('now'), 'deep_research', datetime('now'))`
-      ).bind(id, body.type).run();
+        `INSERT INTO archive_events (id, type, start_date, status, parent_event_id, created_at) VALUES (?, ?, datetime('now'), ?, ?, datetime('now'))`
+      ).bind(id, body.type, initialStatus, body.parentEventId ?? null).run();
       return Response.json({ id }, { status: 201 });
     }
 
@@ -130,6 +135,26 @@ export default {
       const phase = await ensurePhaseWorkQueued(env, event);
       const result = await processQueue(env, 5);
       return Response.json({ phase, ...result });
+    }
+
+    // Observatory build view (spec §11): "polls GitHub Actions job status
+    // and log artifacts per turn rather than holding a live connection to
+    // a container." Reports every team's recent runs for a hackathon event.
+    const buildStatusMatch = url.pathname.match(/^\/admin\/events\/([^/]+)\/build-status$/);
+    if (buildStatusMatch && request.method === "GET") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const teams = await env.DB.prepare(`SELECT id, team_name, repo_url, status FROM hackathon_teams WHERE event_id = ?`)
+        .bind(buildStatusMatch[1]).all<{ id: string; team_name: string; repo_url: string; status: string }>();
+
+      const results = await Promise.all(teams.results.map(async (team) => ({
+        teamId: team.id,
+        teamName: team.team_name,
+        repo: team.repo_url,
+        status: team.status,
+        runs: await listBuildTurnRuns(env, team.repo_url, 5),
+      })));
+
+      return Response.json(results);
     }
 
     return new Response("Not found", { status: 404 });

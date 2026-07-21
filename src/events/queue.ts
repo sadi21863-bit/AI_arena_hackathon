@@ -14,7 +14,9 @@
 
 import type { Env } from "../env";
 
-export type TaskType = "research" | "submit_idea" | "critique" | "propose_collaboration" | "architecture";
+export type TaskType =
+  | "research" | "submit_idea" | "critique" | "propose_collaboration" | "architecture"
+  | "team_formation" | "dispatch_build_turn";
 export type QueueStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface QueueItem {

@@ -4,3 +4,4 @@
 node_modules/
 opencode-turn.log
 .wrangler/
+.admin_token.txt

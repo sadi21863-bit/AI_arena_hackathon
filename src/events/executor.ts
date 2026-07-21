@@ -12,6 +12,8 @@ import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea } from "../agents/interactions";
 import { recallMemory } from "../agents/memory";
+import { createTeamRepo } from "../github/repos";
+import { dispatchBuildTurn } from "../github/dispatch";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
@@ -133,6 +135,82 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
   await env.DB.prepare(`UPDATE archive_ideas SET status = 'architecture_complete' WHERE id = ?`).bind(ideaId).run();
 }
 
+interface IdeaForBuild {
+  id: string; agent_id: string; title: string; one_liner: string;
+  problem: string; solution: string; build_scope: string;
+}
+
+/**
+ * Team formation — spec §3.2 Day 1: "Team formation, repo init. First build
+ * turns begin same day." Not agent-scoped (item.agent_id is null for this
+ * task type) — it acts on the hackathon event as a whole.
+ *
+ * Picks the top 2 ideas from the parent ideathon by critique count — same
+ * proxy signal used for the architecture phase, until Week 5's judges
+ * provide real scores.
+ */
+async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
+  const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
+    .bind(item.event_id).first<{ parent_event_id: string | null }>();
+  if (!event?.parent_event_id) throw new Error(`Hackathon event ${item.event_id} has no parent_event_id set`);
+
+  const top2 = await env.DB.prepare(
+    `SELECT i.id, i.agent_id, i.title, i.one_liner, i.problem, i.solution, i.build_scope, COUNT(x.id) as critique_count
+     FROM archive_ideas i LEFT JOIN archive_interactions x ON x.target_id = i.id AND x.type = 'critique'
+     WHERE i.event_id = ? AND i.status = 'architecture_complete'
+     GROUP BY i.id ORDER BY critique_count DESC LIMIT 2`
+  ).bind(event.parent_event_id).all<IdeaForBuild>();
+
+  if (top2.results.length === 0) throw new Error(`No architecture_complete ideas found for parent event ${event.parent_event_id}`);
+
+  const teamNames: Array<"alpha" | "beta"> = ["alpha", "beta"];
+  for (let i = 0; i < top2.results.length; i++) {
+    const idea = top2.results[i];
+    const teamName = teamNames[i];
+    const teamId = `team_${crypto.randomUUID()}`;
+
+    const repo = await createTeamRepo(env, teamName, item.event_id, {
+      title: idea.title, oneLiner: idea.one_liner, problem: idea.problem, solution: idea.solution, buildScope: idea.build_scope,
+    });
+
+    // repo_url stores "owner/repo", not the html URL — that's what every
+    // GitHub API call needs; the html URL is trivially derivable
+    // (https://github.com/<repo_url>) whenever display needs it.
+    await env.DB.prepare(
+      `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'building')`
+    ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
+
+    await dispatchBuildTurn(env, {
+      repoFullName: repo.fullName, team: teamName, turnId: `${teamId}_turn1`,
+      taskPrompt: `Build this from scratch: ${idea.title} — ${idea.one_liner}. Problem: ${idea.problem}. Solution: ${idea.solution}. Scope: ${idea.build_scope}`,
+    });
+  }
+}
+
+/** Subsequent daily build turns — spec §3.2 Day 2-3 "build turns continue." */
+async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void> {
+  const payload = item.payload ? JSON.parse(item.payload) : {};
+  const teamId = payload.teamId as string | undefined;
+  if (!teamId) throw new Error("dispatch_build_turn task missing payload.teamId");
+
+  const team = await env.DB.prepare(`SELECT * FROM hackathon_teams WHERE id = ?`)
+    .bind(teamId).first<{ repo_url: string; team_name: "alpha" | "beta"; idea_id: string }>();
+  if (!team) throw new Error(`Team not found: ${teamId}`);
+
+  const idea = await env.DB.prepare(`SELECT title, build_scope FROM archive_ideas WHERE id = ?`)
+    .bind(team.idea_id).first<{ title: string; build_scope: string }>();
+
+  const priorTurns = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE task_type = 'dispatch_build_turn' AND payload LIKE ? AND status = 'completed'`
+  ).bind(`%"teamId":"${teamId}"%`).first<{ n: number }>();
+
+  await dispatchBuildTurn(env, {
+    repoFullName: team.repo_url, team: team.team_name,
+    turnId: `${teamId}_turn${(priorTurns?.n ?? 0) + 2}`, // +2: turn 1 already happened on formation day
+    taskPrompt: `Continue building "${idea?.title}". Review the existing code in this repo and continue implementing the remaining scope: ${idea?.build_scope}`,
+  });
+}
+
 export async function processQueue(env: Env, limit = 5): Promise<{ processed: number; failed: number }> {
   await resetStuckItems(env);
 
@@ -153,6 +231,8 @@ export async function processQueue(env: Env, limit = 5): Promise<{ processed: nu
         case "critique": await handleCritique(env, item, agent!); break;
         case "architecture": await handleArchitecture(env, item, agent!); break;
         case "propose_collaboration": break; // not scheduled automatically yet, see scheduler.ts
+        case "team_formation": await handleTeamFormation(env, item); break;
+        case "dispatch_build_turn": await handleDispatchBuildTurn(env, item); break;
       }
       await markCompleted(env, item.id);
       processed++;

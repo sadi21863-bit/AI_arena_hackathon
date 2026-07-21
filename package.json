@@ -14,8 +14,12 @@
     "d1:apply": "wrangler d1 execute arena-db --file=db/schema.sql"
   },
   "devDependencies": {
-    "wrangler": "^3.90.0",
-    "@cloudflare/workers-types": "^4.20250718.0",
-    "typescript": "^5.5.0"
+    "@cloudflare/workers-types": "^5.20260721.1",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.112.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.2.0",
+    "tweetnacl": "^1.0.3"
   }
 }

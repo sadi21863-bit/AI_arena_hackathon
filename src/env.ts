@@ -27,4 +27,22 @@ export interface Env {
   TAVILY_API_KEY_2: string;
   TAVILY_API_KEY_3: string;
   TAVILY_API_KEY?: string;
+  // Build Pipeline (spec §8) — dispatches team-build-turn.yml runs and
+  // creates per-team repos. Classic PAT, scopes: repo + workflow. Same
+  // token already used for git operations on this repo (see project
+  // memory, 2026-07-21, on the cross-project-reuse tradeoff that was
+  // already accepted for the main repo).
+  GITHUB_TOKEN: string;
+  // Org that owns hackathon team repos (spec §12: "one org, one repo per
+  // hackathon team"). Falls back to a personal-account username if unset —
+  // github/repos.ts treats the two the same way via the Repository
+  // Creation API's owner param.
+  GITHUB_ORG: string;
+  // The Worker itself never calls the Cloudflare API — these exist purely
+  // so github/repos.ts can inject them as repo secrets into newly created
+  // team repos, which need them for their own build-turn workflow's
+  // Workers AI calls (same values already in the local .env / this repo's
+  // own secrets, just also readable here for that one purpose).
+  CF_ACCOUNT_ID: string;
+  CF_API_TOKEN: string;
 }
