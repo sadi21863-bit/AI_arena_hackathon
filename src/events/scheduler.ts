@@ -105,12 +105,14 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
     return ensureIdeathonJudging(env, event.id);
   }
 
-  const existing = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = ?`
-  ).bind(event.id, phaseTaskType(phase)).first<{ n: number }>();
-
-  if ((existing?.n ?? 0) > 0) return phase; // already queued (or completed) — don't duplicate
-
+  // Each queueX below is independently idempotent per-item (per-agent or
+  // per-idea, filtering status != 'failed') rather than gated by one coarse
+  // "does any item of this task_type exist for this event" check — found
+  // live (2026-07-22 code review): that coarse check counted 'failed' rows
+  // as "already covered," so a single permanently-failed item (one agent's
+  // research, one idea's architecture, ...) silently and permanently
+  // stalled that agent/idea with no visible error. This is the same fix
+  // already applied to judge_idea/judge_team/Tribunal, backported here.
   switch (phase) {
     case "deep_research":
       await queueDeepResearch(env, event.id);
@@ -136,11 +138,20 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
  * else here queues.
  */
 async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
-  const calibration = await env.DB.prepare(`SELECT id FROM calibration_runs WHERE event_id = ?`).bind(eventId).first();
+  const calibration = await env.DB.prepare(`SELECT passed FROM calibration_runs WHERE event_id = ?`).bind(eventId).first<{ passed: number }>();
   if (!calibration) {
     await runCalibration(env, eventId);
     return "ready_for_judging";
   }
+  // calibration.passed is deliberately NOT a hard gate on judging — found
+  // live (2026-07-22 code review) that it was computed and stored but never
+  // actually read anywhere, silently defeating the spec §13/§16 intent.
+  // Fixed to at least be VISIBLE (GET /events/:id surfaces it, index.ts) so
+  // a human can act on spec's "adjust weights or provide clearer anchor
+  // examples" — but not auto-blocking, since with no human reliably
+  // watching a live event, a hard block risks permanently stalling a real
+  // event over a single low-n (3 anchors) correlation dip, which is a worse
+  // failure mode than proceeding with a flagged low-confidence judging pass.
 
   const unjudged = await env.DB.prepare(
     `SELECT id FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
@@ -182,7 +193,14 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
   }
 
   if (phase === "team_formation") {
-    const existing = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation'`)
+    // status != 'failed' — found live (2026-07-22 code review): without this
+    // filter, a single failed team_formation attempt (e.g. a transient
+    // GitHub 5xx during createTeamRepo) permanently stalls the whole
+    // hackathon, since this coarse count would forever see the failed row
+    // and never re-queue. handleTeamFormation itself is already idempotent
+    // per-team (see its own header comment) — it just needs to actually
+    // get re-invoked to use that.
+    const existing = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation' AND status != 'failed'`)
       .bind(event.id).first<{ n: number }>();
     if ((existing?.n ?? 0) === 0) {
       // team_formation's executor handler also dispatches each team's
@@ -198,8 +216,11 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     const teams = await env.DB.prepare(`SELECT id, team_name FROM hackathon_teams WHERE event_id = ?`)
       .bind(event.id).all<{ id: string; team_name: string }>();
 
+    // status != 'failed' — found live (2026-07-22 code review): without
+    // this, one failed dispatch attempt for a team today permanently skips
+    // that team's build turn for the rest of the day instead of retrying.
     const todaysDispatches = await env.DB.prepare(
-      `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn' AND date(created_at) = ?`
+      `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn' AND date(created_at) = ? AND status != 'failed'`
     ).bind(event.id, today).all<{ payload: string | null }>();
     const dispatchedToday = queuedPayloadValues(todaysDispatches.results, "teamId");
 
@@ -334,16 +355,17 @@ async function isStageComplete(env: Env, eventId: string, taskType: string): Pro
   return { allQueued: (total?.n ?? 0) >= AGENTS.length, allCompleted: (pending?.n ?? 0) === 0 };
 }
 
-function phaseTaskType(phase: Exclude<Phase, "judged" | "ready_for_judging">): string {
-  switch (phase) {
-    case "deep_research": return "research";
-    case "ideation_critique": return "submit_idea"; // proxy check; critiques are queued alongside
-    case "architecture": return "architecture";
-  }
+/** Non-failed count of a task_type queued for one agent in this event — the per-agent idempotency primitive used below. */
+async function nonFailedCountForAgent(env: Env, eventId: string, agentId: string, taskType: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status != 'failed'`
+  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+  return row?.n ?? 0;
 }
 
 async function queueDeepResearch(env: Env, eventId: string): Promise<void> {
   for (const agent of AGENTS) {
+    if ((await nonFailedCountForAgent(env, eventId, agent.id, "research")) > 0) continue;
     await enqueue(env, {
       eventId, agentId: agent.id, taskType: "research",
       payload: { lens: agent.lens },
@@ -357,8 +379,12 @@ async function queueIdeationAndCritique(env: Env, eventId: string): Promise<void
   // Ideas first (max 3 each per spec §4) — critiques get queued once ideas
   // exist, by the executor after each idea completes (see executor.ts),
   // since critique targets need real idea IDs that don't exist yet here.
+  // Per-agent top-up to 3, not a single "does one exist" check — an agent
+  // whose 2nd submit_idea attempt failed should get a replacement queued
+  // for just that slot, not be silently capped at whatever succeeded.
   for (const agent of AGENTS) {
-    for (let i = 0; i < 3; i++) {
+    const existing = await nonFailedCountForAgent(env, eventId, agent.id, "submit_idea");
+    for (let i = existing; i < 3; i++) {
       await enqueue(env, {
         eventId, agentId: agent.id, taskType: "submit_idea",
         priority: 6,
@@ -383,7 +409,13 @@ async function queueArchitecture(env: Env, eventId: string): Promise<void> {
      LIMIT 6`
   ).bind(eventId).all<{ id: string; agent_id: string; critique_count: number }>();
 
+  const existingArchItems = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'architecture' AND status != 'failed'`
+  ).bind(eventId).all<{ payload: string | null }>();
+  const alreadyQueued = queuedPayloadValues(existingArchItems.results, "ideaId");
+
   for (const idea of top.results) {
+    if (alreadyQueued.has(idea.id)) continue;
     await enqueue(env, {
       eventId, agentId: idea.agent_id, taskType: "architecture",
       payload: { ideaId: idea.id },

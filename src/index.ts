@@ -31,10 +31,13 @@ export default {
       return Response.json({ status: "ok", spec_version: "8.0" });
     }
 
-    // Minimal smoke-test route for the Week 0 inference_pool gate — NOT the
-    // real /inference route from spec §10, which needs agent-token auth and
-    // proper request validation before this leaves Week 0.
+    // Week 0 smoke-test route for the inference_pool gate, per spec §10's
+    // "Agent token" auth requirement — found live (2026-07-22 code review):
+    // this had been left unauthenticated since Week 0, letting anyone
+    // exhaust the shared daily Groq/Workers-AI budget a real event depends
+    // on. Auth added; route otherwise unchanged.
     if (url.pathname === "/inference" && request.method === "POST") {
+      if (!requireAgentToken(request, env)) return Response.json({ error: "unauthorized" }, { status: 401 });
       const body = await request.json<{ task_type: TaskType; prompt: string }>();
       const result = await routeInference(env, { task_type: body.task_type, prompt: body.prompt });
       if (!result) {
@@ -112,9 +115,15 @@ export default {
 
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
     if (eventMatch && request.method === "GET") {
-      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first();
+      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first<{ type: string }>();
       if (!event) return Response.json({ error: "not_found" }, { status: 404 });
-      return Response.json(event);
+      // Surfaces calibration's pass/fail (spec §13/§16) — found live
+      // (2026-07-22 code review) that this was computed and stored but
+      // never exposed anywhere, defeating the point of the check.
+      const calibration = event.type === "ideathon"
+        ? await env.DB.prepare(`SELECT correlation, passed FROM calibration_runs WHERE event_id = ?`).bind(eventMatch[1]).first<{ correlation: number; passed: number }>()
+        : null;
+      return Response.json({ ...event, calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null });
     }
 
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table

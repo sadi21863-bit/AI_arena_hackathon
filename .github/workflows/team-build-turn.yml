@@ -73,19 +73,56 @@ jobs:
         # turns, push the built image to GHCR once and pull it here instead.
         run: docker build -t arena-team-base:latest -f docker/Dockerfile.arena-team-base docker/
 
-      - name: Phase A — agent work (scoped network)
-        # NETWORK NOTE, resolved deliberately: OpenCode needs to reach
-        # Workers AI's API to do anything, so it cannot run inside a
-        # --network=none container. This step's container gets network
-        # access, but SCOPED — in a real deployment, replace the runner's
-        # open network with the egress-proxy pattern, allowlisting only
-        # registry.npmjs.org, github.com, api.github.com, and
-        # api.cloudflare.com. The container is still
-        # locked down on every other axis (cap-drop, non-root, read-only
-        # rootfs) — only the network boundary is intentionally open here,
-        # and only to named endpoints, not "network=none vs. wide open" as a
-        # binary choice.
+      - name: Start egress-filtering proxy (spec §7 network scoping)
+        # Found live (2026-07-22 code review): the previous "SCOPED" comment
+        # on Phase A was aspirational — the docker run below it had no actual
+        # network restriction, full open egress, while injecting CF_API_TOKEN
+        # into a container running an AI agent with --auto (self-approving)
+        # against arbitrary prompts. Real secret-exfiltration risk.
         #
+        # Real fix, not just a corrected comment: a Squid forward proxy on
+        # the RUNNER (not inside the sandboxed container) with a domain
+        # allowlist, combined with Docker's documented DOCKER-USER iptables
+        # chain (https://docs.docker.com/engine/network/packet-filtering-firewalls/)
+        # to DROP any container-originated traffic on 80/443 that doesn't go
+        # through the proxy. Even if something inside the container ignores
+        # the HTTP_PROXY/HTTPS_PROXY env vars set below (a compromised npm
+        # postinstall script, Node's built-in fetch, etc.), it physically
+        # cannot reach the internet directly — DOCKER-USER rules apply to all
+        # container traffic, they're not something a process inside the
+        # container can opt out of.
+        #
+        # Only 2 domains allowed, matching what Phase A's container actually
+        # touches (checked docker/opencode.json + Dockerfile.arena-team-base
+        # directly rather than guessing): api.cloudflare.com (Workers AI,
+        # opencode.json's baseURL) and registry.npmjs.org (whatever the
+        # coding agent's own build needs to npm install). github.com/
+        # api.github.com are deliberately NOT allowlisted — the "Commit
+        # progress" step below does git push from the RUNNER, outside any
+        # container, so nothing inside Phase A's container legitimately
+        # needs GitHub access at all.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq squid
+          sudo tee /etc/squid/squid.conf > /dev/null <<'EOF'
+          http_port 3128
+          acl allowed_ssl_ports port 443
+          acl CONNECT method CONNECT
+          acl allowed_domains dstdomain .api.cloudflare.com .registry.npmjs.org
+          http_access allow CONNECT allowed_domains allowed_ssl_ports
+          http_access allow allowed_domains
+          http_access deny all
+          EOF
+          sudo systemctl restart squid
+          # DOCKER-USER: Docker's own hook chain for custom container-egress
+          # firewall rules — inserted rules here apply to traffic FORWARDED
+          # through docker's bridge (i.e. from containers), not to the
+          # runner/host's own traffic, so the proxy itself (running on the
+          # host, not in a container) is unaffected by these DROP rules.
+          sudo iptables -I DOCKER-USER -p tcp --dport 443 -j DROP
+          sudo iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
+
+      - name: Phase A — agent work (network-scoped: api.cloudflare.com + registry.npmjs.org only)
         # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
@@ -95,12 +132,22 @@ jobs:
         # actual uid — a mismatched uid can't write into it even though the
         # bind mount itself is :rw, since real file-mode bits still apply.
         # Still never uid 0, so the non-root intent (spec §7) holds either way.
+        #
+        # --add-host=host.docker.internal:host-gateway + HTTP(S)_PROXY: routes
+        # the container's outbound HTTP/HTTPS through the Squid proxy started
+        # above (which runs on the runner host, reachable via the Docker-
+        # provided host-gateway alias) — the DOCKER-USER DROP rules block any
+        # attempt to bypass it and go direct.
         run: |
           docker run --rm \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
             --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
+            --add-host=host.docker.internal:host-gateway \
+            -e HTTP_PROXY=http://host.docker.internal:3128 \
+            -e HTTPS_PROXY=http://host.docker.internal:3128 \
+            -e NO_PROXY=localhost,127.0.0.1 \
             -e CF_ACCOUNT_ID \
             -e CF_API_TOKEN \
             -e HOME=/tmp \

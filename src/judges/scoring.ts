@@ -39,11 +39,22 @@ async function scoreOne(env: Env, judge: Judge, prompt: string): Promise<JudgeSc
 }
 
 /**
- * Runs all 7 judges against one target, writes each to judge_scores, and
- * returns the phase-weighted total (0-10 scale, weights sum to 1 per
- * phase — see personas.ts). Idempotent: if a prior attempt already scored
- * this target (e.g. a retried queue item after a mid-way failure), reuses
- * those rows instead of re-scoring and double-inserting.
+ * Runs the judges that haven't yet scored this target, writes each to
+ * judge_scores, and returns the phase-weighted total (0-10 scale, weights
+ * sum to 1 per phase — see personas.ts).
+ *
+ * Idempotent PER JUDGE, not as an all-or-nothing batch — found live
+ * (2026-07-22 code review): the previous version checked
+ * `existing.length === JUDGES.length` exactly. If a partial insert ever
+ * failed (say 6 of 7 judges' rows landed before the 7th threw), that
+ * equality could never be true again for this target, so every future
+ * retry would re-score AND re-insert all 7, compounding duplicates forever.
+ * Checking per-judge-name means a retry only does the actually-missing
+ * work, and — with judge_scores' UNIQUE(target_type, target_id, phase,
+ * judge_name) constraint (db/schema_week5_tribunal.sql) plus INSERT OR
+ * IGNORE below — a genuine race (two queue items somehow scoring the same
+ * target concurrently) can't double-insert even if both reach the insert
+ * at once.
  */
 export async function scoreTarget(
   env: Env,
@@ -53,24 +64,23 @@ export async function scoreTarget(
     `SELECT judge_name, score, weight FROM judge_scores WHERE target_type = ? AND target_id = ? AND phase = ?`
   ).bind(opts.targetType, opts.targetId, opts.phase).all<{ judge_name: string; score: number; weight: number }>();
 
-  if (existing.results.length === JUDGES.length) {
-    return existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
-  }
+  const alreadyScored = new Map(existing.results.map((row) => [row.judge_name, row]));
+  const missingJudges = JUDGES.filter((judge) => !alreadyScored.has(judge.name));
 
   // Parallel, not sequential: each judge's call is independent, and running
-  // all 7 concurrently keeps this well inside a Worker invocation's
+  // them concurrently keeps this well inside a Worker invocation's
   // wall-clock budget (7 sequential ~1-2s LLM calls could otherwise push
-  // 10-15s per target, times up to 5 targets/tick in processQueue's batch —
+  // 10-15s per target, times up to 3 targets/tick in processQueue's batch —
   // real timeout risk this avoids rather than a micro-optimization).
-  const results = await Promise.all(JUDGES.map(async (judge) => {
+  const newResults = await Promise.all(missingJudges.map(async (judge) => {
     const weight = opts.phase === "ideathon" ? judge.ideathonWeight : judge.hackathonWeight;
     const { score, rationale } = await scoreOne(env, judge, opts.prompt);
     return { judge, weight, score, rationale };
   }));
 
-  await Promise.all(results.map(({ judge, weight, score, rationale }) =>
+  await Promise.all(newResults.map(({ judge, weight, score, rationale }) =>
     env.DB.prepare(
-      `INSERT INTO judge_scores (id, event_id, judge_name, criterion, weight, target_type, target_id, phase, score, rationale)
+      `INSERT OR IGNORE INTO judge_scores (id, event_id, judge_name, criterion, weight, target_type, target_id, phase, score, rationale)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       `judgescore_${crypto.randomUUID()}`, opts.eventId, judge.name, judge.criterion, weight,
@@ -78,5 +88,7 @@ export async function scoreTarget(
     ).run()
   ));
 
-  return results.reduce((sum, r) => sum + r.score * r.weight, 0);
+  const existingTotal = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
+  const newTotal = newResults.reduce((sum, r) => sum + r.score * r.weight, 0);
+  return existingTotal + newTotal;
 }
