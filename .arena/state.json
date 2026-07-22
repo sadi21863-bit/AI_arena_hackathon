@@ -85,7 +85,7 @@
           "dispatch.ts hardcoded ref:master but non-auto_init repos default to main"
         ],
         "verified_live": "created hackathon event_391eac5c-2523-4743-b9f5-76afeca3a8a7 from real ideathon event_2eaf0bb2-0f84-48b6-b781-7b5836e0a67a; both team repos created under AI-arena-hackathon, scaffolded, secrets set; both teams' first build-turn GitHub Actions runs completed with conclusion=success",
-        "known_gap_not_fixed": "team_formation is not safely retryable per-team if it fails partway through (a repo that already exists on retry causes a 422 name collision) -- worth hardening before real event usage, flagged not fixed to stay in Week 4 scope",
+        "retry_safety_hardened_2026_07_22": "team_formation is now idempotent per-team (hackathon_teams.status forming->building gate, createTeamRepo tolerates 422 already-exists by reusing the repo, putFile skips files that already exist) -- verified live by re-queuing team_formation for the already-complete test event and confirming zero duplicate repos/dispatches (identical GitHub Actions run IDs before and after)",
         "also_did": "upgraded wrangler 3.90 -> 4.112 + @cloudflare/workers-types v5 peer dep, both required for continued Cloudflare API compatibility"
       }
     },

@@ -33,7 +33,7 @@
 import nacl from "tweetnacl";
 import { blake2b } from "@noble/hashes/blake2.js";
 import type { Env } from "../env";
-import { githubRequest } from "./client";
+import { githubRequest, GitHubApiError } from "./client";
 
 // The Arena's own management repo — where team repos' scaffold files (the
 // generic build-turn workflow, Dockerfile, OpenCode config) are read from.
@@ -92,7 +92,22 @@ async function setRepoSecret(env: Env, owner: string, repo: string, secretName: 
   await githubRequest(env, "PUT", `/repos/${owner}/${repo}/actions/secrets/${secretName}`, { encrypted_value, key_id });
 }
 
+/**
+ * Idempotent: a retried team_formation attempt (spec §17 hardening,
+ * 2026-07-22 — see the retry-safety gap noted at Week 4 gate-pass) may
+ * re-run this against a repo a prior attempt partially scaffolded. Content
+ * per path is fully deterministic (same idea, same template files), so if
+ * the file already exists there's nothing to reconcile — skip it rather
+ * than fetch its sha to update, which GitHub's Contents API would
+ * otherwise require.
+ */
 async function putFile(env: Env, owner: string, repo: string, path: string, content: string, message: string): Promise<void> {
+  try {
+    await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${path}`);
+    return; // already scaffolded by a prior attempt
+  } catch (err) {
+    if (!(err instanceof GitHubApiError) || err.status !== 404) throw err;
+  }
   await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/${path}`, {
     message,
     content: utf8ToBase64(content),
@@ -119,10 +134,13 @@ export interface CreateTeamRepoResult {
 }
 
 /**
- * Creates the team's repo, scaffolds it, and sets its secrets. Idempotent
- * on repo creation is NOT assumed — call once per team per hackathon event
- * (scheduler.ts's team-formation step is itself idempotent, see
- * ensurePhaseWorkQueued, so this only runs once in practice).
+ * Creates the team's repo, scaffolds it, and sets its secrets. Idempotent —
+ * safe to call again for the same (teamName, eventId) if a prior attempt
+ * got partway through: repo creation tolerates "already exists" by fetching
+ * the existing repo instead, and every step below (scaffold files, secrets)
+ * is independently idempotent too. handleTeamFormation (executor.ts) is
+ * what actually drives retries — this function just needs to not blow up
+ * when called on top of earlier partial progress.
  */
 export async function createTeamRepo(env: Env, teamName: string, eventId: string, idea: TeamRepoIdea): Promise<CreateTeamRepoResult> {
   const repoName = `arena-team-${teamName}-${eventId.slice(-8)}`;
@@ -137,11 +155,25 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   // supplied" (found live, 2026-07-21, team_formation's first real run:
   // README.md collided, workflow/Dockerfile/opencode.json didn't since
   // those paths don't exist in a bare auto_init README-only repo).
-  const created = await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
-    name: repoName,
-    private: false, // public repo required for free unlimited Actions minutes, spec §8
-    description: `The Arena — Team ${teamName} building "${idea.title}" (event ${eventId})`,
-  });
+  let created: { html_url: string };
+  try {
+    created = await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
+      name: repoName,
+      private: false, // public repo required for free unlimited Actions minutes, spec §8
+      description: `The Arena — Team ${teamName} building "${idea.title}" (event ${eventId})`,
+    });
+  } catch (err) {
+    // A retried team_formation attempt after this repo already got created
+    // (e.g. the OTHER team's step is what failed last time) — reuse it
+    // instead of erroring, rather than force every retry back to a fresh
+    // eventId (which is what forced 3 stray test repos during Week 4
+    // live testing, 2026-07-21, before this fix existed).
+    if (err instanceof GitHubApiError && err.status === 422 && /already exists/i.test(err.body)) {
+      created = await githubRequest(env, "GET", `/repos/${owner}/${repoName}`);
+    } else {
+      throw err;
+    }
+  }
 
   const [workflow, dockerfile, opencodeConfig] = await Promise.all([
     fetchMainRepoFile(".github/workflows/team-build-turn.yml"),

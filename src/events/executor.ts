@@ -163,27 +163,43 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
 
   if (top2.results.length === 0) throw new Error(`No architecture_complete ideas found for parent event ${event.parent_event_id}`);
 
+  // Per-team idempotency (2026-07-22 hardening — see the retry-safety gap
+  // flagged at Week 4 gate-pass): a prior team_formation attempt for this
+  // same event may have already gotten one or both teams partway through.
+  // 'forming' = repo created (createTeamRepo is itself idempotent, see
+  // src/github/repos.ts) but the first build-turn dispatch isn't confirmed
+  // yet; 'building' = dispatch confirmed, this team is fully done and a
+  // retry should skip it entirely rather than fire a duplicate CI run.
   const teamNames: Array<"alpha" | "beta"> = ["alpha", "beta"];
   for (let i = 0; i < top2.results.length; i++) {
     const idea = top2.results[i];
     const teamName = teamNames[i];
-    const teamId = `team_${crypto.randomUUID()}`;
 
-    const repo = await createTeamRepo(env, teamName, item.event_id, {
-      title: idea.title, oneLiner: idea.one_liner, problem: idea.problem, solution: idea.solution, buildScope: idea.build_scope,
-    });
+    let team = await env.DB.prepare(
+      `SELECT id, repo_url, status FROM hackathon_teams WHERE event_id = ? AND team_name = ?`
+    ).bind(item.event_id, teamName).first<{ id: string; repo_url: string; status: string }>();
 
-    // repo_url stores "owner/repo", not the html URL — that's what every
-    // GitHub API call needs; the html URL is trivially derivable
-    // (https://github.com/<repo_url>) whenever display needs it.
-    await env.DB.prepare(
-      `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'building')`
-    ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
+    if (team?.status === "building") continue; // already fully formed — idempotent no-op
+
+    if (!team) {
+      const repo = await createTeamRepo(env, teamName, item.event_id, {
+        title: idea.title, oneLiner: idea.one_liner, problem: idea.problem, solution: idea.solution, buildScope: idea.build_scope,
+      });
+      const teamId = `team_${crypto.randomUUID()}`;
+      // repo_url stores "owner/repo", not the html URL — that's what every
+      // GitHub API call needs; the html URL is trivially derivable
+      // (https://github.com/<repo_url>) whenever display needs it.
+      await env.DB.prepare(
+        `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'forming')`
+      ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
+      team = { id: teamId, repo_url: repo.fullName, status: "forming" };
+    }
 
     await dispatchBuildTurn(env, {
-      repoFullName: repo.fullName, team: teamName, turnId: `${teamId}_turn1`,
+      repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
       taskPrompt: `Build this from scratch: ${idea.title} — ${idea.one_liner}. Problem: ${idea.problem}. Solution: ${idea.solution}. Scope: ${idea.build_scope}`,
     });
+    await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
   }
 }
 
