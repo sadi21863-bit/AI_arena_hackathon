@@ -122,7 +122,7 @@ jobs:
           sudo iptables -I DOCKER-USER -p tcp --dport 443 -j DROP
           sudo iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
 
-      - name: Phase A — agent work (network-scoped: api.cloudflare.com + registry.npmjs.org only)
+      - name: "Phase A — agent work (network-scoped to api.cloudflare.com + registry.npmjs.org)"
         # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
