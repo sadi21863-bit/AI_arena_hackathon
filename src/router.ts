@@ -8,7 +8,7 @@
 
 export type TaskType =
   | "code_generation" | "architecture" | "research" | "judging"
-  | "summarize" | "validate" | "design" | "test";
+  | "summarize" | "validate" | "design" | "test" | "reflect";
 
 export interface InferenceRequest {
   task_type: TaskType;
@@ -29,8 +29,19 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   research: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   design: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   code_generation: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
-  judging: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
+  // workers_ai fallback deliberately NOT deepseek-r1-distill-qwen-32b:
+  // found live (2026-07-22, first calibration run) that it's verbose enough
+  // to burn through 700 tokens of hidden <think> reasoning without ever
+  // reaching the visible JSON answer — same failure architecture's fallback
+  // never hits, because llama-3.3-70b-instruct-fp8-fast isn't a reasoning
+  // model. Swapped to match architecture's already-proven-stable choice.
+  judging: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   architecture: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  // No groq candidate, deliberately: spec §14 Tribunal reflection is
+  // "non-time-critical," so it always routes straight to the cheaper
+  // Workers AI tier rather than spending Groq's daily request caps (those
+  // matter more during a live event) on post-event reflection.
+  reflect: { workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
 };
 
 // Daily caps from spec §5 (Groq) and §6 (Workers AI, Neuron-derived).
@@ -77,7 +88,16 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
 
   const data: any = await res.json();
   await recordUsage(env, "groq", model, req.task_type, 1); // Groq's cap is request-based, not token-based
-  return data.choices?.[0]?.message?.content ?? null;
+  const content = data.choices?.[0]?.message?.content;
+  // typeof-check, not just a truthiness/?? check: found live (2026-07-22,
+  // Week 5 judging) that Groq's response for at least one reasoning model
+  // (gpt-oss-120b) can come back with `content` as something other than a
+  // plain string under conditions never pinned down exactly — every
+  // downstream consumer assumed InferenceRequest's `text: string` contract
+  // held and crashed on `.slice`/`.replace` when it didn't. Validating here,
+  // at the API boundary, means the rest of the codebase can keep trusting
+  // the type instead of every call site defensively re-checking it.
+  return typeof content === "string" ? content : null;
 }
 
 async function tryWorkersAI(env: Env, model: string, req: InferenceRequest): Promise<string | null> {
@@ -95,7 +115,8 @@ async function tryWorkersAI(env: Env, model: string, req: InferenceRequest): Pro
   // against DAILY_CAPS — units_used is INTEGER, the raw value isn't.
   const neurons = Math.ceil(result?.usage?.neurons ?? 300); // fallback only if the field is ever absent
   await recordUsage(env, "workers_ai", model, req.task_type, neurons);
-  return result?.response ?? null;
+  // typeof-check — same reasoning as tryGroq's content validation above.
+  return typeof result?.response === "string" ? result.response : null;
 }
 
 /**

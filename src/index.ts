@@ -12,7 +12,7 @@ import type { Env } from "./env";
 import { requireAgentToken, requireAdminToken } from "./auth";
 import { listAgents, getAgent, isAgentId } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
-import { recallMemory } from "./agents/memory";
+import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
 import { ensurePhaseWorkQueued, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
@@ -99,6 +99,17 @@ export default {
       return Response.json(result);
     }
 
+    // spec §10/§15: "Semantic archive search (Vectorize)." Public — same
+    // Vectorize index every idea/critique/reflection already gets embedded
+    // into (Week 2 agent memory, Week 5 tribunal reflections), just without
+    // recallMemory's mandatory agent_id scoping.
+    if (url.pathname === "/archive/query" && request.method === "POST") {
+      const body = await request.json<{ query: string; topK?: number; eventId?: string; agentId?: string; type?: MemoryType }>();
+      if (!body.query) return Response.json({ error: "query is required" }, { status: 400 });
+      const results = await queryArchive(env, body.query, { agentId: body.agentId, eventId: body.eventId, type: body.type }, body.topK ?? 10);
+      return Response.json(results);
+    }
+
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
     if (eventMatch && request.method === "GET") {
       const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first();
@@ -133,7 +144,7 @@ export default {
       const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(tickMatch[1]).first<EventRow>();
       if (!event) return Response.json({ error: "not_found" }, { status: 404 });
       const phase = await ensurePhaseWorkQueued(env, event);
-      const result = await processQueue(env, 5);
+      const result = await processQueue(env);
       return Response.json({ phase, ...result });
     }
 
@@ -165,15 +176,25 @@ export default {
    * event's phase and drains a batch of due work. Self-healing (ported
    * from ideaconnect's ensureDailyWorkQueued precedent): idempotent per
    * phase, so a missed or overlapping tick never stalls or duplicates work.
+   *
+   * Terminal status is type-dependent, not a shared status string: an
+   * ideathon is done at 'judged' (spec §3.1), but a hackathon's 'judged' is
+   * a MID-point — judged -> tribunal -> complete (spec §3.2/§14) — so a
+   * blanket status exclusion would silently stop every hackathon right at
+   * judging, before Tribunal ever runs. 'ready_for_judging' used to be
+   * excluded here too (Week 3, back when nothing happened past it); Week
+   * 5's judging/Tribunal work all runs FROM that status now.
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
     const events = await env.DB.prepare(
-      `SELECT * FROM archive_events WHERE status NOT IN ('ready_for_judging', 'complete')`
+      `SELECT * FROM archive_events
+       WHERE (type = 'ideathon' AND status != 'judged')
+          OR (type = 'hackathon' AND status != 'complete')`
     ).all<EventRow>();
 
     for (const event of events.results) {
       await ensurePhaseWorkQueued(env, event);
-      await processQueue(env, 5);
+      await processQueue(env);
     }
   },
 };

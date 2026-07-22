@@ -5,3 +5,6 @@ node_modules/
 opencode-turn.log
 .wrangler/
 .admin_token.txt
+.week5_test_event.txt
+tail_output.json
+tail_error.txt

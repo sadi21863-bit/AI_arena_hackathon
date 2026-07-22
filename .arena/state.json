@@ -90,9 +90,27 @@
       }
     },
     "week5_archive_tribunal": {
-      "status": "ready",
-      "checked_at": null,
-      "details": null
+      "status": "in_progress",
+      "checked_at": "2026-07-22T12:40:00.000000+00:00",
+      "details": {
+        "judges": "src/judges/personas.ts, 7 judges with per-phase weights (ideathon/hackathon columns sum to 1.0 each), spec §13",
+        "calibration": "src/judges/calibration.ts, 3 anchor ideas x 7 judges, Pearson correlation gate (>=0.6), spec §13/§16 — runs once per event before real judging",
+        "scoring": "src/judges/scoring.ts scoreTarget, idempotent (checks existing judge_scores rows before re-scoring)",
+        "tribunal": "src/tribunal/reflection.ts — individual reflection -> cross-examination (paired with whoever critiqued them most) -> synthesis, synthesis embeds into Vectorize (type=reflection) so lessons are recallable in future events per spec §14's \"carry into the next event\"",
+        "archive_query": "POST /archive/query added (spec §10/§15) — semantic search over the same Vectorize index agent memory + tribunal reflections already write to, optional agentId/eventId/type filters",
+        "verified_live_ideathon_judging": "event_2eaf0bb2-0f84-48b6-b781-7b5836e0a67a: calibration ran (correlation computed, passed), all 6 architecture_complete ideas judged with real 7-judge weighted scores (avg 6.5-7.0 range), event transitioned to status=judged. A NEW hackathon event created from it correctly picked the top 2 by real ideathon_score (7.05, 6.9) — replaces Week 4's critique-count proxy per the plan noted at that gate's pass.",
+        "not_yet_verified_live": "hackathon judging (judge_team) and the full 3-stage Tribunal — both deployed and exercised partially (judge_team ran successfully for demonstrating real build-turn-outcome grounding, one team's failed build turn genuinely showed up in its scoring context) but full completion is blocked by today's Cloudflare Workers AI daily Neuron allocation being genuinely exhausted from this session's extensive live testing (confirmed: Groq's judging model still has ~800/1000 daily requests of headroom; Workers AI's real account-wide 10,000 Neuron/day cap is what's hit — not a code defect, the router's own DAILY_CAPS tracking undercounts because agents/memory.ts's embed() calls aren't recorded against it, a real but separate gap worth fixing later). Self-healing retry is in place (per-team idempotent check in scheduler.ts) — will complete automatically once quota resets (next UTC day) or Groq capacity absorbs the load, no code changes needed to finish this.",
+        "real_bugs_found_and_fixed_via_live_testing": [
+          "calibration's max_tokens:100 (and scoring's 300) were nowhere near enough for judging's reasoning-model tier (gpt-oss-120b / deepseek-r1-distill-qwen-32b) to finish hidden <think> reasoning before the visible JSON answer -- bumped both to 700, matching executor.ts callAgent's already-proven budget for this same model class",
+          "extractJson never stripped <think>...</think> reasoning blocks -- added (ideaconnect precedent the Arena had never actually ported despite router.ts's own comment citing it)",
+          "judging's Workers AI fallback model (deepseek-r1-distill-qwen-32b) is a verbose reasoning model unsuited to short structured-JSON tasks -- swapped to llama-3.3-70b-instruct-fp8-fast, matching architecture's already-stable fallback choice",
+          "firing 21 (calibration) or 5-batch x 7 (scoring) concurrent LLM calls hit Workers' \"stalled HTTP response canceled to prevent deadlock\" protection -- reduced calibration to 7-way concurrency (parallel across judges, sequential per judge's 3 anchors)",
+          "D1 throws 'LIKE or GLOB pattern too complex' whenever a LIKE pattern contains a literal double-quote character -- every JSON-substring idempotency check in the codebase (judge_idea, judge_team, and a PRE-EXISTING Week 3/4 dispatch_build_turn check that had never actually been exercised against matching data yet) used exactly this pattern shape; replaced all 4 with fetch-then-filter-in-JS",
+          "router.ts trusted Groq/Workers AI API responses as always being a plain string via 'any' casts -- found live that content can come back non-string under conditions not fully pinned down, crashing downstream .slice()/.replace() calls; added typeof validation at the API boundary in router.ts itself rather than patching every consumer",
+          "processQueue's default batch limit (5) combined with judge_idea/judge_team's ~14 subrequests each (7 parallel LLM calls + 7 parallel DB inserts) exceeded Cloudflare's per-invocation subrequest limit -- reduced default to 3"
+        ],
+        "deferred_not_implemented": "Cold Storage Rollover (spec §15.1, monthly D1->R2 archival at 80% utilization) -- explicitly not attempted this pass; can't realistically trigger or verify the 80%-of-5GB condition at current data volumes (DB is ~0.35MB), same 'flag don't silently skip' call as Week 4's retry-safety gap"
+      }
     },
     "week6_observatory": {
       "status": "blocked",

@@ -13,7 +13,9 @@ import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea } from "../agents/interactions";
 import { recallMemory } from "../agents/memory";
 import { createTeamRepo } from "../github/repos";
-import { dispatchBuildTurn } from "../github/dispatch";
+import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
+import { scoreTarget } from "../judges/scoring";
+import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
@@ -145,23 +147,31 @@ interface IdeaForBuild {
  * turns begin same day." Not agent-scoped (item.agent_id is null for this
  * task type) — it acts on the hackathon event as a whole.
  *
- * Picks the top 2 ideas from the parent ideathon by critique count — same
- * proxy signal used for the architecture phase, until Week 5's judges
- * provide real scores.
+ * Picks the top 2 ideas from the parent ideathon by real judge score (spec
+ * §3.1: "7 judges evaluate all ideas and architectures. Top 2 advance.") —
+ * requires the parent ideathon to already be status='judged' (Week 5's
+ * judge_idea phase), not just architecture_complete. Before Week 5 this
+ * used critique_count as a stand-in proxy; that's gone now that real scores
+ * exist.
  */
 async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
     .bind(item.event_id).first<{ parent_event_id: string | null }>();
   if (!event?.parent_event_id) throw new Error(`Hackathon event ${item.event_id} has no parent_event_id set`);
 
+  const parent = await env.DB.prepare(`SELECT status FROM archive_events WHERE id = ?`)
+    .bind(event.parent_event_id).first<{ status: string }>();
+  if (parent?.status !== "judged") {
+    throw new Error(`Parent ideathon ${event.parent_event_id} isn't judged yet (status=${parent?.status}) — can't pick advancing ideas without real judge scores`);
+  }
+
   const top2 = await env.DB.prepare(
-    `SELECT i.id, i.agent_id, i.title, i.one_liner, i.problem, i.solution, i.build_scope, COUNT(x.id) as critique_count
-     FROM archive_ideas i LEFT JOIN archive_interactions x ON x.target_id = i.id AND x.type = 'critique'
-     WHERE i.event_id = ? AND i.status = 'architecture_complete'
-     GROUP BY i.id ORDER BY critique_count DESC LIMIT 2`
+    `SELECT id, agent_id, title, one_liner, problem, solution, build_scope
+     FROM archive_ideas WHERE event_id = ? AND status = 'judged'
+     ORDER BY ideathon_score DESC LIMIT 2`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
 
-  if (top2.results.length === 0) throw new Error(`No architecture_complete ideas found for parent event ${event.parent_event_id}`);
+  if (top2.results.length === 0) throw new Error(`No judged ideas found for parent event ${event.parent_event_id}`);
 
   // Per-team idempotency (2026-07-22 hardening — see the retry-safety gap
   // flagged at Week 4 gate-pass): a prior team_formation attempt for this
@@ -216,18 +226,106 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const idea = await env.DB.prepare(`SELECT title, build_scope FROM archive_ideas WHERE id = ?`)
     .bind(team.idea_id).first<{ title: string; build_scope: string }>();
 
-  const priorTurns = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE task_type = 'dispatch_build_turn' AND payload LIKE ? AND status = 'completed'`
-  ).bind(`%"teamId":"${teamId}"%`).first<{ n: number }>();
+  // Not `payload LIKE '%"teamId":"..."%'` — found live (2026-07-22, Week 5
+  // judging): D1 throws "LIKE or GLOB pattern too complex" whenever the
+  // pattern contains a literal `"` character, which every JSON-substring
+  // LIKE here necessarily does (see scheduler.ts's queuedPayloadValues for
+  // the full writeup and the other 3 call sites this same bug hit).
+  // Fetching completed dispatch_build_turn rows and filtering in JS instead.
+  const completedDispatches = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE task_type = 'dispatch_build_turn' AND status = 'completed'`
+  ).all<{ payload: string | null }>();
+  const priorTurns = completedDispatches.results.filter((row) => {
+    if (!row.payload) return false;
+    try { return JSON.parse(row.payload)?.teamId === teamId; } catch { return false; }
+  }).length;
 
   await dispatchBuildTurn(env, {
     repoFullName: team.repo_url, team: team.team_name,
-    turnId: `${teamId}_turn${(priorTurns?.n ?? 0) + 2}`, // +2: turn 1 already happened on formation day
+    turnId: `${teamId}_turn${priorTurns + 2}`, // +2: turn 1 already happened on formation day
     taskPrompt: `Continue building "${idea?.title}". Review the existing code in this repo and continue implementing the remaining scope: ${idea?.build_scope}`,
   });
 }
 
-export async function processQueue(env: Env, limit = 5): Promise<{ processed: number; failed: number }> {
+/** Ideathon judging — spec §13: all 7 judges score one architecture_complete idea. */
+async function handleJudgeIdea(env: Env, item: QueueItem): Promise<void> {
+  const payload = item.payload ? JSON.parse(item.payload) : {};
+  const ideaId = payload.ideaId as string | undefined;
+  if (!ideaId) throw new Error("judge_idea task missing payload.ideaId");
+
+  const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
+  if (!idea) throw new Error(`Idea not found: ${ideaId}`);
+
+  const prompt =
+    `IDEA: ${idea.title}\nOne-liner: ${idea.one_liner}\nProblem: ${idea.problem}\n` +
+    `Solution: ${idea.solution}\nBuild plan: ${idea.build_scope}`;
+  const total = await scoreTarget(env, { eventId: item.event_id, targetType: "idea", targetId: ideaId, phase: "ideathon", prompt });
+
+  await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(total, ideaId).run();
+}
+
+/**
+ * Hackathon judging — spec §13, weighted with the idea's ideathon score per
+ * spec §3.2 ("Judging weights: Ideathon 30%, Hackathon 70%"). Grounds the
+ * judges' prompt with real build-turn run outcomes (github/dispatch.ts) —
+ * full diff review is Week 6 Observatory territory for humans, but pass/
+ * fail counts across turns is real signal a judge LLM can use today.
+ */
+async function handleJudgeTeam(env: Env, item: QueueItem): Promise<void> {
+  const payload = item.payload ? JSON.parse(item.payload) : {};
+  const teamId = payload.teamId as string | undefined;
+  if (!teamId) throw new Error("judge_team task missing payload.teamId");
+
+  const team = await env.DB.prepare(`SELECT id, idea_id, repo_url, team_name FROM hackathon_teams WHERE id = ?`)
+    .bind(teamId).first<{ id: string; idea_id: string; repo_url: string; team_name: string }>();
+  if (!team) throw new Error(`Team not found: ${teamId}`);
+
+  const idea = await env.DB.prepare(`SELECT title, one_liner, problem, solution, build_scope, ideathon_score FROM archive_ideas WHERE id = ?`)
+    .bind(team.idea_id).first<{ title: string; one_liner: string; problem: string; solution: string; build_scope: string; ideathon_score: number | null }>();
+
+  const runs = await listBuildTurnRuns(env, team.repo_url, 10);
+  const succeeded = runs.filter((r) => r.conclusion === "success").length;
+  const failed = runs.filter((r) => r.conclusion === "failure").length;
+  const runsSummary = runs.length
+    ? `${runs.length} GitHub Actions build turns: ${succeeded} succeeded, ${failed} failed.`
+    : "No build-turn run history available.";
+
+  const prompt =
+    `TEAM ${team.team_name} built: ${idea?.title} — ${idea?.one_liner}\nProblem: ${idea?.problem}\n` +
+    `Original solution/plan: ${idea?.solution}\nBuild plan: ${idea?.build_scope}\n` +
+    `Repo: https://github.com/${team.repo_url}\n${runsSummary}`;
+  const hackathonTotal = await scoreTarget(env, { eventId: item.event_id, targetType: "team", targetId: teamId, phase: "hackathon", prompt });
+
+  const ideathonScore = idea?.ideathon_score ?? 0;
+  const finalScore = ideathonScore * 0.3 + hackathonTotal * 0.7; // spec §3.2 weights
+
+  await env.DB.prepare(
+    `UPDATE hackathon_teams SET hackathon_score = ?, final_score = ?, status = 'judged' WHERE id = ?`
+  ).bind(hackathonTotal, finalScore, teamId).run();
+}
+
+async function handleTribunalReflectItem(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
+  const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
+    .bind(item.event_id).first<{ parent_event_id: string | null }>();
+  if (!event?.parent_event_id) throw new Error(`Hackathon event ${item.event_id} missing parent_event_id for tribunal`);
+  await handleTribunalReflect(env, item.event_id, event.parent_event_id, agent);
+}
+
+async function handleTribunalCrossExamineItem(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
+  const payload = item.payload ? JSON.parse(item.payload) : {};
+  const targetAgentId = payload.targetAgentId as string | undefined;
+  if (!targetAgentId) throw new Error("tribunal_cross_examine task missing payload.targetAgentId");
+  await handleTribunalCrossExamine(env, item.event_id, agent, targetAgentId);
+}
+
+// Default 3, not 5: found live (2026-07-22) that judge_idea/judge_team
+// items each cost ~14 subrequests (7 parallel judge calls + 7 parallel
+// DB inserts, scoring.ts's scoreTarget) — 5 of those in one batch hit
+// Cloudflare's "Too many subrequests by single Worker invocation" limit
+// partway through. 3 x 14 = 42, safely under it, and every other task
+// type here is 1-3 subrequests so the throughput cost elsewhere is minor
+// (the cron re-ticks every 5 minutes regardless).
+export async function processQueue(env: Env, limit = 3): Promise<{ processed: number; failed: number }> {
   await resetStuckItems(env);
 
   let processed = 0;
@@ -249,6 +347,11 @@ export async function processQueue(env: Env, limit = 5): Promise<{ processed: nu
         case "propose_collaboration": break; // not scheduled automatically yet, see scheduler.ts
         case "team_formation": await handleTeamFormation(env, item); break;
         case "dispatch_build_turn": await handleDispatchBuildTurn(env, item); break;
+        case "judge_idea": await handleJudgeIdea(env, item); break;
+        case "judge_team": await handleJudgeTeam(env, item); break;
+        case "tribunal_reflect": await handleTribunalReflectItem(env, item, agent!); break;
+        case "tribunal_cross_examine": await handleTribunalCrossExamineItem(env, item, agent!); break;
+        case "tribunal_synthesize": await handleTribunalSynthesize(env, item.event_id, agent!); break;
       }
       await markCompleted(env, item.id);
       processed++;

@@ -50,8 +50,8 @@ export interface RecalledMemory {
 
 /**
  * Semantic recall scoped to one agent — "what has this agent said before
- * that's relevant to X." Not cross-agent; use plain Vectorize query without
- * the filter for archive-wide search (spec §10 POST /archive/query).
+ * that's relevant to X." Not cross-agent; use queryArchive below (plain
+ * Vectorize query without the agent filter) for archive-wide search.
  */
 export async function recallMemory(
   env: Env,
@@ -63,6 +63,45 @@ export async function recallMemory(
   const result = await env.ARCHIVE_VECTORS.query(values, {
     topK,
     filter: { agent_id: agentId },
+    returnMetadata: "all",
+  });
+  return result.matches.map((m) => ({
+    score: m.score,
+    agentId: String(m.metadata?.agent_id ?? ""),
+    eventId: String(m.metadata?.event_id ?? ""),
+    type: String(m.metadata?.type ?? ""),
+    text: String(m.metadata?.text ?? ""),
+  }));
+}
+
+export interface ArchiveQueryFilter {
+  agentId?: string;
+  eventId?: string;
+  type?: MemoryType;
+}
+
+/**
+ * Archive-wide semantic search — spec §10 POST /archive/query, spec §15
+ * "Semantic: full-text + vector search on ideas, rationales, memories."
+ * Same Vectorize index as agent memory (every idea/critique/reflection
+ * already gets embedded there — Week 2/5), just without recallMemory's
+ * mandatory agent_id filter, and with optional filters instead.
+ */
+export async function queryArchive(
+  env: Env,
+  queryText: string,
+  filter?: ArchiveQueryFilter,
+  topK = 10
+): Promise<RecalledMemory[]> {
+  const values = await embed(env, queryText);
+  const vectorizeFilter: Record<string, string> = {};
+  if (filter?.agentId) vectorizeFilter.agent_id = filter.agentId;
+  if (filter?.eventId) vectorizeFilter.event_id = filter.eventId;
+  if (filter?.type) vectorizeFilter.type = filter.type;
+
+  const result = await env.ARCHIVE_VECTORS.query(values, {
+    topK,
+    filter: Object.keys(vectorizeFilter).length ? vectorizeFilter : undefined,
     returnMetadata: "all",
   });
   return result.matches.map((m) => ({
