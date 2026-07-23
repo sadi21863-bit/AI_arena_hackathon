@@ -36,9 +36,11 @@ crons = ["*/5 * * * *"]
 # GROQ_API_KEY              — spec §5/§6, primary inference tier. Also set as a
 #                             repo/org Actions secret for team-build-turn.yml —
 #                             same key, two places it's needed.
-# ADMIN_BEARER_TOKEN        — spec §7.1, validates /admin/* routes. Hashed
-#                             copies live in D1's admin_tokens table (never
-#                             the raw value) — see src/auth.ts.
+# (No ADMIN_BEARER_TOKEN Worker secret — spec §7.1's /admin/* auth checks
+#  bearer tokens against D1's admin_tokens table directly (hashes only,
+#  never a raw value), populated via scripts/make_admin_token.js. A same-
+#  named secret binding existed early on but was never actually read by
+#  src/auth.ts; removed from src/env.ts as dead code, 2026-07-23.)
 # AGENT_API_TOKEN           — spec §10 "Agent token" auth, shared across all
 #                             12 agents (they're internal, not external users)
 # TAVILY_API_KEY            — spec §3.1 Deep Research (Tavily only — see

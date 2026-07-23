@@ -48,24 +48,14 @@ export interface RecalledMemory {
   text: string;
 }
 
-/**
- * Semantic recall scoped to one agent — "what has this agent said before
- * that's relevant to X." Not cross-agent; use queryArchive below (plain
- * Vectorize query without the agent filter) for archive-wide search.
- */
-export async function recallMemory(
-  env: Env,
-  agentId: string,
-  queryText: string,
-  topK = 5
-): Promise<RecalledMemory[]> {
-  const values = await embed(env, queryText);
-  const result = await env.ARCHIVE_VECTORS.query(values, {
-    topK,
-    filter: { agent_id: agentId },
-    returnMetadata: "all",
-  });
-  return result.matches.map((m) => ({
+export interface ArchiveQueryFilter {
+  agentId?: string;
+  eventId?: string;
+  type?: MemoryType;
+}
+
+function toRecalledMemories(matches: VectorizeMatches["matches"]): RecalledMemory[] {
+  return matches.map((m) => ({
     score: m.score,
     agentId: String(m.metadata?.agent_id ?? ""),
     eventId: String(m.metadata?.event_id ?? ""),
@@ -74,18 +64,14 @@ export async function recallMemory(
   }));
 }
 
-export interface ArchiveQueryFilter {
-  agentId?: string;
-  eventId?: string;
-  type?: MemoryType;
-}
-
 /**
  * Archive-wide semantic search — spec §10 POST /archive/query, spec §15
  * "Semantic: full-text + vector search on ideas, rationales, memories."
  * Same Vectorize index as agent memory (every idea/critique/reflection
- * already gets embedded there — Week 2/5), just without recallMemory's
- * mandatory agent_id filter, and with optional filters instead.
+ * already gets embedded there — Week 2/5). recallMemory below is just this
+ * with a mandatory agentId filter — kept as its own function since that's
+ * the far more common call shape, but it's a thin wrapper, not a
+ * parallel implementation (2026-07-23 code-quality pass: it used to be one).
  */
 export async function queryArchive(
   env: Env,
@@ -104,11 +90,19 @@ export async function queryArchive(
     filter: Object.keys(vectorizeFilter).length ? vectorizeFilter : undefined,
     returnMetadata: "all",
   });
-  return result.matches.map((m) => ({
-    score: m.score,
-    agentId: String(m.metadata?.agent_id ?? ""),
-    eventId: String(m.metadata?.event_id ?? ""),
-    type: String(m.metadata?.type ?? ""),
-    text: String(m.metadata?.text ?? ""),
-  }));
+  return toRecalledMemories(result.matches);
+}
+
+/**
+ * Semantic recall scoped to one agent — "what has this agent said before
+ * that's relevant to X." Not cross-agent; use queryArchive above (no
+ * agentId filter) for archive-wide search.
+ */
+export async function recallMemory(
+  env: Env,
+  agentId: string,
+  queryText: string,
+  topK = 5
+): Promise<RecalledMemory[]> {
+  return queryArchive(env, queryText, { agentId }, topK);
 }

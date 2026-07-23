@@ -15,7 +15,7 @@
 import type { Env } from "../env";
 
 export type TaskType =
-  | "research" | "submit_idea" | "critique" | "propose_collaboration" | "architecture"
+  | "research" | "submit_idea" | "critique" | "architecture"
   | "team_formation" | "dispatch_build_turn"
   | "judge_idea" | "judge_team"
   | "tribunal_reflect" | "tribunal_cross_examine" | "tribunal_synthesize";

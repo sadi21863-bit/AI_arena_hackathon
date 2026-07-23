@@ -10,14 +10,13 @@ export type TaskType =
   | "code_generation" | "architecture" | "research" | "judging"
   | "summarize" | "validate" | "design" | "test" | "reflect";
 
-export interface InferenceRequest {
+interface InferenceRequest {
   task_type: TaskType;
   prompt: string;
   max_tokens?: number;
 }
 
 import type { Env } from "./env";
-export type { Env } from "./env";
 
 // Task -> candidate model per provider, from spec §5. Kept explicit rather
 // than derived, so a model swap is a one-line change here, not a

@@ -129,8 +129,7 @@ export interface TeamRepoIdea {
 }
 
 export interface CreateTeamRepoResult {
-  fullName: string; // "org/repo"
-  htmlUrl: string;
+  fullName: string; // "org/repo" — the html URL is trivially derivable from this whenever display needs it, no need to carry both
 }
 
 /**
@@ -155,9 +154,8 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   // supplied" (found live, 2026-07-21, team_formation's first real run:
   // README.md collided, workflow/Dockerfile/opencode.json didn't since
   // those paths don't exist in a bare auto_init README-only repo).
-  let created: { html_url: string };
   try {
-    created = await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
+    await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
       name: repoName,
       private: false, // public repo required for free unlimited Actions minutes, spec §8
       description: `The Arena — Team ${teamName} building "${idea.title}" (event ${eventId})`,
@@ -168,9 +166,7 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     // instead of erroring, rather than force every retry back to a fresh
     // eventId (which is what forced 3 stray test repos during Week 4
     // live testing, 2026-07-21, before this fix existed).
-    if (err instanceof GitHubApiError && err.status === 422 && /already exists/i.test(err.body)) {
-      created = await githubRequest(env, "GET", `/repos/${owner}/${repoName}`);
-    } else {
+    if (!(err instanceof GitHubApiError && err.status === 422 && /already exists/i.test(err.body))) {
       throw err;
     }
   }
@@ -200,5 +196,5 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     setRepoSecret(env, owner, repoName, "CF_API_TOKEN", env.CF_API_TOKEN),
   ]);
 
-  return { fullName: `${owner}/${repoName}`, htmlUrl: created.html_url };
+  return { fullName: `${owner}/${repoName}` };
 }

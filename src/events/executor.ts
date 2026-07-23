@@ -17,6 +17,7 @@ import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
 import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
+import { countPayloadFieldMatches, requirePayloadField } from "./payload-utils";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
   const prompt = `${agent.persona}\n\n${instructions}`;
@@ -88,9 +89,7 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
 interface CritiqueJson { strength: string; weakness: string; suggestion: string }
 
 async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const ideaId = payload.ideaId as string | undefined;
-  if (!ideaId) throw new Error("critique task missing payload.ideaId");
+  const ideaId = requirePayloadField(item.payload, "ideaId", "critique");
 
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
@@ -121,9 +120,7 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
 }
 
 async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const ideaId = payload.ideaId as string | undefined;
-  if (!ideaId) throw new Error("architecture task missing payload.ideaId");
+  const ideaId = requirePayloadField(item.payload, "ideaId", "architecture");
 
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
@@ -215,9 +212,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
 
 /** Subsequent daily build turns — spec §3.2 Day 2-3 "build turns continue." */
 async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const teamId = payload.teamId as string | undefined;
-  if (!teamId) throw new Error("dispatch_build_turn task missing payload.teamId");
+  const teamId = requirePayloadField(item.payload, "teamId", "dispatch_build_turn");
 
   const team = await env.DB.prepare(`SELECT * FROM hackathon_teams WHERE id = ?`)
     .bind(teamId).first<{ repo_url: string; team_name: "alpha" | "beta"; idea_id: string }>();
@@ -226,19 +221,13 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const idea = await env.DB.prepare(`SELECT title, build_scope FROM archive_ideas WHERE id = ?`)
     .bind(team.idea_id).first<{ title: string; build_scope: string }>();
 
-  // Not `payload LIKE '%"teamId":"..."%'` — found live (2026-07-22, Week 5
-  // judging): D1 throws "LIKE or GLOB pattern too complex" whenever the
-  // pattern contains a literal `"` character, which every JSON-substring
-  // LIKE here necessarily does (see scheduler.ts's queuedPayloadValues for
-  // the full writeup and the other 3 call sites this same bug hit).
-  // Fetching completed dispatch_build_turn rows and filtering in JS instead.
+  // countPayloadFieldMatches, not `payload LIKE '%"teamId":"..."%'` — D1
+  // throws "LIKE or GLOB pattern too complex" on any pattern containing a
+  // literal `"` (found live 2026-07-22, see payload-utils.ts).
   const completedDispatches = await env.DB.prepare(
     `SELECT payload FROM event_queue WHERE task_type = 'dispatch_build_turn' AND status = 'completed'`
   ).all<{ payload: string | null }>();
-  const priorTurns = completedDispatches.results.filter((row) => {
-    if (!row.payload) return false;
-    try { return JSON.parse(row.payload)?.teamId === teamId; } catch { return false; }
-  }).length;
+  const priorTurns = countPayloadFieldMatches(completedDispatches.results, "teamId", teamId);
 
   await dispatchBuildTurn(env, {
     repoFullName: team.repo_url, team: team.team_name,
@@ -249,9 +238,7 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
 
 /** Ideathon judging — spec §13: all 7 judges score one architecture_complete idea. */
 async function handleJudgeIdea(env: Env, item: QueueItem): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const ideaId = payload.ideaId as string | undefined;
-  if (!ideaId) throw new Error("judge_idea task missing payload.ideaId");
+  const ideaId = requirePayloadField(item.payload, "ideaId", "judge_idea");
 
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
@@ -272,9 +259,7 @@ async function handleJudgeIdea(env: Env, item: QueueItem): Promise<void> {
  * fail counts across turns is real signal a judge LLM can use today.
  */
 async function handleJudgeTeam(env: Env, item: QueueItem): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const teamId = payload.teamId as string | undefined;
-  if (!teamId) throw new Error("judge_team task missing payload.teamId");
+  const teamId = requirePayloadField(item.payload, "teamId", "judge_team");
 
   const team = await env.DB.prepare(`SELECT id, idea_id, repo_url, team_name FROM hackathon_teams WHERE id = ?`)
     .bind(teamId).first<{ id: string; idea_id: string; repo_url: string; team_name: string }>();
@@ -312,9 +297,7 @@ async function handleTribunalReflectItem(env: Env, item: QueueItem, agent: Agent
 }
 
 async function handleTribunalCrossExamineItem(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
-  const payload = item.payload ? JSON.parse(item.payload) : {};
-  const targetAgentId = payload.targetAgentId as string | undefined;
-  if (!targetAgentId) throw new Error("tribunal_cross_examine task missing payload.targetAgentId");
+  const targetAgentId = requirePayloadField(item.payload, "targetAgentId", "tribunal_cross_examine");
   await handleTribunalCrossExamine(env, item.event_id, agent, targetAgentId);
 }
 
@@ -344,7 +327,6 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
         case "submit_idea": await handleSubmitIdea(env, item, agent!); break;
         case "critique": await handleCritique(env, item, agent!); break;
         case "architecture": await handleArchitecture(env, item, agent!); break;
-        case "propose_collaboration": break; // not scheduled automatically yet, see scheduler.ts
         case "team_formation": await handleTeamFormation(env, item); break;
         case "dispatch_build_turn": await handleDispatchBuildTurn(env, item); break;
         case "judge_idea": await handleJudgeIdea(env, item); break;

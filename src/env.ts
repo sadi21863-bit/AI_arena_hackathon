@@ -9,7 +9,6 @@ export interface Env {
   ARCHIVE_VECTORS: VectorizeIndex;
   ARCHIVE_BUCKET: R2Bucket;
   GROQ_API_KEY: string;
-  ADMIN_BEARER_TOKEN: string;
   // Single shared token for all 12 agents' own API calls (spec §10's "Agent
   // token" auth) — these are internal system agents, not external users, so
   // per-agent tokens would be complexity the spec doesn't ask for.

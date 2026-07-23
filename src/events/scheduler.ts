@@ -30,6 +30,7 @@ import type { Env } from "../env";
 import { AGENTS } from "../agents/personas";
 import { runCalibration } from "../judges/calibration";
 import { pickCrossExamineTarget } from "../tribunal/reflection";
+import { queuedPayloadValues } from "./payload-utils";
 import { enqueue } from "./queue";
 
 export type Phase = "deep_research" | "ideation_critique" | "architecture" | "ready_for_judging" | "judged";
@@ -55,28 +56,6 @@ export interface EventRow {
   end_date: string | null;
   status: string;
   parent_event_id?: string | null;
-}
-
-/**
- * Extracts one field from a set of queue rows' JSON payloads, as a Set for
- * cheap membership checks. Deliberately NOT `payload LIKE '%"field":"val"%'`
- * — found live (2026-07-22): D1 throws "LIKE or GLOB pattern too complex"
- * whenever the pattern contains a literal `"` character, which every
- * JSON-substring LIKE pattern here necessarily does. Fetching the (small,
- * per-event) row set and filtering in JS sidesteps it entirely, and is
- * arguably more correct anyway — exact field match instead of substring
- * matching that could false-positive across similarly-prefixed IDs.
- */
-function queuedPayloadValues(rows: Array<{ payload: string | null }>, field: string): Set<string> {
-  const values = new Set<string>();
-  for (const row of rows) {
-    if (!row.payload) continue;
-    try {
-      const value = JSON.parse(row.payload)?.[field];
-      if (typeof value === "string") values.add(value);
-    } catch { /* malformed payload — treat as no match, not a crash */ }
-  }
-  return values;
 }
 
 function daysElapsed(startDate: string): number {
@@ -299,10 +278,11 @@ async function ensureTribunalReflections(env: Env, event: EventRow): Promise<"ju
     }
   }
 
-  const notDone = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'tribunal_reflect' AND status != 'completed'`
-  ).bind(event.id).first<{ n: number }>();
-  if ((notDone?.n ?? 0) > 0) return "judged";
+  // isStageComplete, not a hand-rolled count — matches the pattern the
+  // other two Tribunal stages already use below (2026-07-23 code-quality
+  // pass: this stage was the odd one out).
+  const reflectDone = await isStageComplete(env, event.id, "tribunal_reflect");
+  if (!reflectDone.allCompleted) return "judged";
 
   await env.DB.prepare(`UPDATE archive_events SET status = 'tribunal' WHERE id = ?`).bind(event.id).run();
   return "tribunal";

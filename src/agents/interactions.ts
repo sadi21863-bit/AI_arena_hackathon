@@ -68,18 +68,6 @@ async function recordInteraction(
   return String(result.meta.last_row_id);
 }
 
-export async function commentOnIdea(
-  env: Env,
-  params: { agentId: string; eventId: string; ideaId: string; text: string; sentiment?: number }
-): Promise<string> {
-  const id = await recordInteraction(env, {
-    eventId: params.eventId, actorId: params.agentId, targetId: params.ideaId,
-    type: "comment", content: params.text, sentiment: params.sentiment,
-  });
-  await rememberMemory(env, { id, agentId: params.agentId, eventId: params.eventId, type: "comment", text: params.text });
-  return id;
-}
-
 export interface CritiqueInput {
   agentId: string;
   eventId: string;
@@ -115,46 +103,6 @@ export async function critiqueIdea(env: Env, input: CritiqueInput): Promise<stri
     text: `Strength: ${input.strength}\nWeakness: ${input.weakness}\nSuggestion: ${input.suggestion}`,
   });
   return id;
-}
-
-export async function proposeCollaboration(
-  env: Env,
-  params: { agentId: string; eventId: string; ideaId: string; pitch: string }
-): Promise<string> {
-  return recordInteraction(env, {
-    eventId: params.eventId, actorId: params.agentId, targetId: params.ideaId,
-    type: "propose_collaboration", content: params.pitch,
-  });
-}
-
-export async function formAlliance(
-  env: Env,
-  params: { agentId: string; eventId: string; withAgentId: string; reason: string }
-): Promise<string> {
-  return recordInteraction(env, {
-    eventId: params.eventId, actorId: params.agentId, targetId: params.withAgentId,
-    type: "form_alliance", content: params.reason,
-  });
-}
-
-/**
- * Merging two ideas: co_agent_id set, +0.5 collaboration bonus applied at
- * scoring time (Tribunal, Week 5) — this just records the merge itself and
- * bumps both agents' collaboration count, per spec §4.
- */
-export async function mergeIdeas(
-  env: Env,
-  params: { primaryIdeaId: string; coAgentId: string; eventId: string }
-): Promise<void> {
-  const idea = await env.DB.prepare(`SELECT agent_id FROM archive_ideas WHERE id = ?`)
-    .bind(params.primaryIdeaId).first<{ agent_id: string }>();
-  if (!idea) throw new Error(`Idea not found: ${params.primaryIdeaId}`);
-
-  await env.DB.batch([
-    env.DB.prepare(`UPDATE archive_ideas SET co_agent_id = ? WHERE id = ?`).bind(params.coAgentId, params.primaryIdeaId),
-    env.DB.prepare(`UPDATE archive_agents SET total_collaborations = total_collaborations + 1 WHERE id = ?`).bind(idea.agent_id),
-    env.DB.prepare(`UPDATE archive_agents SET total_collaborations = total_collaborations + 1 WHERE id = ?`).bind(params.coAgentId),
-  ]);
 }
 
 export async function reviseIdea(

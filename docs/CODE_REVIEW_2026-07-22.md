@@ -14,14 +14,14 @@ Three-agent review (deep bug/security/spec review, code-quality/simplification p
 - [x] `POST /inference` had zero auth. Fixed: gated behind `requireAgentToken`, verified live (401 without a token).
 - [ ] Implemented `/admin/*` routes don't match what the spec's route table apparently lists — left as-is, this is a product/spec-reconciliation decision (add the missing routes, or update the spec table) rather than a bug fix, out of scope for this pass.
 
-## Code quality (report-only, no changes applied)
+## Code quality — all applied 2026-07-23
 
-- [ ] `queuedPayloadValues` (scheduler.ts) isn't exported/reused — `executor.ts`'s `handleDispatchBuildTurn` hand-rolls a duplicate.
-- [ ] 7 near-identical "parse payload + require field" preambles in `executor.ts` — candidate for a shared helper.
-- [ ] Three Tribunal-stage functions in `scheduler.ts` are near-identical; `ensureTribunalReflections` doesn't reuse the `isStageComplete` helper the other two stages use.
-- [ ] 4 unused exported functions in `agents/interactions.ts` (`commentOnIdea`, `proposeCollaboration`, `formAlliance`, `mergeIdeas`) — spec'd but never wired to any route/queue task.
-- [ ] Minor dead exports: `router.ts`'s `Env` re-export and `InferenceRequest` export, `repos.ts`'s unused `htmlUrl` field, `env.ts`'s vestigial `ADMIN_BEARER_TOKEN` (real admin check goes through the hashed `admin_tokens` D1 table instead).
-- [ ] Duplicated Vectorize→`RecalledMemory` mapper in `memory.ts` (`recallMemory` and `queryArchive`).
+- [x] `queuedPayloadValues` extracted to a new shared `src/events/payload-utils.ts` (alongside a new `countPayloadFieldMatches`), imported by both `scheduler.ts` and `executor.ts` instead of a hand-rolled duplicate.
+- [x] Added `requirePayloadField` to `payload-utils.ts`; replaced 6 near-identical parse+check preambles across `executor.ts`'s task handlers with it.
+- [x] `ensureTribunalReflections` now reuses `isStageComplete`, matching the other two Tribunal stages.
+- [x] Removed `commentOnIdea`, `proposeCollaboration`, `formAlliance`, `mergeIdeas` from `agents/interactions.ts` — fully-correct implementations but genuinely zero callers anywhere (confirmed via repo-wide grep), and no scheduler/executor path ever decided to invoke them. Also removed the now-fully-dead `propose_collaboration` task type from `queue.ts` and its no-op switch case in `executor.ts`. **Judgment call, not automatic**: these are spec-required interaction types (§4) — deleted per this project's own standing rule against speculative future-proofing, not because the feature is unwanted. If agent-collaboration mechanics get built in a later week, restore from git history (this commit) rather than rewriting from scratch.
+- [x] Removed dead exports: `router.ts`'s redundant `Env` re-export and `InferenceRequest`'s `export` keyword (still used internally, just not by any other file), `repos.ts`'s unused `CreateTeamRepoResult.htmlUrl` field, `env.ts`'s vestigial `ADMIN_BEARER_TOKEN` binding (real admin auth goes entirely through the hashed `admin_tokens` D1 table — this secret was declared but never once read). `wrangler.toml`'s secret comment updated to match reality.
+- [x] `memory.ts`'s duplicated Vectorize→`RecalledMemory` mapper eliminated more fully than just extracting the mapper: `recallMemory` is actually a special case of `queryArchive` (agent-scoped filter only), so it now delegates to it directly instead of maintaining a parallel implementation.
 
 ## Research findings (informational / future consideration)
 
