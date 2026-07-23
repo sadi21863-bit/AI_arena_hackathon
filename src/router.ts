@@ -46,7 +46,7 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
 // Daily caps from spec §5 (Groq) and §6 (Workers AI, Neuron-derived).
 // These are the PUBLISHED caps — replace with measured values from the Week 0
 // spike (inference_pool_probe.js) once you have them; don't ship on estimates.
-const DAILY_CAPS: Record<string, number> = {
+export const DAILY_CAPS: Record<string, number> = {
   "groq:llama-3.1-8b-instant": 14400,
   "groq:llama-3.3-70b-versatile": 1000,
   "groq:openai/gpt-oss-120b": 1000,

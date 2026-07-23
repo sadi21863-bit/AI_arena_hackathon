@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Headroom Dashboard — The Arena Observatory</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/arena.css" />
+<style>
+  .obs-header { padding: 48px 32px 24px; }
+  .obs-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
+  .obs-header p { color: var(--arena-ink-soft); max-width: 60ch; margin-top: 10px; font-size: 1.02rem; }
+
+  .gauge-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px; padding: 0 32px 60px;
+  }
+  .gauge-card {
+    padding: 28px 24px; display: flex; flex-direction: column; align-items: center; gap: 16px;
+  }
+  .gauge-card__provider {
+    font-family: var(--arena-font-mono); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--arena-ink-faint);
+  }
+  .gauge-card__model {
+    font-family: var(--arena-font-display); font-size: 1.05rem; text-align: center; min-height: 2.6em;
+    display: flex; align-items: center;
+  }
+  .gauge-svg { width: 168px; height: 168px; }
+  .gauge-track { fill: none; stroke: var(--arena-line); stroke-width: 12; }
+  .gauge-fill { fill: none; stroke-width: 12; stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%;
+    transition: stroke-dashoffset 1s cubic-bezier(.16,1,.3,1); }
+  .gauge-center { font-family: var(--arena-font-mono); }
+  .gauge-pct { font-size: 1.6rem; fill: var(--arena-ink); font-weight: 600; }
+  .gauge-frac { font-size: 0.62rem; fill: var(--arena-ink-faint); }
+  .gauge-card__cap { font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-ink-faint); }
+
+  .headroom-summary {
+    margin: 0 32px 36px; padding: 20px 24px; display: flex; align-items: center; gap: 14px;
+  }
+  .headroom-summary__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--arena-ink-green); flex: none; }
+  .headroom-summary--warn .headroom-summary__dot { background: var(--arena-gold); }
+  .headroom-summary--full .headroom-summary__dot { background: var(--arena-danger); }
+</style>
+</head>
+<body>
+<div class="arena-grain" aria-hidden="true"></div>
+
+<nav class="arena-nav">
+  <a href="/" class="arena-nav__mark">The Arena</a>
+  <div class="arena-nav__links">
+    <a href="/observatory/agents.html">Agent Graph</a>
+    <a href="/observatory/headroom.html" aria-current="page">Headroom</a>
+    <a href="/observatory/replay.html">Replay</a>
+    <a href="/observatory/tribunal.html">Tribunal</a>
+    <a href="https://arena-api.sadi21863.workers.dev/health">API</a>
+  </div>
+</nav>
+
+<header class="obs-header">
+  <div class="scene__eyebrow" style="text-align:left;">Observatory · spec §11</div>
+  <h1>Headroom Dashboard</h1>
+  <p>Live provider usage against the daily caps every event depends on (spec §6's inference router). Groq first, Cloudflare Workers AI behind it — this is what's actually left today, not what's published.</p>
+</header>
+
+<div class="headroom-summary arena-card" id="summary">
+  <span class="headroom-summary__dot"></span>
+  <span id="summaryText" class="arena-mono" style="font-size:0.85rem;">Loading…</span>
+</div>
+
+<div class="gauge-grid" id="gaugeGrid"></div>
+
+<footer class="arena-footer">The Arena Observatory · <a href="/">back home</a> · refreshes every 30s</footer>
+
+<script>
+(function () {
+  var API = "https://arena-api.sadi21863.workers.dev";
+  var grid = document.getElementById("gaugeGrid");
+  var R = 74, C = 2 * Math.PI * R;
+
+  function colorFor(pct) {
+    if (pct >= 0.9) return "var(--arena-danger)";
+    if (pct >= 0.6) return "var(--arena-gold)";
+    return "var(--arena-ink-green)";
+  }
+
+  function render(data) {
+    grid.innerHTML = "";
+    var maxPct = 0;
+    data.usage.forEach(function (tier) {
+      var pct = tier.cap ? Math.min(1, tier.used / tier.cap) : 0;
+      maxPct = Math.max(maxPct, pct);
+      var offset = C * (1 - pct);
+      var card = document.createElement("div");
+      card.className = "arena-card gauge-card";
+      card.innerHTML =
+        '<div class="gauge-card__provider">' + (tier.provider === "groq" ? "Groq" : "Cloudflare Workers AI") + '</div>' +
+        '<div class="gauge-card__model">' + tier.model_id + '</div>' +
+        '<svg class="gauge-svg" viewBox="0 0 180 180">' +
+          '<circle class="gauge-track" cx="90" cy="90" r="' + R + '" />' +
+          '<circle class="gauge-fill" cx="90" cy="90" r="' + R + '" stroke="' + colorFor(pct) + '" ' +
+            'stroke-dasharray="' + C + '" stroke-dashoffset="' + offset + '" />' +
+          '<text class="gauge-center gauge-pct" x="90" y="86" text-anchor="middle">' + Math.round(pct * 100) + '%</text>' +
+          '<text class="gauge-center gauge-frac" x="90" y="104" text-anchor="middle">' + tier.used + ' / ' + tier.cap + '</text>' +
+        '</svg>' +
+        '<div class="gauge-card__cap">daily cap · resets 00:00 UTC</div>';
+      grid.appendChild(card);
+    });
+
+    var summary = document.getElementById("summary");
+    var text = document.getElementById("summaryText");
+    summary.className = "headroom-summary arena-card" + (maxPct >= 0.9 ? " headroom-summary--full" : maxPct >= 0.6 ? " headroom-summary--warn" : "");
+    text.textContent = maxPct >= 0.9
+      ? "At least one tier is effectively exhausted for " + data.day + " — the router falls through to the next tier or queues (spec §6)."
+      : maxPct >= 0.6
+        ? "Comfortable headroom remains for " + data.day + ", one tier is over half used."
+        : "Comfortable headroom on every tier for " + data.day + ".";
+  }
+
+  function load() {
+    fetch(API + "/headroom")
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(render)
+      .catch(function (err) {
+        document.getElementById("summaryText").textContent = "Couldn't load live usage (" + err.message + ").";
+      });
+  }
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

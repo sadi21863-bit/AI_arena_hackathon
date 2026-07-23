@@ -7,7 +7,7 @@
  * weeks' scope per the roadmap (§17).
  */
 
-import { routeInference, type TaskType } from "./router";
+import { routeInference, DAILY_CAPS, type TaskType } from "./router";
 import type { Env } from "./env";
 import { requireAgentToken, requireAdminToken } from "./auth";
 import { listAgents, getAgent, isAgentId } from "./agents/personas";
@@ -171,7 +171,22 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const usage = await env.DB.prepare(
         `SELECT provider, model_id, SUM(units_used) as used FROM provider_usage_log WHERE day = ? GROUP BY provider, model_id`
       ).bind(today).all<{ provider: string; model_id: string; used: number }>();
-      return Response.json({ day: today, usage: usage.results });
+      const usedByGroqModel = new Map(usage.results.filter((r) => r.provider === "groq").map((r) => [r.model_id, r.used]));
+      // workers_ai's cap is one pool SHARED across all its models (router.ts),
+      // so usage sums across every workers_ai row, not a per-model lookup.
+      const workersAiUsed = usage.results.filter((r) => r.provider === "workers_ai").reduce((sum, r) => sum + r.used, 0);
+
+      // Iterate DAILY_CAPS (router.ts's single source of truth), not the
+      // usage query results — a model with zero calls today should still
+      // show as "full headroom," not be silently absent from the dashboard.
+      const tiers = Object.entries(DAILY_CAPS).map(([key, cap]) => {
+        if (key === "workers_ai") {
+          return { provider: "workers_ai", model_id: "(shared across all Workers AI models)", cap, used: workersAiUsed };
+        }
+        const model = key.slice("groq:".length);
+        return { provider: "groq", model_id: model, cap, used: usedByGroqModel.get(model) ?? 0 };
+      });
+      return Response.json({ day: today, usage: tiers });
     }
 
     if (url.pathname === "/ideas" && request.method === "GET") {
