@@ -270,10 +270,7 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
 
 async function ensureTribunalReflections(env: Env, event: EventRow): Promise<"judged" | "tribunal"> {
   for (const agent of AGENTS) {
-    const existing = await env.DB.prepare(
-      `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = 'tribunal_reflect' AND status != 'failed'`
-    ).bind(event.id, agent.id).first<{ n: number }>();
-    if ((existing?.n ?? 0) === 0) {
+    if (await shouldEnqueueForAgent(env, event.id, agent.id, "tribunal_reflect")) {
       await enqueue(env, { eventId: event.id, agentId: agent.id, taskType: "tribunal_reflect", priority: 4 });
     }
   }
@@ -282,57 +279,95 @@ async function ensureTribunalReflections(env: Env, event: EventRow): Promise<"ju
   // other two Tribunal stages already use below (2026-07-23 code-quality
   // pass: this stage was the odd one out).
   const reflectDone = await isStageComplete(env, event.id, "tribunal_reflect");
-  if (!reflectDone.allCompleted) return "judged";
+  if (!reflectDone) return "judged";
 
   await env.DB.prepare(`UPDATE archive_events SET status = 'tribunal' WHERE id = ?`).bind(event.id).run();
   return "tribunal";
 }
 
+/**
+ * Restructured (2026-07-23, live bug found alongside isStageComplete's
+ * fix above): the previous `if (!allQueued) { ...retry loop...; return }`
+ * shape meant the per-agent retry loop stopped running entirely once every
+ * agent had been queued AT LEAST ONCE — so a failed cross-examine or
+ * synthesize item would never be retried at all once the initial batch of
+ * 12 existed, a permanent stall via a different path than tribunal_
+ * reflect's retry-storm (which at least kept retrying, just wastefully).
+ * Now the self-healing per-agent loop always runs every tick (same
+ * unconditional pattern as ensureIdeathonJudging/ensureHackathonJudging
+ * above), and allCompleted alone decides whether to advance.
+ */
 async function ensureTribunalCrossExamAndSynthesis(env: Env, event: EventRow): Promise<"tribunal" | "complete"> {
-  const crossDone = await isStageComplete(env, event.id, "tribunal_cross_examine");
-  if (!crossDone.allQueued) {
-    if (!event.parent_event_id) throw new Error(`Hackathon event ${event.id} missing parent_event_id for cross-examination target selection`);
-    for (const agent of AGENTS) {
-      const existing = await env.DB.prepare(
-        `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = 'tribunal_cross_examine' AND status != 'failed'`
-      ).bind(event.id, agent.id).first<{ n: number }>();
-      if ((existing?.n ?? 0) === 0) {
-        const target = await pickCrossExamineTarget(env, event.parent_event_id, agent.id);
-        if (target) {
-          await enqueue(env, { eventId: event.id, agentId: agent.id, taskType: "tribunal_cross_examine", payload: { targetAgentId: target }, priority: 4 });
-        }
-      }
-    }
-    return "tribunal";
-  }
-  if (!crossDone.allCompleted) return "tribunal";
+  if (!event.parent_event_id) throw new Error(`Hackathon event ${event.id} missing parent_event_id for cross-examination target selection`);
 
-  const synthDone = await isStageComplete(env, event.id, "tribunal_synthesize");
-  if (!synthDone.allQueued) {
-    for (const agent of AGENTS) {
-      const existing = await env.DB.prepare(
-        `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = 'tribunal_synthesize' AND status != 'failed'`
-      ).bind(event.id, agent.id).first<{ n: number }>();
-      if ((existing?.n ?? 0) === 0) {
-        await enqueue(env, { eventId: event.id, agentId: agent.id, taskType: "tribunal_synthesize", priority: 4 });
+  for (const agent of AGENTS) {
+    if (await shouldEnqueueForAgent(env, event.id, agent.id, "tribunal_cross_examine")) {
+      const target = await pickCrossExamineTarget(env, event.parent_event_id, agent.id);
+      if (target) {
+        await enqueue(env, { eventId: event.id, agentId: agent.id, taskType: "tribunal_cross_examine", payload: { targetAgentId: target }, priority: 4 });
       }
     }
-    return "tribunal";
   }
-  if (!synthDone.allCompleted) return "tribunal";
+
+  const crossDone = await isStageComplete(env, event.id, "tribunal_cross_examine");
+  if (!crossDone) return "tribunal";
+
+  for (const agent of AGENTS) {
+    if (await shouldEnqueueForAgent(env, event.id, agent.id, "tribunal_synthesize")) {
+      await enqueue(env, { eventId: event.id, agentId: agent.id, taskType: "tribunal_synthesize", priority: 4 });
+    }
+  }
+  const synthDone = await isStageComplete(env, event.id, "tribunal_synthesize");
+  if (!synthDone) return "tribunal";
 
   await env.DB.prepare(`UPDATE archive_events SET status = 'complete' WHERE id = ?`).bind(event.id).run();
   return "complete";
 }
 
-async function isStageComplete(env: Env, eventId: string, taskType: string): Promise<{ allQueued: boolean; allCompleted: boolean }> {
-  const total = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = ?`
+/**
+ * Per-agent retry gate with backoff — enqueue only if there's no non-failed
+ * item AND the most recent failure (if any) is older than the backoff
+ * window. Found live (2026-07-23): tribunal_reflect routes to Workers AI
+ * only (no Groq fallback, router.ts's "reflect" task type), so when Workers
+ * AI's daily quota is exhausted every attempt fails instantly — retrying
+ * every single 5-minute cron tick with no backoff produced 676 wasted
+ * attempts (all the identical "used up your daily free allocation" error)
+ * before quota finally reset. A 30-minute backoff cuts that ~6x without
+ * meaningfully delaying real recovery once quota resets.
+ */
+async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string, taskType: string, backoffMinutes = 30): Promise<boolean> {
+  const nonFailed = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status != 'failed'`
+  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+  if ((nonFailed?.n ?? 0) > 0) return false; // already covered by a pending/in_progress/completed item
+
+  const recentFailure = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed' AND completed_at >= datetime('now', ?)`
+  ).bind(eventId, agentId, taskType, `-${backoffMinutes} minutes`).first<{ n: number }>();
+  return (recentFailure?.n ?? 0) === 0;
+}
+
+/**
+ * Per-DISTINCT-AGENT completion, not a raw row count. Found live
+ * (2026-07-23): `reflect` (Tribunal's task_type, router.ts) routes to
+ * Workers AI only, no Groq fallback — when Workers AI's daily quota is
+ * exhausted, every attempt fails instantly, and the per-agent retry-safety
+ * fix (scheduler.ts, 2026-07-22) re-queues a fresh one every single 5-
+ * minute cron tick. Over enough hours that piles up hundreds of failed
+ * rows for the SAME already-eventually-successful agents. The original
+ * `allCompleted = COUNT(status != 'completed') === 0` check counted that
+ * entire failure history forever, permanently blocking the stage from
+ * ever completing even once every agent genuinely had a completed item —
+ * confirmed live: 676 accumulated failures blocked event_cd9644ef... at
+ * status='judged' indefinitely despite all 12 tribunal_reflect agents
+ * having succeeded. Counting DISTINCT agent_id with status='completed'
+ * is immune to however much failed-retry history exists.
+ */
+async function isStageComplete(env: Env, eventId: string, taskType: string): Promise<boolean> {
+  const completedAgents = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT agent_id) as n FROM event_queue WHERE event_id = ? AND task_type = ? AND status = 'completed'`
   ).bind(eventId, taskType).first<{ n: number }>();
-  const pending = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = ? AND status != 'completed'`
-  ).bind(eventId, taskType).first<{ n: number }>();
-  return { allQueued: (total?.n ?? 0) >= AGENTS.length, allCompleted: (pending?.n ?? 0) === 0 };
+  return (completedAgents?.n ?? 0) >= AGENTS.length;
 }
 
 /** Non-failed count of a task_type queued for one agent in this event — the per-agent idempotency primitive used below. */

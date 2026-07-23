@@ -1,5 +1,16 @@
 # Code review — 2026-07-22
 
+## Addendum, 2026-07-23: 2 more live-found bugs in the Tribunal completion logic
+
+Discovered while the scheduled quota-reset check-in resumed Week 5 testing (not part of the original 3-agent review, found through live observation of the actual Tribunal flow running end to end for the first time):
+
+- **`isStageComplete` permanently stuck an event.** Its `allCompleted` check counted ALL non-'completed' rows ever for a task_type, including accumulated historical failures. `tribunal_reflect` has no Groq fallback (Workers AI only, by design — "prefer the cheaper tier" for non-time-critical reflection) so when Workers AI's daily quota was exhausted, every attempt failed instantly; the existing per-agent retry-safety fix re-queued a fresh attempt every 5-minute cron tick, piling up 676 failed rows before quota reset let all 12 finally succeed. But `allCompleted` never saw zero non-completed rows (676 failed ones remained), so the event stayed at `status='judged'` forever despite every agent actually being done. Fixed: count DISTINCT agent_id with `status='completed'` instead — immune to failure history.
+- **`ensureTribunalCrossExamAndSynthesis` had a worse, silent version of the same class of bug.** Its `if (!allQueued) { ...retry loop...; return }` structure meant the per-agent retry loop stopped running entirely once all 12 agents had been queued *at least once* — so a single failed cross-examine or synthesize item would never be retried at all, ever, a permanent stall via a different path than tribunal_reflect's (which at least kept retrying, just wastefully). Restructured so the self-healing loop always runs unconditionally every tick, matching the pattern `ensureIdeathonJudging`/`ensureHackathonJudging` already used correctly.
+- Also added `shouldEnqueueForAgent`, a 30-minute backoff on top of the per-agent retry check, specifically because the above bugs surfaced how wasteful a no-backoff retry-every-5-minutes pattern is against a task type with no fallback tier (676 identical "quota exhausted" errors before this fix existed).
+
+**Verified live**: the actual stuck test event (`event_cd9644ef...`) was confirmed at `status='judged'` with all 12 `tribunal_reflect` items completed but the event permanently unable to advance: `event_cd9644ef` moved to `status='tribunal'` on the very next tick after deploying the fix.
+
+
 Three-agent review (deep bug/security/spec review, code-quality/simplification pass, web+GitHub research on the underlying stack). Findings below; checked off as fixed.
 
 ## Critical

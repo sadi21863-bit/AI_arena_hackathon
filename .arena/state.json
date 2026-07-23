@@ -91,8 +91,9 @@
     },
     "week5_archive_tribunal": {
       "status": "in_progress",
-      "checked_at": "2026-07-22T12:40:00.000000+00:00",
+      "checked_at": "2026-07-23T07:15:00.000000+00:00",
       "details": {
+        "2026_07_23_update": "Full 3-agent code review applied (docs/CODE_REVIEW_2026-07-22.md): fixed real network exposure in team-build-turn.yml (Squid proxy + DOCKER-USER iptables, verified live), retry-safety backported to remaining scheduler phases, judge_scores dedup, calibration visibility, /inference auth, plus a full code-quality pass and Groq reasoning_effort=low (verified live, fixes the reasoning-truncation root cause). Separately: hackathon judging (judge_team) completed fully live -- event_cd9644ef-a78a-4758-8f65-53c76995bb5c reached status=judged with a real winner_team_id determined by weighted score. Then found 2 MORE live bugs in Tribunal's own completion-detection (isStageComplete counted all-time failed rows, permanently blocking advancement even after every agent succeeded; ensureTribunalCrossExamAndSynthesis's retry loop stopped running entirely once all 12 agents had been queued once, a permanent stall for any single failure) -- both fixed, plus a 30-min retry backoff added (676 wasted retries were observed hammering an exhausted Workers AI quota every 5 min before the fix). Verified live: the stuck event advanced from judged to tribunal on the next tick post-fix. Individual reflections (12/12) and hackathon judging are fully verified complete; cross-examination and synthesis are queued and self-healing but not yet observed to finish (still gated on the same Workers AI quota, now with proper backoff -- no code changes needed to finish this, just quota headroom).",
         "judges": "src/judges/personas.ts, 7 judges with per-phase weights (ideathon/hackathon columns sum to 1.0 each), spec §13",
         "calibration": "src/judges/calibration.ts, 3 anchor ideas x 7 judges, Pearson correlation gate (>=0.6), spec §13/§16 — runs once per event before real judging",
         "scoring": "src/judges/scoring.ts scoreTarget, idempotent (checks existing judge_scores rows before re-scoring)",
