@@ -20,8 +20,63 @@ import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
 
+// Every public GET route above exists specifically so the Observatory
+// frontend (Cloudflare Pages, a DIFFERENT origin from this Worker) can
+// render live data — found live (2026-07-23, Week 6): the Worker never set
+// any CORS headers, so every one of those fetch() calls from the browser
+// failed outright with a generic "Failed to fetch" (curl/PowerShell
+// testing throughout this whole project never caught it, since CORS is a
+// browser-enforced restriction, not a server-side one — it only breaks in
+// an actual browser). `*` rather than a specific origin: every route this
+// applies to is already public/unauthenticated read data, so there's
+// nothing a wildcard origin exposes that a direct curl request couldn't
+// already read.
+const CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
+    const response = await handleRequest(request, env);
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(CORS_HEADERS)) headers.set(key, value);
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  },
+
+  /**
+   * spec §17's "event engine" — periodically checks every non-terminal
+   * event's phase and drains a batch of due work. Self-healing (ported
+   * from ideaconnect's ensureDailyWorkQueued precedent): idempotent per
+   * phase, so a missed or overlapping tick never stalls or duplicates work.
+   *
+   * Terminal status is type-dependent, not a shared status string: an
+   * ideathon is done at 'judged' (spec §3.1), but a hackathon's 'judged' is
+   * a MID-point — judged -> tribunal -> complete (spec §3.2/§14) — so a
+   * blanket status exclusion would silently stop every hackathon right at
+   * judging, before Tribunal ever runs. 'ready_for_judging' used to be
+   * excluded here too (Week 3, back when nothing happened past it); Week
+   * 5's judging/Tribunal work all runs FROM that status now.
+   */
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    const events = await env.DB.prepare(
+      `SELECT * FROM archive_events
+       WHERE (type = 'ideathon' AND status != 'judged')
+          OR (type = 'hackathon' AND status != 'complete')`
+    ).all<EventRow>();
+
+    for (const event of events.results) {
+      await ensurePhaseWorkQueued(env, event);
+      await processQueue(env);
+    }
+  },
+};
+
+async function handleRequest(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
@@ -260,32 +315,4 @@ export default {
     }
 
     return new Response("Not found", { status: 404 });
-  },
-
-  /**
-   * spec §17's "event engine" — periodically checks every non-terminal
-   * event's phase and drains a batch of due work. Self-healing (ported
-   * from ideaconnect's ensureDailyWorkQueued precedent): idempotent per
-   * phase, so a missed or overlapping tick never stalls or duplicates work.
-   *
-   * Terminal status is type-dependent, not a shared status string: an
-   * ideathon is done at 'judged' (spec §3.1), but a hackathon's 'judged' is
-   * a MID-point — judged -> tribunal -> complete (spec §3.2/§14) — so a
-   * blanket status exclusion would silently stop every hackathon right at
-   * judging, before Tribunal ever runs. 'ready_for_judging' used to be
-   * excluded here too (Week 3, back when nothing happened past it); Week
-   * 5's judging/Tribunal work all runs FROM that status now.
-   */
-  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    const events = await env.DB.prepare(
-      `SELECT * FROM archive_events
-       WHERE (type = 'ideathon' AND status != 'judged')
-          OR (type = 'hackathon' AND status != 'complete')`
-    ).all<EventRow>();
-
-    for (const event of events.results) {
-      await ensurePhaseWorkQueued(env, event);
-      await processQueue(env);
-    }
-  },
-};
+}
