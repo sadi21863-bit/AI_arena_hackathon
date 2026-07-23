@@ -1,0 +1,224 @@
+/*
+ * The Arena — shared design system.
+ *
+ * Aesthetic direction: warm editorial, in the spirit of Claude's own product
+ * design language — cream/clay palette, generous whitespace, an editorial
+ * serif for display type paired with a precise mono for data — rather than
+ * the dark-mode/purple-gradient look most AI dashboards default to. This is
+ * a competition + tribunal + observability system; the palette leans
+ * "torch-lit arena judgment" (warm clay, ink, muted gold) instead of
+ * "SaaS analytics product."
+ *
+ * Fonts are free (Google Fonts), chosen for character rather than
+ * ubiquity — deliberately not Inter/Roboto/Arial/Space Grotesk.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..900&family=Fraunces:ital,opsz,wght@1,9..144,400..600&family=Instrument+Sans:wght@400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* Warm cream/clay palette — light by default, matching the reference. */
+  --arena-bg: #f4efe4;
+  --arena-bg-raised: #fbf7ee;
+  --arena-bg-sunken: #e9e1d1;
+  --arena-ink: #211b14;
+  --arena-ink-soft: #55483a;
+  --arena-ink-faint: #8c7b66;
+  --arena-line: #ddd2ba;
+  --arena-line-strong: #c7b797;
+
+  --arena-clay: #c1552f;
+  --arena-clay-deep: #9c3f21;
+  --arena-clay-soft: #e2a687;
+  --arena-gold: #a9822e;
+  --arena-ember: #7a2e1f;
+  --arena-ink-green: #405c46;
+
+  /* Data-viz series — desaturated enough to sit together, distinct enough
+     to read apart. Never pure-saturated "chart.js defaults." */
+  --arena-chart-1: #c1552f; /* clay */
+  --arena-chart-2: #405c46; /* ink green */
+  --arena-chart-3: #a9822e; /* gold */
+  --arena-chart-4: #5b6b8c; /* slate blue */
+  --arena-chart-5: #7a2e1f; /* ember */
+  --arena-chart-6: #8c7b66; /* faint */
+
+  --arena-danger: #9c3f21;
+  --arena-success: #405c46;
+
+  --arena-font-display: "Fraunces", ui-serif, Georgia, serif;
+  --arena-font-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --arena-font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+
+  --arena-shadow-soft: 0 1px 2px rgba(33, 27, 20, 0.06), 0 4px 16px rgba(33, 27, 20, 0.05);
+  --arena-shadow-lifted: 0 2px 4px rgba(33, 27, 20, 0.08), 0 12px 32px rgba(33, 27, 20, 0.10);
+
+  --arena-radius: 14px;
+  --arena-radius-sm: 8px;
+
+  color-scheme: light;
+}
+
+/* A dark variant exists for later (Headroom/Replay views read comfortably
+   at night) but is not the default — Claude's own product defaults light. */
+:root[data-theme="dark"] {
+  --arena-bg: #1a140d;
+  --arena-bg-raised: #241b12;
+  --arena-bg-sunken: #120d08;
+  --arena-ink: #f1e9da;
+  --arena-ink-soft: #cbb99e;
+  --arena-ink-faint: #8c7860;
+  --arena-line: #3a2d1c;
+  --arena-line-strong: #4d3c26;
+  --arena-clay: #e07a4e;
+  --arena-clay-deep: #f0996d;
+  --arena-clay-soft: #7a4327;
+  --arena-gold: #d1a94a;
+  --arena-ember: #c76b4f;
+  --arena-ink-green: #7fa387;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+body {
+  margin: 0;
+  background: var(--arena-bg);
+  color: var(--arena-ink);
+  font-family: var(--arena-font-body);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .arena-display {
+  font-family: var(--arena-font-display);
+  font-weight: 480;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+  margin: 0;
+}
+
+.arena-mono {
+  font-family: var(--arena-font-mono);
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+
+a { color: var(--arena-clay-deep); }
+a:hover { color: var(--arena-clay); }
+
+/* Grain overlay — subtle texture so flat cream fields don't feel sterile. */
+.arena-grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0.035;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.arena-container {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 32px;
+}
+
+.arena-card {
+  background: var(--arena-bg-raised);
+  border: 1px solid var(--arena-line);
+  border-radius: var(--arena-radius);
+  box-shadow: var(--arena-shadow-soft);
+}
+
+.arena-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 32px;
+  background: color-mix(in srgb, var(--arena-bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--arena-line);
+}
+
+.arena-nav__mark {
+  font-family: var(--arena-font-display);
+  font-weight: 600;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: var(--arena-ink);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.arena-nav__mark::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--arena-clay);
+  transform: rotate(45deg);
+  flex: none;
+}
+
+.arena-nav__links {
+  display: flex;
+  gap: 28px;
+  font-size: 0.9rem;
+}
+
+.arena-nav__links a {
+  color: var(--arena-ink-soft);
+  text-decoration: none;
+  font-weight: 500;
+}
+.arena-nav__links a:hover, .arena-nav__links a[aria-current="page"] { color: var(--arena-clay-deep); }
+
+.arena-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--arena-line-strong);
+  color: var(--arena-ink-soft);
+  background: var(--arena-bg-sunken);
+}
+
+.arena-pill--live { color: var(--arena-ink-green); border-color: currentColor; }
+.arena-pill--live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: arena-pulse 2s ease-in-out infinite; }
+
+@keyframes arena-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+button.arena-btn {
+  font-family: var(--arena-font-body);
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 10px 20px;
+  border-radius: 999px;
+  border: 1px solid var(--arena-clay-deep);
+  background: var(--arena-clay);
+  color: #fbf3ec;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+button.arena-btn:hover { transform: translateY(-1px); box-shadow: var(--arena-shadow-soft); }
+button.arena-btn--ghost { background: transparent; color: var(--arena-ink); border-color: var(--arena-line-strong); }

@@ -50,6 +50,50 @@ export default {
       return Response.json(await listAgents(env));
     }
 
+    // Observatory Agent Graph (spec §11: "relationship visualization").
+    // Public — real archive_interactions edges (critiques, collaborations),
+    // not the semantic-text Vectorize index /archive/query hits. Optional
+    // ?event_id= scopes to one event; unscoped returns the whole archive's
+    // relationship graph, matching spec's "queryable... across all events"
+    // vision (§15). Placed BEFORE the /agents/:id pattern below — that
+    // regex matches any single path segment, so "/agents/graph" was being
+    // swallowed as a lookup for an agent literally named "graph" (found
+    // live, 2026-07-23: returned 404 not_found instead of ever reaching
+    // this handler).
+    if (url.pathname === "/agents/graph" && request.method === "GET") {
+      const eventId = url.searchParams.get("event_id");
+      const edges = await (eventId
+        ? env.DB.prepare(
+            `SELECT actor_id, target_id, type, COUNT(*) as weight FROM archive_interactions x
+             JOIN archive_ideas i ON x.target_id = i.id
+             WHERE x.event_id = ? AND x.actor_id IS NOT NULL
+             GROUP BY actor_id, target_id, type`
+          ).bind(eventId)
+        : env.DB.prepare(
+            `SELECT actor_id, target_id, type, COUNT(*) as weight FROM archive_interactions
+             WHERE actor_id IS NOT NULL GROUP BY actor_id, target_id, type`
+          )
+      ).all<{ actor_id: string; target_id: string; type: string; weight: number }>();
+
+      // Fold per-idea critique edges into agent-to-agent edges (target_id is
+      // an idea id, not an agent id, in archive_interactions) — the graph
+      // is agent relationships, so resolve each critiqued idea back to its
+      // author and aggregate by (critic, author).
+      const ideaAuthors = await env.DB.prepare(`SELECT id, agent_id FROM archive_ideas`).all<{ id: string; agent_id: string }>();
+      const authorById = new Map(ideaAuthors.results.map((i) => [i.id, i.agent_id]));
+
+      const agentEdges = new Map<string, { source: string; target: string; type: string; weight: number }>();
+      for (const e of edges.results) {
+        const targetAgent = authorById.get(e.target_id) ?? e.target_id; // form_alliance/propose_collaboration target IS an agent id already
+        if (!targetAgent || targetAgent === e.actor_id) continue; // no self-loops
+        const key = `${e.actor_id}|${targetAgent}|${e.type}`;
+        const existing = agentEdges.get(key);
+        agentEdges.set(key, { source: e.actor_id, target: targetAgent, type: e.type, weight: (existing?.weight ?? 0) + e.weight });
+      }
+
+      return Response.json({ nodes: await listAgents(env), edges: [...agentEdges.values()] });
+    }
+
     const agentMatch = url.pathname.match(/^\/agents\/([^/]+)$/);
     if (agentMatch && request.method === "GET") {
       const agent = await getAgent(env, agentMatch[1]);
@@ -61,6 +105,18 @@ export default {
       const memory = recallQuery ? await recallMemory(env, agentMatch[1], recallQuery) : undefined;
 
       return Response.json({ ...agent, memory });
+    }
+
+    // Observatory Headroom Dashboard (spec §11: "live provider usage
+    // against daily caps"). Public — aggregate usage numbers only, no
+    // secrets, no reason to gate this behind admin auth the way spec's
+    // /admin/metrics is for the fuller admin view.
+    if (url.pathname === "/headroom" && request.method === "GET") {
+      const today = new Date().toISOString().slice(0, 10);
+      const usage = await env.DB.prepare(
+        `SELECT provider, model_id, SUM(units_used) as used FROM provider_usage_log WHERE day = ? GROUP BY provider, model_id`
+      ).bind(today).all<{ provider: string; model_id: string; used: number }>();
+      return Response.json({ day: today, usage: usage.results });
     }
 
     if (url.pathname === "/ideas" && request.method === "GET") {
@@ -124,6 +180,32 @@ export default {
         ? await env.DB.prepare(`SELECT correlation, passed FROM calibration_runs WHERE event_id = ?`).bind(eventMatch[1]).first<{ correlation: number; passed: number }>()
         : null;
       return Response.json({ ...event, calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null });
+    }
+
+    // Observatory Tribunal Report (spec §11/§14). Public — reflections are
+    // already agent-authored public archive content, same trust level as
+    // ideas/critiques elsewhere in this API.
+    const tribunalMatch = url.pathname.match(/^\/events\/([^/]+)\/tribunal$/);
+    if (tribunalMatch && request.method === "GET") {
+      const reflections = await env.DB.prepare(
+        `SELECT id, agent_id, reflection_type, target_agent_id, content, created_at FROM tribunal_reflections WHERE event_id = ? ORDER BY created_at ASC`
+      ).bind(tribunalMatch[1]).all();
+      return Response.json(reflections.results);
+    }
+
+    // Observatory Replay Player (spec §11) — chronological interaction
+    // timeline for one event: ideas submitted + every interaction on them,
+    // in the order they actually happened.
+    const timelineMatch = url.pathname.match(/^\/events\/([^/]+)\/timeline$/);
+    if (timelineMatch && request.method === "GET") {
+      const ideas = await env.DB.prepare(
+        `SELECT id, agent_id, title, one_liner, status, ideathon_score, created_at as ts, 'idea' as kind FROM archive_ideas WHERE event_id = ?`
+      ).bind(timelineMatch[1]).all();
+      const interactions = await env.DB.prepare(
+        `SELECT id, actor_id, target_id, type, content, timestamp as ts FROM archive_interactions WHERE event_id = ? ORDER BY timestamp ASC`
+      ).bind(timelineMatch[1]).all();
+      const merged = [...ideas.results, ...interactions.results].sort((a: any, b: any) => String(a.ts).localeCompare(String(b.ts)));
+      return Response.json(merged);
     }
 
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table
