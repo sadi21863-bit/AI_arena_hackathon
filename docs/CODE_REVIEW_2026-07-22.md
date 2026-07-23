@@ -25,7 +25,7 @@ Three-agent review (deep bug/security/spec review, code-quality/simplification p
 
 ## Research findings (informational / future consideration)
 
-- **Actionable**: Groq's `reasoning_effort: "low"` parameter (documented for `gpt-oss-120b`) attacks the cause of the reasoning-token-truncation bug fixed today, rather than just widening `max_tokens`.
+- [x] **Applied 2026-07-23**: Groq's `reasoning_effort: "low"` parameter, sent only for gpt-oss models (`router.ts`'s `tryGroq`). Verified live directly against Groq's API — with it set, `gpt-oss-120b` now returns clean JSON straight in `message.content` (reasoning moves to a separate `message.reasoning` field) using only 23 reasoning tokens for a test judging-shaped prompt, vs. previously risking exhausting the whole 700-token budget on hidden reasoning alone. Kept the 700-token budget as additional headroom rather than tuning it back down.
 - Vectorize metadata string filters truncate at 64 bytes — fine today, worth remembering if filters expand beyond `agentId`/`eventId`/`type`.
 - Cloudflare Cron Triggers have no automatic retry/failure alerting — self-healing covers stalls, but a hard-throwing tick is silent.
 - GitHub's Contents-API-on-a-fresh-repo race (already found/fixed live) matches a documented class of "acted before async repo-init finished" bugs — if a future feature calls branch protection or PR creation right after `createTeamRepo`, add the same defensive retry.

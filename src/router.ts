@@ -78,10 +78,24 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
   const used = await unitsUsedToday(env, "groq", model);
   if (used >= (DAILY_CAPS[capKey] ?? Infinity)) return null; // tier exhausted, fall through
 
+  // reasoning_effort: "low" for gpt-oss models only — documented Groq
+  // parameter (console.groq.com/docs/reasoning) that reduces how much
+  // hidden <think> reasoning these models spend before their visible
+  // answer. Attacks the actual cause of the truncation bug fixed today
+  // (max_tokens bumped to 700 across judges/scoring.ts + calibration.ts)
+  // rather than just widening the budget around it — found via live
+  // research (2026-07-22 code review), not yet re-tuned down since the 700
+  // budget is proven-working and this is additional headroom, not a
+  // replacement for it. Not sent for non-gpt-oss models (llama-3.x) since
+  // they don't support it and an unrecognized param risks a hard API error.
+  const isReasoningModel = model.includes("gpt-oss");
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages: [{ role: "user", content: req.prompt }], max_completion_tokens: req.max_tokens ?? 500 }),
+    body: JSON.stringify({
+      model, messages: [{ role: "user", content: req.prompt }], max_completion_tokens: req.max_tokens ?? 500,
+      ...(isReasoningModel ? { reasoning_effort: "low" } : {}),
+    }),
   });
   if (!res.ok) return null; // real code should distinguish rate-limit (retry next tier) from hard error (log + alert)
 
