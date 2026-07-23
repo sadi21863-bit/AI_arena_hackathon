@@ -239,6 +239,19 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(results);
     }
 
+    // Observatory event picker (Replay/Diff/Tribunal views all need "let
+    // the user choose which event" — spec §10 lists per-id GET /events/{id}
+    // but not a list route; added for Week 6's frontend, same public trust
+    // level as everything else here). Optional ?type=ideathon|hackathon.
+    if (url.pathname === "/events" && request.method === "GET") {
+      const type = url.searchParams.get("type");
+      const events = await (type
+        ? env.DB.prepare(`SELECT * FROM archive_events WHERE type = ? ORDER BY created_at DESC LIMIT 20`).bind(type)
+        : env.DB.prepare(`SELECT * FROM archive_events ORDER BY created_at DESC LIMIT 20`)
+      ).all();
+      return Response.json(events.results);
+    }
+
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
     if (eventMatch && request.method === "GET") {
       const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first<{ type: string }>();
@@ -276,6 +289,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       ).bind(timelineMatch[1]).all();
       const merged = [...ideas.results, ...interactions.results].sort((a: any, b: any) => String(a.ts).localeCompare(String(b.ts)));
       return Response.json(merged);
+    }
+
+    // Observatory Diff Viewer (spec §11) needs each team's repo_url to pull
+    // real commits from GitHub's public API client-side. The existing
+    // per-team data lives behind /admin/events/:id/build-status (admin-
+    // gated, since it also polls GitHub Actions run status on every call) —
+    // this is a lighter, public-safe subset: just id/name/repo/status, no
+    // GitHub API calls made server-side.
+    const teamsMatch = url.pathname.match(/^\/events\/([^/]+)\/teams$/);
+    if (teamsMatch && request.method === "GET") {
+      const teams = await env.DB.prepare(
+        `SELECT id, team_name, repo_url, status, idea_id, hackathon_score, final_score FROM hackathon_teams WHERE event_id = ?`
+      ).bind(teamsMatch[1]).all();
+      return Response.json(teams.results);
     }
 
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table
