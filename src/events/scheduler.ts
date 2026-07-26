@@ -152,8 +152,21 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   ).bind(eventId).all<{ payload: string | null }>();
   const alreadyQueued = queuedPayloadValues(existingJudgeItems.results, "ideaId");
 
+  // Backoff — found live (2026-07-26, Week 7 closed beta): this had NO
+  // backoff at all, unlike Tribunal's shouldEnqueueForAgent (2026-07-23
+  // fix). Confirmed live: with Workers AI genuinely over its daily cap,
+  // every tick re-queued and re-failed all 6 ideas x 7 judges, every 5
+  // minutes, accumulating 1-8 failed attempts per idea/judge pair within
+  // an hour with zero recovery — the exact same retry-storm pathology
+  // already diagnosed for Tribunal, just never ported to ideathon judging
+  // since this path hadn't been exercised at this intensity before.
+  const recentJudgeFailures = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_idea' AND status = 'failed' AND completed_at >= datetime('now', '-30 minutes')`
+  ).bind(eventId).all<{ payload: string | null }>();
+  const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "ideaId");
+
   for (const idea of unjudged.results) {
-    if (!alreadyQueued.has(idea.id)) {
+    if (!alreadyQueued.has(idea.id) && !inBackoff.has(idea.id)) {
       await enqueue(env, { eventId, taskType: "judge_idea", payload: { ideaId: idea.id }, priority: 2 });
     }
   }
@@ -260,8 +273,15 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   ).bind(eventId).all<{ payload: string | null }>();
   const alreadyQueued = queuedPayloadValues(existingJudgeItems.results, "teamId");
 
+  // Same backoff fix as ensureIdeathonJudging above (found live 2026-07-26,
+  // Week 7 closed beta) — judge_team had the identical no-backoff gap.
+  const recentJudgeFailures = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_team' AND status = 'failed' AND completed_at >= datetime('now', '-30 minutes')`
+  ).bind(eventId).all<{ payload: string | null }>();
+  const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "teamId");
+
   for (const team of unjudged.results) {
-    if (!alreadyQueued.has(team.id)) {
+    if (!alreadyQueued.has(team.id) && !inBackoff.has(team.id)) {
       await enqueue(env, { eventId, taskType: "judge_team", payload: { teamId: team.id }, priority: 2 });
     }
   }
