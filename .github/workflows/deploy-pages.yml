@@ -1,0 +1,28 @@
+name: Deploy Observatory to Cloudflare Pages
+
+# Spec §2.2/§11. The Cloudflare Pages project (arena-frontend) was never
+# wired to auto-deploy from the GitHub repo -- every previous deploy was a
+# manual `wrangler pages deploy` run from a dev machine, so pushes to
+# public/ silently didn't reach the live site. This closes that gap: any
+# push to master touching public/ redeploys automatically.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "public/**"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Cloudflare Pages
+        run: npx wrangler pages deploy public --project-name=arena-frontend --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
