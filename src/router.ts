@@ -51,7 +51,14 @@ export const DAILY_CAPS: Record<string, number> = {
   "groq:llama-3.3-70b-versatile": 1000,
   "groq:openai/gpt-oss-120b": 1000,
   "groq:openai/gpt-oss-20b": 1000,
-  "workers_ai": 8500, // shared Neuron-derived budget across all Workers AI models
+  // 8500 was an unmeasured conservative guess below spec §6's published
+  // 10,000/day. Found live (2026-07-26, Week 7 closed beta): the app's own
+  // tracked usage hit 8802 (over its own cap) while a direct real call
+  // against Cloudflare's account still succeeded fine -- the app was
+  // blocking well before the real account-side limit, not because of it.
+  // 9500 keeps a real safety margin below the actual published ceiling
+  // instead of an arbitrary one below an arbitrary one.
+  "workers_ai": 9500,
 };
 
 function todayUTC(): string {

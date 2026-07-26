@@ -53,11 +53,16 @@ session unless it's already `pass`/`ready`.
 
 ## Standing rules — every session
 
-- Never hardcode a placeholder cost estimate as if it were measured.
-  `src/router.ts`'s `recordUsage(env, "workers_ai", model, req.task_type, 300)`
-  call uses a placeholder Neuron estimate — replace it with real numbers from
-  `inference_pool_probe.js`'s output once the `inference_pool` gate passes,
-  and say so when you do it.
+- Never hardcode a placeholder cost estimate as if it were measured. This
+  used to flag `router.ts`'s `recordUsage` call as using a flat placeholder
+  Neuron value — fixed 2026-07-21, it now uses `result.usage.neurons` (the
+  real per-call cost Workers AI returns), with 300 only as a fallback if
+  that field is ever absent. `DAILY_CAPS["workers_ai"]` itself was a
+  separate unmeasured guess (8500, below spec §6's published 10,000) until
+  a real call against the account succeeded past it (2026-07-26, Week 7
+  closed beta) — raised to 9500. The general rule stands even though this
+  specific instance is now fixed: don't ship a guessed number as if it were
+  measured, and say so when you replace one with a real measurement.
 - Never add a `docker run` inside `team-build-turn.yml`'s agent-work step
   without keeping the network scoped to named endpoints (the inference
   provider, GitHub, the package registry) — it's intentionally network-on for
