@@ -323,6 +323,25 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json({ id }, { status: 201 });
     }
 
+    // Week 7 closed-beta test tooling (spec §17): phase transitions are real
+    // calendar-day math (scheduler.ts daysElapsed/phaseForDay) with no
+    // test-mode flag — deliberately not adding one, since that would mean
+    // the beta exercises different code than production. This lets the
+    // event's start_date be backdated instead, so the same unmodified
+    // production day-math thinks days have passed; the actual work (LLM
+    // calls, real repos, real judging) stays 100% real, only the calendar
+    // input is fast-forwarded. Same admin-token auth class as the other
+    // /admin/events routes.
+    const startDateMatch = url.pathname.match(/^\/admin\/events\/([^/]+)\/start-date$/);
+    if (startDateMatch && request.method === "PATCH") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const body = await request.json<{ startDate: string }>();
+      if (!body.startDate) return Response.json({ error: "startDate required" }, { status: 400 });
+      const result = await env.DB.prepare(`UPDATE archive_events SET start_date = ? WHERE id = ?`).bind(body.startDate, startDateMatch[1]).run();
+      if (result.meta.changes === 0) return Response.json({ error: "not_found" }, { status: 404 });
+      return Response.json({ id: startDateMatch[1], startDate: body.startDate });
+    }
+
     // Manual trigger for the same work the cron handler (scheduled()) does
     // automatically — lets phase advancement + queue draining be verified
     // and debugged without waiting for the real schedule.
