@@ -72,11 +72,26 @@ export async function scoreTarget(
   // wall-clock budget (7 sequential ~1-2s LLM calls could otherwise push
   // 10-15s per target, times up to 3 targets/tick in processQueue's batch —
   // real timeout risk this avoids rather than a micro-optimization).
-  const newResults = await Promise.all(missingJudges.map(async (judge) => {
+  //
+  // allSettled, not all — found live (2026-07-26, Week 7 closed beta): a
+  // plain Promise.all meant ONE failed judge (out of 7) discarded every
+  // OTHER judge's successful result too, since the whole array rejected
+  // before the INSERT step below ever ran. Under real inference pressure
+  // (rate limits, quota) this repeatedly threw away 5-6 successful scores
+  // per retry, exactly the all-or-nothing failure mode this function's own
+  // per-judge idempotency (alreadyScored, above) was designed to avoid —
+  // it just never actually reached that per-judge granularity because this
+  // step re-discarded it every time first.
+  const settled = await Promise.allSettled(missingJudges.map(async (judge) => {
     const weight = opts.phase === "ideathon" ? judge.ideathonWeight : judge.hackathonWeight;
     const { score, rationale } = await scoreOne(env, judge, opts.prompt);
     return { judge, weight, score, rationale };
   }));
+
+  const newResults = settled
+    .filter((r): r is PromiseFulfilledResult<{ judge: Judge; weight: number; score: number; rationale: string }> => r.status === "fulfilled")
+    .map((r) => r.value);
+  const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 
   await Promise.all(newResults.map(({ judge, weight, score, rationale }) =>
     env.DB.prepare(
@@ -87,6 +102,14 @@ export async function scoreTarget(
       opts.targetType, opts.targetId, opts.phase, score, rationale
     ).run()
   ));
+
+  // Throw AFTER persisting whatever succeeded, so the caller's status
+  // update (handleJudgeIdea/handleJudgeTeam marking 'judged') correctly
+  // doesn't run yet — but the next retry's alreadyScored check will only
+  // re-attempt the genuinely still-missing judges, not all of them again.
+  if (failures.length > 0) {
+    throw new Error(`${failures.length}/${missingJudges.length} judge(s) failed: ${failures.map((f) => f.reason instanceof Error ? f.reason.message : String(f.reason)).join("; ")}`);
+  }
 
   const existingTotal = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
   const newTotal = newResults.reduce((sum, r) => sum + r.score * r.weight, 0);
