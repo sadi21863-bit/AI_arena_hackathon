@@ -78,10 +78,19 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   // Spec §4: "critique 3 ideas not their own" — queued per-idea rather than
   // as one big batch step, so critique flow starts as soon as ideas exist
   // instead of waiting for every agent to finish submitting first.
-  const critic = await env.DB.prepare(
-    `SELECT id FROM archive_agents WHERE id != ? ORDER BY RANDOM() LIMIT 1`
-  ).bind(agent.id).first<{ id: string }>();
-  if (critic) {
+  //
+  // Found live (2026-07-26, Week 7 closed beta): this previously selected
+  // only ONE critic (LIMIT 1) despite the comment above already citing the
+  // "3 ideas" requirement -- a real spec/code mismatch, not a deliberate
+  // simplification. Confirmed live: of 36 real ideas, only 33 got exactly
+  // one critique each and 3 got none at all (the single enqueue() call had
+  // no retry-safety, so any transient failure there silently left that
+  // idea uncritiqued with nothing to catch it). Fixed to queue 3 distinct
+  // critics per idea, matching spec.
+  const critics = await env.DB.prepare(
+    `SELECT id FROM archive_agents WHERE id != ? ORDER BY RANDOM() LIMIT 3`
+  ).bind(agent.id).all<{ id: string }>();
+  for (const critic of critics.results) {
     await enqueue(env, { eventId: item.event_id, agentId: critic.id, taskType: "critique", payload: { ideaId }, priority: 6 });
   }
 }
