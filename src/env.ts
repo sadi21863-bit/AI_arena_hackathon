@@ -9,6 +9,15 @@ export interface Env {
   ARCHIVE_VECTORS: VectorizeIndex;
   ARCHIVE_BUCKET: R2Bucket;
   GROQ_API_KEY: string;
+  // Second Groq account (2026-07-26, Week 7 closed beta) — router.ts splits
+  // load randomly across both when set, same pattern already established
+  // for Tavily's 3-key round-robin above. Not a third inference PROVIDER
+  // (CLAUDE.md's standing rule against that is unrelated) — still just
+  // Groq + Workers AI, this is two accounts within the Groq tier, added to
+  // spread per-account rate limits (not daily caps, which had headroom)
+  // after live testing showed individual judge calls intermittently
+  // failing under concurrent load from a single account.
+  GROQ_API_KEY_2?: string;
   // Single shared token for all 12 agents' own API calls (spec §10's "Agent
   // token" auth) — these are internal system agents, not external users, so
   // per-agent tokens would be complexity the spec doesn't ask for.

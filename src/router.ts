@@ -96,9 +96,17 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
   // replacement for it. Not sent for non-gpt-oss models (llama-3.x) since
   // they don't support it and an unrecognized param risks a hard API error.
   const isReasoningModel = model.includes("gpt-oss");
+  // Split randomly across 2 Groq accounts when the second is configured —
+  // added live (2026-07-26, Week 7 closed beta) after individual judge
+  // calls intermittently failed under concurrent load (7 judges' calls
+  // fired together per scoreTarget) despite the daily cap having plenty of
+  // headroom, pointing at a single account's per-minute rate limit rather
+  // than daily exhaustion. Same account, same daily cap tracking below —
+  // this spreads request-rate pressure, not daily budget.
+  const apiKey = env.GROQ_API_KEY_2 && Math.random() < 0.5 ? env.GROQ_API_KEY_2 : env.GROQ_API_KEY;
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model, messages: [{ role: "user", content: req.prompt }], max_completion_tokens: req.max_tokens ?? 500,
       ...(isReasoningModel ? { reasoning_effort: "low" } : {}),
