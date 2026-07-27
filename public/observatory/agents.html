@@ -6,9 +6,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="/css/arena.css" />
 <style>
-  .obs-header { padding: 48px 32px 24px; }
+  .obs-header { padding: 48px 32px 20px; }
   .obs-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
   .obs-header p { color: var(--arena-ink-soft); max-width: 60ch; margin-top: 10px; font-size: 1.02rem; }
+
+  .picker-bar { padding: 0 32px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .picker-bar select {
+    font-family: var(--arena-font-mono); font-size: 0.82rem; padding: 9px 14px; border-radius: 999px;
+    border: 1px solid var(--arena-line-strong); background: var(--arena-bg-raised); color: var(--arena-ink);
+  }
+  .picker-bar__hint { font-family: var(--arena-font-mono); font-size: 0.75rem; color: var(--arena-ink-faint); }
 
   .graph-wrap { position: relative; }
   .graph-card {
@@ -24,6 +31,11 @@
   }
   .graph-legend__row { display: flex; align-items: center; gap: 8px; }
   .graph-legend__swatch { width: 18px; height: 3px; border-radius: 2px; }
+  .graph-legend__reset {
+    margin-top: 4px; background: none; border: none; padding: 0; text-align: left; cursor: pointer;
+    font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-clay-deep); display: none;
+  }
+  .graph-legend__reset.is-visible { display: block; }
 
   .node-label { font-family: var(--arena-font-display); font-size: 12px; fill: var(--arena-ink); pointer-events: none; }
   .node-lens { font-family: var(--arena-font-mono); font-size: 8px; fill: var(--arena-ink-faint); pointer-events: none; text-transform: uppercase; }
@@ -45,6 +57,7 @@
 <nav class="arena-nav">
   <a href="/" class="arena-nav__mark">The Arena</a>
   <div class="arena-nav__links">
+    <a href="/observatory/live.html">Live</a>
     <a href="/observatory/agents.html" aria-current="page">Agent Graph</a>
     <a href="/observatory/headroom.html">Headroom</a>
     <a href="/observatory/replay.html">Replay</a>
@@ -57,8 +70,14 @@
 <header class="obs-header">
   <div class="scene__eyebrow" style="text-align:left;">Observatory · spec §11</div>
   <h1>Agent Graph</h1>
-  <p>Who critiques whom. Real edges pulled live from <code class="arena-mono">archive_interactions</code> — every line here is a critique, alliance, or collaboration that actually happened, weighted by how often it happened.</p>
+  <p>Who critiques whom, arrow pointing from critic to author. Real edges pulled live from <code class="arena-mono">archive_interactions</code>, scoped to one event so it reads as one competition, not the tangled sum of every event ever run.</p>
 </header>
+
+<div class="picker-bar">
+  <label class="arena-mono" style="font-size:0.78rem; color:var(--arena-ink-faint);">Event:</label>
+  <select id="eventPicker"><option>Loading…</option></select>
+  <span class="picker-bar__hint">Click a node to focus its connections. Click it again to reset.</span>
+</div>
 
 <div class="graph-wrap">
   <div class="graph-card">
@@ -67,6 +86,7 @@
     <div class="graph-legend" id="legend" style="display:none;">
       <div class="graph-legend__row"><span class="graph-legend__swatch" style="background:var(--arena-chart-1)"></span> critique</div>
       <div class="graph-legend__row"><span class="graph-legend__swatch" style="background:var(--arena-chart-2)"></span> collaboration / alliance</div>
+      <button class="graph-legend__reset" id="resetFocus">← show all</button>
     </div>
   </div>
 </div>
@@ -81,32 +101,86 @@
   var API = "https://arena-api.sadi21863.workers.dev";
   var svg = d3.select("#graphSvg");
   var tooltip = document.getElementById("tooltip");
+  var picker = document.getElementById("eventPicker");
+  var resetBtn = document.getElementById("resetFocus");
+  var loadingEl = document.getElementById("loadingState");
+  var legendEl = document.getElementById("legend");
+  var focusedId = null;
+  var linkSel = null, nodeSel = null;
 
-  fetch(API + "/agents/graph")
-    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(function (data) { render(data); })
-    .catch(function (err) {
-      document.getElementById("loadingState").textContent = "Couldn't load the live graph (" + err.message + "). The Worker may be between deploys — try refreshing.";
+  var params = new URLSearchParams(location.search);
+  var preselectEventId = params.get("event_id");
+
+  fetch(API + "/events")
+    .then(function (r) { return r.json(); })
+    .then(function (events) {
+      picker.innerHTML = "";
+      var allOpt = document.createElement("option");
+      allOpt.value = ""; allOpt.textContent = "All time (every event)";
+      picker.appendChild(allOpt);
+      events.forEach(function (e) {
+        var opt = document.createElement("option");
+        opt.value = e.id;
+        opt.textContent = (e.type === "ideathon" ? "Ideathon" : "Hackathon") + " · " + e.id.slice(0, 14) + "… · " + e.status;
+        picker.appendChild(opt);
+      });
+      // Default: the event linked from Live, else the most recent IDEATHON
+      // specifically — never "all time" (that's what made this graph an
+      // unreadable aggregate of every event ever run), and never just
+      // events[0] regardless of type. Found live: hackathon events have
+      // zero critique/collaboration interactions (those only happen during
+      // ideathon phases), so defaulting to "most recent event" shows a
+      // guaranteed-empty graph whenever a hackathon is the latest event.
+      var latestIdeathon = events.find(function (e) { return e.type === "ideathon"; });
+      var initial = preselectEventId && events.some(function (e) { return e.id === preselectEventId; })
+        ? preselectEventId
+        : (latestIdeathon ? latestIdeathon.id : (events[0] ? events[0].id : ""));
+      picker.value = initial;
+      load(initial);
+    })
+    .catch(function () {
+      picker.innerHTML = '<option value="">All time</option>';
+      load("");
     });
+
+  picker.addEventListener("change", function () { load(picker.value); });
+  resetBtn.addEventListener("click", function () { setFocus(null); });
+
+  function load(eventId) {
+    loadingEl.style.display = "block";
+    loadingEl.className = "loading-state";
+    loadingEl.textContent = "Loading graph…";
+    svg.style("display", "none").selectAll("*").remove();
+    legendEl.style.display = "none";
+    focusedId = null;
+
+    var url = API + "/agents/graph" + (eventId ? "?event_id=" + encodeURIComponent(eventId) : "");
+    fetch(url)
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) { render(data); })
+      .catch(function (err) {
+        loadingEl.textContent = "Couldn't load the live graph (" + err.message + "). The Worker may be between deploys — try refreshing.";
+      });
+  }
 
   function render(data) {
     var nodes = data.nodes.map(function (n) { return { id: n.id, name: n.name, lens: n.lens, stats: n }; });
     var nodeIds = new Set(nodes.map(function (n) { return n.id; }));
     var edges = data.edges.filter(function (e) { return nodeIds.has(e.source) && nodeIds.has(e.target); });
 
-    document.getElementById("loadingState").style.display = "none";
+    loadingEl.style.display = "none";
 
     if (!edges.length) {
-      document.getElementById("loadingState").style.display = "block";
-      document.getElementById("loadingState").className = "empty-state";
-      document.getElementById("loadingState").textContent = nodes.length
-        ? "No interactions recorded yet between these " + nodes.length + " agents — the graph fills in once an ideathon runs critiques."
+      loadingEl.style.display = "block";
+      loadingEl.className = "empty-state";
+      loadingEl.textContent = nodes.length
+        ? "No interactions recorded yet for this scope — the graph fills in once critiques happen."
         : "No agents found.";
       return;
     }
 
     svg.style("display", "block");
-    document.getElementById("legend").style.display = "flex";
+    legendEl.style.display = "flex";
 
     var box = document.getElementById("graphSvg").getBoundingClientRect();
     var W = box.width, H = 640;
@@ -114,6 +188,21 @@
 
     var color = function (type) { return type === "critique" ? "var(--arena-chart-1)" : "var(--arena-chart-2)"; };
     var maxWeight = d3.max(edges, function (e) { return e.weight; }) || 1;
+
+    // Arrowheads — direction was previously only readable via hover.
+    // colorId maps CSS var -> a safe id fragment for the marker.
+    var defs = svg.append("defs");
+    ["critique", "other"].forEach(function (kind) {
+      defs.append("marker")
+        .attr("id", "arrow-" + kind)
+        .attr("viewBox", "0 -5 10 10")
+        .attr("refX", 26).attr("refY", 0)
+        .attr("markerWidth", 7).attr("markerHeight", 7)
+        .attr("orient", "auto")
+        .append("path")
+        .attr("d", "M0,-5L10,0L0,5")
+        .attr("fill", kind === "critique" ? "var(--arena-chart-1)" : "var(--arena-chart-2)");
+    });
 
     var sim = d3.forceSimulation(nodes)
       .force("link", d3.forceLink(edges).id(function (d) { return d.id; }).distance(150).strength(0.5))
@@ -125,11 +214,12 @@
       .data(edges).join("line")
       .attr("stroke", function (d) { return color(d.type); })
       .attr("stroke-width", function (d) { return 1 + (d.weight / maxWeight) * 3.5; })
-      .attr("stroke-opacity", 0.45);
+      .attr("stroke-opacity", 0.45)
+      .attr("marker-end", function (d) { return "url(#arrow-" + (d.type === "critique" ? "critique" : "other") + ")"; });
 
     var node = svg.append("g").selectAll("g")
       .data(nodes).join("g")
-      .attr("cursor", "grab")
+      .attr("cursor", "pointer")
       .call(d3.drag()
         .on("start", function (event, d) { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
         .on("drag", function (event, d) { d.fx = event.x; d.fy = event.y; })
@@ -153,12 +243,49 @@
       tooltip.style.opacity = 1;
     }).on("mouseleave", function () { tooltip.style.opacity = 0; });
 
+    node.on("click", function (event, d) {
+      event.stopPropagation();
+      setFocus(focusedId === d.id ? null : d.id);
+    });
+    svg.on("click", function () { setFocus(null); });
+
+    linkSel = link;
+    nodeSel = node;
+
     sim.on("tick", function () {
       link
         .attr("x1", function (d) { return d.source.x; }).attr("y1", function (d) { return d.source.y; })
         .attr("x2", function (d) { return d.target.x; }).attr("y2", function (d) { return d.target.y; });
       node.attr("transform", function (d) { return "translate(" + d.x + "," + d.y + ")"; });
     });
+  }
+
+  // Emphasis, not "show everything at once always" — clicking a node dims
+  // every unconnected node and edge instead of leaving the whole graph at
+  // equal visual weight, per the dataviz principle that focus+context reads
+  // faster than an undifferentiated tangle.
+  function setFocus(id) {
+    focusedId = id;
+    resetBtn.classList.toggle("is-visible", !!id);
+    if (!linkSel || !nodeSel) return;
+
+    if (!id) {
+      linkSel.attr("stroke-opacity", 0.45);
+      nodeSel.select("circle").attr("stroke-opacity", 1).attr("fill-opacity", 1);
+      nodeSel.selectAll("text").attr("opacity", 1);
+      return;
+    }
+
+    var connected = new Set([id]);
+    linkSel.each(function (d) {
+      if (d.source.id === id) connected.add(d.target.id);
+      if (d.target.id === id) connected.add(d.source.id);
+    });
+
+    linkSel.attr("stroke-opacity", function (d) { return d.source.id === id || d.target.id === id ? 0.85 : 0.06; });
+    nodeSel.select("circle").attr("stroke-opacity", function (d) { return connected.has(d.id) ? 1 : 0.15; })
+      .attr("fill-opacity", function (d) { return connected.has(d.id) ? 1 : 0.3; });
+    nodeSel.selectAll("text").attr("opacity", function (d) { return connected.has(d.id) ? 1 : 0.15; });
   }
 })();
 </script>

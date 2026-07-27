@@ -265,6 +265,22 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json({ ...event, calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null });
     }
 
+    // Observatory Live view (spec §11): aggregate queue-item counts by status
+    // for one event, so a "what's happening right now" view can show a
+    // simple health meter without exposing individual queue payloads or
+    // needing the admin token.
+    const queueStatusMatch = url.pathname.match(/^\/events\/([^/]+)\/queue-status$/);
+    if (queueStatusMatch && request.method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT status, COUNT(*) as n FROM event_queue WHERE event_id = ? GROUP BY status`
+      ).bind(queueStatusMatch[1]).all<{ status: string; n: number }>();
+      const counts = { pending: 0, in_progress: 0, completed: 0, failed: 0 };
+      for (const row of rows.results) {
+        if (row.status in counts) counts[row.status as keyof typeof counts] = row.n;
+      }
+      return Response.json(counts);
+    }
+
     // Observatory Tribunal Report (spec §11/§14). Public — reflections are
     // already agent-authored public archive content, same trust level as
     // ideas/critiques elsewhere in this API.
