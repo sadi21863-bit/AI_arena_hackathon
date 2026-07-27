@@ -2,9 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<script>(function(){try{var t=localStorage.getItem("arena-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 <title>Headroom Dashboard — The Arena Observatory</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="/css/arena.css" />
+<script src="/js/theme.js" defer></script>
 <style>
   .obs-header { padding: 48px 32px 24px; }
   .obs-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
@@ -56,6 +58,10 @@
     <a href="/observatory/tribunal.html">Tribunal</a>
     <a href="https://arena-api.sadi21863.workers.dev/health">API</a>
   </div>
+  <button class="arena-theme-toggle" aria-label="Toggle dark mode" type="button">
+    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
 </nav>
 
 <header class="obs-header">

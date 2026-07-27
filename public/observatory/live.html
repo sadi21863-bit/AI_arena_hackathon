@@ -2,9 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<script>(function(){try{var t=localStorage.getItem("arena-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
 <title>Live — The Arena Observatory</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="/css/arena.css" />
+<script src="/js/theme.js" defer></script>
 <style>
   .obs-header { padding: 48px 32px 24px; }
   .obs-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
@@ -79,6 +81,19 @@
   .recent-item__arrow { color: var(--arena-ink-faint); font-family: var(--arena-font-mono); }
 
   .empty-state, .loading-state { padding: 60px 0; text-align: center; color: var(--arena-ink-faint); font-family: var(--arena-font-mono); font-size: 0.85rem; }
+
+  /* --- Skeleton (first load only) --- */
+  @keyframes arena-skeleton-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .skel { border-radius: 6px; background: var(--arena-bg-sunken); animation: arena-skeleton-pulse 1.6s ease-in-out infinite; }
+  .skel-card { padding: 36px; }
+  .skel-eyebrow { width: 100px; height: 10px; margin-bottom: 16px; }
+  .skel-title { width: 60%; height: 28px; margin-bottom: 10px; }
+  .skel-sub { width: 40%; height: 12px; margin-bottom: 22px; }
+  .skel-steps { display: flex; gap: 10px; }
+  .skel-step { width: 90px; height: 20px; border-radius: 999px; }
+  .skel-meter { height: 10px; border-radius: 6px; margin-bottom: 20px; }
+
+  .freshness { font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-ink-faint); text-align: center; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -95,6 +110,10 @@
     <a href="/observatory/tribunal.html">Tribunal</a>
     <a href="https://arena-api.sadi21863.workers.dev/health">API</a>
   </div>
+  <button class="arena-theme-toggle" aria-label="Toggle dark mode" type="button">
+    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
 </nav>
 
 <header class="obs-header">
@@ -103,9 +122,20 @@
   <p>What's actually happening right now — the current or most recent event's real phase, straight from the same day-math the live cron uses, not a stale summary.</p>
 </header>
 
-<div class="live-wrap" id="content"><div class="loading-state">Loading…</div></div>
+<div class="live-wrap" id="content">
+  <div class="arena-card skel-card">
+    <div class="skel skel-eyebrow"></div>
+    <div class="skel skel-title"></div>
+    <div class="skel skel-sub"></div>
+    <div class="skel-steps">
+      <div class="skel skel-step"></div><div class="skel skel-step"></div><div class="skel skel-step"></div>
+    </div>
+  </div>
+  <div class="skel skel-meter"></div>
+</div>
+<p class="freshness" id="freshness"></p>
 
-<footer class="arena-footer">The Arena Observatory · <a href="/">back home</a> · refreshes every 30s</footer>
+<footer class="arena-footer">The Arena Observatory · <a href="/">back home</a></footer>
 
 <script>
 (function () {
@@ -235,6 +265,7 @@
           }
 
           content.innerHTML = html;
+          lastLoadedAt = Date.now();
         });
       })
       .catch(function (err) {
@@ -242,8 +273,27 @@
       });
   }
 
+  // Visibility-aware polling, ported from a pattern in a sibling project's
+  // AI Lab refresher: don't burn fetches on a backgrounded tab, and catch
+  // up immediately (not after up to 30s of staleness) when the tab regains
+  // focus. A plain unconditional setInterval was the previous behavior.
+  var lastLoadedAt = null;
+  var freshnessEl = document.getElementById("freshness");
+
+  function tickFreshness() {
+    if (!lastLoadedAt) return;
+    var secs = Math.round((Date.now() - lastLoadedAt) / 1000);
+    freshnessEl.textContent = "Updated " + (secs < 2 ? "just now" : secs + "s ago") + " · refreshes every 30s";
+  }
+
   load();
-  setInterval(load, 30000);
+  setInterval(tickFreshness, 1000);
+  setInterval(function () {
+    if (document.visibilityState === "visible") load();
+  }, 30000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") load();
+  });
 })();
 </script>
 </body>
