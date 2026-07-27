@@ -160,8 +160,18 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   // an hour with zero recovery — the exact same retry-storm pathology
   // already diagnosed for Tribunal, just never ported to ideathon judging
   // since this path hadn't been exercised at this intensity before.
+  //
+  // 2 minutes, not Tribunal's 30 — found live (2026-07-27): 30 min was
+  // calibrated for genuine multi-hour daily-quota exhaustion (Tribunal's
+  // actual failure mode), but judge_idea/judge_team failures are usually a
+  // single transient blip (one judge's call, one bad response), not the
+  // whole event being blocked for hours. The real cron only ticks every 5
+  // minutes anyway, so anything shorter than that doesn't change
+  // production retry cadence at all — this just needs to be longer than
+  // aggressive manual test-tick cadence (the actual retry-storm trigger),
+  // not longer than the real failure's recovery time.
   const recentJudgeFailures = await env.DB.prepare(
-    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_idea' AND status = 'failed' AND completed_at >= datetime('now', '-30 minutes')`
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_idea' AND status = 'failed' AND completed_at >= datetime('now', '-2 minutes')`
   ).bind(eventId).all<{ payload: string | null }>();
   const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "ideaId");
 
@@ -275,8 +285,9 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
 
   // Same backoff fix as ensureIdeathonJudging above (found live 2026-07-26,
   // Week 7 closed beta) — judge_team had the identical no-backoff gap.
+  // 2 minutes, not 30 — same reasoning as ensureIdeathonJudging's comment.
   const recentJudgeFailures = await env.DB.prepare(
-    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_team' AND status = 'failed' AND completed_at >= datetime('now', '-30 minutes')`
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_team' AND status = 'failed' AND completed_at >= datetime('now', '-2 minutes')`
   ).bind(eventId).all<{ payload: string | null }>();
   const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "teamId");
 
