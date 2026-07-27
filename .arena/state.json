@@ -125,9 +125,21 @@
       }
     },
     "week7_closed_beta": {
-      "status": "blocked",
-      "checked_at": null,
-      "details": null
+      "status": "pass",
+      "checked_at": "2026-07-27T00:00:00.000000+00:00",
+      "details": {
+        "method": "Compressed schedule via a new admin endpoint (PATCH /admin/events/:id/start-date) that backdates an event's start_date -- phase transitions are real calendar-day math (scheduler.ts) with no test-mode flag, deliberately: the beta needed to exercise the exact same production code path, just with a fast-forwarded clock. Actual work (LLM calls, real GitHub repos, real judging, real Tribunal) was 100% real throughout.",
+        "verified_live_full_cycle": "ideathon event_e5415c58-99b1-4c96-aaca-6cd583c252e4: 12 agents' deep research -> 36 ideas -> critiques -> 6 architecture plans -> calibration -> 42/42 real judge scores -> status=judged. Hackathon event_f3601765-b9e9-4eb2-a568-9b17808e646c created from it: 2 real teams formed, 2 real repos under AI-arena-hackathon, both first build turns succeeded on GitHub Actions, both teams judged (14/14 scores), winner determined (team_00dae98f, alpha), full 3-stage Tribunal completed with ZERO failures (12 individual reflections, 12 cross-examinations, 12 syntheses), event reached status=complete.",
+        "real_bugs_found_and_fixed_via_live_testing": [
+          "handleSubmitIdea queued exactly 1 critic per idea despite the code's own comment citing spec section 4's 'critique 3 ideas not their own' -- confirmed live (33/36 ideas got exactly 1 critique, 3 got none, no retry-safety on the single enqueue call) -- fixed to queue 3 distinct critics",
+          "ensureIdeathonJudging/ensureHackathonJudging (judge_idea/judge_team) had NO retry backoff at all, unlike Tribunal's already-fixed shouldEnqueueForAgent -- confirmed live: with Workers AI genuinely over its daily cap, every 5-10s manual tick re-queued and re-failed all 6 ideas x 7 judges with zero recovery, the exact same retry-storm pathology already diagnosed for Tribunal just never ported here -- added backoff",
+          "DAILY_CAPS['workers_ai'] was an unmeasured guess (8500) below spec section 6's published 10,000/day -- confirmed live: app-tracked usage hit 8802 (over its own cap) while a direct real call against the Cloudflare account still succeeded fine -- raised to 9500",
+          "scoreTarget (judges/scoring.ts) used Promise.all across all missing judges -- one failed judge discarded every OTHER judge's successful result too, since the array rejected before the INSERT step ran. Confirmed live this repeatedly threw away 5-6 successful scores per retry under real inference pressure -- switched to Promise.allSettled, persisting whatever succeeds",
+          "Single Groq account meant 7 (judging) or 21 (calibration) concurrent LLM calls burst against one account's per-minute rate limit -- split Groq traffic across GROQ_API_KEY_1/2 (random) to halve the concurrent burst per account",
+          "Tribunal's 30-min retry backoff (Week 5 precedent) was ported to judging as-is, but that number was calibrated for genuine multi-hour daily-quota exhaustion (Tribunal's failure mode) -- judge_idea/judge_team failures are usually a single transient blip, not the whole event blocked for hours. Confirmed live: with the backoff shortened to 2 minutes, hackathon judging's one remaining failed judge (6/7 succeeded via the allSettled fix) cleared and completed within ~2 minutes instead of the 30 the old value would have required. The real cron's own 5-min cadence means anything under 5 min doesn't change production retry behavior anyway -- it only needed to outlast aggressive manual test-tick cadence, not the real failure's recovery time"
+        ],
+        "admin_test_tooling_added": "PATCH /admin/events/:id/start-date (bearer-token gated, same auth class as other /admin/events routes) -- reusable for any future compressed-schedule verification, not single-use scaffolding"
+      }
     }
   }
 }
