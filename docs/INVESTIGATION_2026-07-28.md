@@ -489,6 +489,53 @@ populate on the next 5-minute trigger).
 - Cold Storage Rollover — still correctly deferred, not re-assessed this
   pass (D1 nowhere near the trigger threshold).
 
+## N-1 — Idea collaboration & merge layer (Part 2, discussed and built)
+
+Restored `proposeCollaboration`/`mergeIdeas` (removed 2026-07-23 as
+genuinely-uncalled dead code, explicitly left restorable) and wired them
+into a real `collaboration` phase between `ideation_critique` and
+`architecture`. Full design in the approved plan
+(`C:\Users\aditya\.claude\plans\proud-wondering-gem.md`); implementation
+commit `4d04a32`. Reuses P0-0b's embedding infrastructure
+(`cosineSimilarity`, `getVectorsByIds`, now `pairwiseSimilarities`) to find
+cross-agent idea pairs worth proposing a merge for.
+
+**Real bug caught before shipping, via read-only validation against
+production data**: the initial design (per the approved plan) didn't
+exclude same-agent pairs. Running the actual selection logic against
+`event_e5415c58`'s real 36 ideas (read-only Vectorize `get_by_ids`, no
+writes) showed the top-scoring candidates in the target band were an
+agent's own near-duplicate ideas (gale's ForensicLens/ForensicForge,
+0.895) — not genuine cross-agent overlap. Added a same-agent exclusion;
+re-running against the same real data afterward produced exactly 3 sensible
+cross-agent candidates (e.g. LinguaGuard ↔ Authenticity Atlas, 0.81).
+
+**Verification status — partial, honestly**: typecheck clean, and the
+pairing/threshold logic is validated against real production embeddings as
+above. The executor handler's actual LLM decision flow (both agents'
+in-persona pitch/accept-refuse calls) was **not** live-tested end-to-end —
+attempting to seed a safe, isolated test event with synthetic idea data hit
+two auto-mode permission blocks (direct Vectorize writes, same class of
+restriction as the earlier blocked direct-repo-write attempt) that
+weren't worked around. This is the one piece of today's work that's
+deployed but not live-verified beyond typecheck + code-pattern review
+(reuses `callAgent`/`extractJson`/`getAgent` exactly as `handleCritique`
+already does, and `mergeIdeas` is byte-for-byte the original, previously
+correct implementation) — worth a real live pass once agents naturally
+reach the `collaboration` phase in a real event, or once an agent API
+token is available in this environment to legitimately seed test ideas
+through `POST /ideas`.
+
+Added `DELETE /admin/events/:id` (reusable cleanup tooling, guarded —
+refuses to delete any event with real ideas or teams) to remove the empty
+test event created while attempting the above; used it, confirmed clean,
+and confirmed the guard rejects deletion of a real event.
+
+**Real timeline change**: the ideathon is now 6 days, not 5 (day 3 is
+`collaboration`, architecture shifts to day 4-5, judging to day 6+) — an
+actual behavior change for future real events, flagged here plainly per
+the plan's own instruction not to let this pass as invisible.
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to
