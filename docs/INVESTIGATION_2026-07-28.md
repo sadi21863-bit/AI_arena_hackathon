@@ -416,6 +416,65 @@ classic PAT as-is. Not rotating to a fine-grained token, and not raising
 this again — noted here only so the decision isn't lost, not as an open
 item.
 
+## P2-6 fix — CORS comment corrected to match actual scope
+
+`src/index.ts`'s CORS comment claimed the wildcard origin was safe because
+"every route this applies to is already public/unauthenticated read data" —
+inaccurate, since it's applied globally including `/admin/*`. Took the
+simpler of the backlog's two options (correct the comment rather than
+scope CORS per-route, since the real risk was already assessed as low):
+rewrote the comment to state the actual global scope and explain why a
+wildcard origin is still fine given `/admin/*`'s bearer-token gate is
+unaffected by CORS headers either way.
+
+## P2-7 fix — failed calibration now visibly caveated, not just computed
+
+Chose the "soft-flag properly" option. `GET /events` (the list route, not
+just the existing single-event `GET /events/:id`) now LEFT JOINs
+`calibration_runs` so any frontend that only calls the list endpoint — which
+was every one of them, since nothing previously surfaced calibration at all
+in the Observatory despite the data existing — can see `calibration.passed`
+without an extra fetch. Added a visible warning banner to
+`public/observatory/live.html`'s hero card (current event) and a small
+inline flag on the "earlier events" list, both showing the actual
+correlation number when calibration failed. Confirmed via `get_page_text`
+against the live deployed page that the baseline (undecorated) view renders
+correctly before this change went out; the failed-calibration banner itself
+wasn't observed live since no event currently in the most-recent-20 window
+has a failed calibration run to render (the one real failure from
+2026-07-22 code review has aged out of the list).
+
+## P2-8 fix — cron heartbeat, surfaced on /headroom
+
+New `cron_heartbeat` table (`db/schema_week8_cron_heartbeat.sql`, applied
+live to production D1), single row updated every `scheduled()` tick —
+success or failure — with `last_tick_at`/`last_success_at`/`last_error`.
+The handler still re-throws after recording, so Cloudflare's own dashboard
+keeps seeing the exception too; this only adds visibility, it doesn't
+swallow anything. `GET /headroom` now returns `cron: {...}`, and
+`public/observatory/headroom.html` renders it as a status line (or a red
+warning with the actual error message, HTML-escaped, if the last tick
+failed).
+
+## P3-9 housekeeping
+
+- `npm audit fix` applied — 3 high CVEs (sharp via miniflare via wrangler,
+  dev-only) resolved, `npm audit` now reports 0 vulnerabilities. Re-ran
+  `tsc --noEmit` clean afterward.
+- `The_Arena_Specification.docx` §10 route table: replaced the never-built
+  `/admin/models`, `/admin/trigger-build`, `/admin/metrics` rows with the 4
+  routes actually implemented (`/admin/events`, `/admin/events/{id}/tick`,
+  `/admin/events/{id}/build-status`, `/admin/events/{id}/start-date`),
+  matching the backlog's call that the implementation is the better design.
+  Edited the underlying `word/document.xml` directly (docx skill) and
+  verified with the skill's schema validator against the original
+  (paragraph count +4, exactly matching 3 old rows → 4 new rows at 4 cells
+  each; "All validations PASSED").
+- `package.json`'s stale `"version": "8.0.0"` — left as-is per explicit user
+  instruction (rejected the version-bump edit); not touching this again.
+- Cold Storage Rollover — still correctly deferred, not re-assessed this
+  pass (D1 nowhere near the trigger threshold).
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to

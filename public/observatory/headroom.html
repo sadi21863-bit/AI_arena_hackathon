@@ -77,6 +77,8 @@
 
 <div class="gauge-grid" id="gaugeGrid"></div>
 
+<div id="cronStatus" class="arena-mono" style="max-width:900px;margin:0 auto 24px;padding:0 24px;font-size:0.8rem;color:var(--arena-ink-faint);"></div>
+
 <footer class="arena-footer">The Arena Observatory · <a href="/">back home</a> · refreshes every 30s</footer>
 
 <script>
@@ -84,6 +86,8 @@
   var API = "https://arena-api.sadi21863.workers.dev";
   var grid = document.getElementById("gaugeGrid");
   var R = 74, C = 2 * Math.PI * R;
+
+  function escapeHtml(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
   function colorFor(pct) {
     if (pct >= 0.9) return "var(--arena-danger)";
@@ -122,6 +126,21 @@
       : maxPct >= 0.6
         ? "Comfortable headroom remains for " + data.day + ", one tier is over half used."
         : "Comfortable headroom on every tier for " + data.day + ".";
+
+    // P2-8: cron heartbeat — Cloudflare Cron Triggers have no built-in
+    // failure alerting, so this is the only place a silently-broken
+    // scheduled tick would ever become visible.
+    var cronEl = document.getElementById("cronStatus");
+    var cron = data.cron;
+    if (!cron || !cron.last_tick_at) {
+      cronEl.textContent = "Cron: no heartbeat recorded yet.";
+    } else if (cron.last_error) {
+      cronEl.innerHTML = '<span style="color:var(--arena-danger)">⚠ Last cron tick (' + escapeHtml(cron.last_tick_at) +
+        ' UTC) failed: ' + escapeHtml(cron.last_error) + '</span>' +
+        (cron.last_success_at ? ' · last success ' + escapeHtml(cron.last_success_at) + ' UTC' : ' · no successful tick recorded yet');
+    } else {
+      cronEl.textContent = "Cron: last tick succeeded " + cron.last_tick_at + " UTC.";
+    }
   }
 
   function load() {

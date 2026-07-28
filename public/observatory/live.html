@@ -30,6 +30,16 @@
   }
   .hero-card__links a:hover { color: var(--arena-clay-deep); border-color: var(--arena-clay-deep); }
 
+  /* --- Calibration warning (P2-7): a failed pre-event calibration is real
+     signal (correlation < 0.6 threshold) that shouldn't be silently equal
+     to a clean one anywhere a reader sees the results. --- */
+  .calibration-warning {
+    display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 10px 14px;
+    border-radius: 8px; background: color-mix(in srgb, var(--arena-danger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--arena-danger) 35%, transparent);
+    font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-danger);
+  }
+
   /* --- Pulse dot: live vs finished --- */
   .pulse-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
   .pulse-dot--live { background: var(--arena-ink-green); animation: arena-pulse 2s ease-in-out infinite; }
@@ -233,6 +243,10 @@
             '<h2 class="hero-card__title">' + typeLabel + ' — ' + escapeHtml(phaseLabel(current)) + '</h2>' +
             '<p class="hero-card__sub">' + escapeHtml(current.id) + ' · started ' + escapeHtml((current.start_date || current.created_at || "").slice(0, 16)) + ' UTC</p>' +
             renderStepper(current) +
+            (current.calibration && current.calibration.passed === false
+              ? '<div class="calibration-warning">⚠ Judge calibration failed for this event (correlation ' +
+                current.calibration.correlation.toFixed(2) + ' < 0.6 threshold) — scores below are lower-confidence.</div>'
+              : '') +
             '<div class="hero-card__links">' +
               // Hackathon events have zero critique/collaboration edges of
               // their own (those only happen during ideathon phases) --
@@ -253,11 +267,13 @@
           if (rest.length) {
             html += '<div class="recent-label">Earlier events</div>';
             rest.forEach(function (e) {
+              var lowConfidence = e.calibration && e.calibration.passed === false;
               html += '<a class="arena-card recent-item" href="/observatory/replay.html">' +
                 '<div class="recent-item__left">' +
                   '<span class="pulse-dot ' + (isLive(e) ? "pulse-dot--live" : "pulse-dot--done") + '"></span>' +
                   '<span class="recent-item__type">' + (e.type === "ideathon" ? "Ideathon" : "Hackathon") + '</span>' +
                   '<span class="recent-item__status">' + escapeHtml(phaseLabel(e)) + '</span>' +
+                  (lowConfidence ? '<span class="recent-item__status" style="color:var(--arena-danger)">⚠ low-confidence calibration</span>' : '') +
                 '</div>' +
                 '<span class="recent-item__arrow">' + escapeHtml(e.id.slice(0, 14)) + '…</span>' +
               '</a>';

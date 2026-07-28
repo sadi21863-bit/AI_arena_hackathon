@@ -27,10 +27,20 @@ export type { Env };
 // failed outright with a generic "Failed to fetch" (curl/PowerShell
 // testing throughout this whole project never caught it, since CORS is a
 // browser-enforced restriction, not a server-side one — it only breaks in
-// an actual browser). `*` rather than a specific origin: every route this
-// applies to is already public/unauthenticated read data, so there's
-// nothing a wildcard origin exposes that a direct curl request couldn't
-// already read.
+// an actual browser).
+//
+// Applied globally in the fetch wrapper below, to EVERY response including
+// the /admin/* routes — this was previously (mis)documented as scoped to
+// "already public/unauthenticated read data," which isn't accurate (found
+// live, docs/INVESTIGATION_2026-07-28.md P2-6). `*` is still an acceptable
+// choice here rather than scoping CORS per-route: CORS is a browser-enforced
+// restriction on which ORIGINS can read a cross-origin response, not an
+// authentication mechanism, and /admin/* is still gated by its own bearer
+// token check (requireAdminToken) regardless of what CORS headers are on
+// the response. Browsers don't auto-attach a bearer token the way they do
+// cookies, so a wildcard origin here doesn't hand a malicious site anything
+// it couldn't already get by knowing the token directly — at which point
+// CORS is irrelevant either way.
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -63,15 +73,34 @@ export default {
    * 5's judging/Tribunal work all runs FROM that status now.
    */
   async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-    const events = await env.DB.prepare(
-      `SELECT * FROM archive_events
-       WHERE (type = 'ideathon' AND status != 'judged')
-          OR (type = 'hackathon' AND status != 'complete')`
-    ).all<EventRow>();
+    // P2-8: Cloudflare Cron Triggers have no built-in retry/failure alerting
+    // (project's own research notes flagged this), and the self-healing
+    // queue below only covers work that reaches it — a tick that throws
+    // before that point was previously invisible. Recording a heartbeat
+    // every tick, success or failure, so GET /headroom can surface
+    // staleness/errors instead of silence. Still re-throws after recording,
+    // so Cloudflare's own dashboard/logs keep seeing the exception too —
+    // this adds visibility, it doesn't swallow the error.
+    try {
+      const events = await env.DB.prepare(
+        `SELECT * FROM archive_events
+         WHERE (type = 'ideathon' AND status != 'judged')
+            OR (type = 'hackathon' AND status != 'complete')`
+      ).all<EventRow>();
 
-    for (const event of events.results) {
-      await ensurePhaseWorkQueued(env, event);
-      await processQueue(env);
+      for (const event of events.results) {
+        await ensurePhaseWorkQueued(env, event);
+        await processQueue(env);
+      }
+
+      await env.DB.prepare(
+        `UPDATE cron_heartbeat SET last_tick_at = datetime('now'), last_success_at = datetime('now'), last_error = NULL WHERE id = 'singleton'`
+      ).run();
+    } catch (err) {
+      await env.DB.prepare(
+        `UPDATE cron_heartbeat SET last_tick_at = datetime('now'), last_error = ? WHERE id = 'singleton'`
+      ).bind(err instanceof Error ? err.message : String(err)).run();
+      throw err;
     }
   },
 };
@@ -186,7 +215,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         const model = key.slice("groq:".length);
         return { provider: "groq", model_id: model, cap, used: usedByGroqModel.get(model) ?? 0 };
       });
-      return Response.json({ day: today, usage: tiers });
+
+      // P2-8: cron heartbeat, so a silently-broken scheduled() tick shows up
+      // here instead of nowhere.
+      const heartbeat = await env.DB.prepare(
+        `SELECT last_tick_at, last_success_at, last_error FROM cron_heartbeat WHERE id = 'singleton'`
+      ).first<{ last_tick_at: string | null; last_success_at: string | null; last_error: string | null }>();
+
+      return Response.json({ day: today, usage: tiers, cron: heartbeat ?? null });
     }
 
     if (url.pathname === "/ideas" && request.method === "GET") {
@@ -245,11 +281,33 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // level as everything else here). Optional ?type=ideathon|hackathon.
     if (url.pathname === "/events" && request.method === "GET") {
       const type = url.searchParams.get("type");
+      // LEFT JOIN calibration_runs, not a separate per-row fetch: the single-
+      // event route below already surfaces calibration.passed, but the LIST
+      // route never did, so nothing that only calls GET /events (like the
+      // Observatory Live view) could show a failed-calibration flag anywhere
+      // a reader would see it (P2-7, docs/INVESTIGATION_2026-07-28.md).
       const events = await (type
-        ? env.DB.prepare(`SELECT * FROM archive_events WHERE type = ? ORDER BY created_at DESC LIMIT 20`).bind(type)
-        : env.DB.prepare(`SELECT * FROM archive_events ORDER BY created_at DESC LIMIT 20`)
-      ).all();
-      return Response.json(events.results);
+        ? env.DB.prepare(
+            `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
+             FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
+             WHERE e.type = ? ORDER BY e.created_at DESC LIMIT 20`
+          ).bind(type)
+        : env.DB.prepare(
+            `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
+             FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
+             ORDER BY e.created_at DESC LIMIT 20`
+          )
+      ).all<Record<string, unknown>>();
+      const withCalibration = events.results.map((row) => {
+        const { calibration_correlation, calibration_passed, ...event } = row;
+        return {
+          ...event,
+          calibration: calibration_correlation != null
+            ? { correlation: calibration_correlation, passed: !!calibration_passed }
+            : null,
+        };
+      });
+      return Response.json(withCalibration);
     }
 
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
