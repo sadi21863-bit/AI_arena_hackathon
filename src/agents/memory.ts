@@ -9,8 +9,19 @@
  */
 
 import type { Env } from "../env";
+import { recordUsage } from "../router";
 
 const EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"; // matches the Vectorize index's preset dimensions
+
+// Neurons per input token for this specific model — Cloudflare's published
+// rate (developers.cloudflare.com/workers-ai/platform/pricing/: "6058
+// neurons per M input tokens" for @cf/baai/bge-base-en-v1.5), not a guess.
+// Confirmed live (2026-07-28, docs/INVESTIGATION_2026-07-28.md P1-4) that
+// this model's own usage response has NO usage.neurons field at all (only
+// prompt_tokens/completion_tokens/total_tokens) — unlike the chat models
+// router.ts calls, which do return usage.neurons directly. That's the actual
+// reason embed() never recorded real cost: there was no field to read.
+const NEURONS_PER_INPUT_TOKEN = 6058 / 1_000_000;
 
 export type MemoryType = "idea" | "comment" | "critique" | "reflection" | "research";
 
@@ -26,6 +37,18 @@ async function embed(env: Env, text: string): Promise<number[]> {
   const result: any = await env.AI.run(EMBEDDING_MODEL, { text: [text] });
   const vector = result?.data?.[0];
   if (!vector) throw new Error("Embedding call returned no vector");
+
+  // No result.usage.neurons on this model (see NEURONS_PER_INPUT_TOKEN
+  // above) — derive real cost from the real prompt_tokens this specific
+  // call reports, times Cloudflare's published per-token rate, rather than
+  // a flat guess that wouldn't scale with actual text length. Math.ceil,
+  // same as tryWorkersAI in router.ts and for the same reason: units_used
+  // is INTEGER, and summing many calls should never under-count against
+  // DAILY_CAPS just because a single short embed() call's real cost rounds
+  // to a fraction of a Neuron.
+  const promptTokens = result?.usage?.prompt_tokens ?? 0;
+  const neurons = Math.ceil(promptTokens * NEURONS_PER_INPUT_TOKEN);
+  await recordUsage(env, "workers_ai", EMBEDDING_MODEL, "embed", neurons);
   return vector;
 }
 

@@ -51,8 +51,14 @@ interface AnchorScoreResult {
 }
 
 async function scoreAnchor(env: Env, judgeName: string, criterion: string, anchorText: string): Promise<AnchorScoreResult> {
+  // Anti-verbosity clause (P1-3) must stay word-for-word consistent with
+  // judges/scoring.ts's real scoring prompt — calibration is only
+  // meaningful as a predictor of how judges will actually score if it asks
+  // them to score the same way.
   const prompt =
     `You are Judge ${judgeName}, scoring ${criterion} (0-10) for a calibration exercise. ` +
+    `Length is not quality — a longer or more elaborately-worded entry is not automatically better than a ` +
+    `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
     `Respond with ONLY a JSON object: {"score": number}.\n\nIDEA: ${anchorText}`;
   // 700, not a tighter budget matching the tiny {"score": N} answer: judging
   // routes to reasoning models (gpt-oss-120b / deepseek-r1-distill-qwen-32b)

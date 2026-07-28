@@ -86,7 +86,12 @@ async function unitsUsedToday(env: Env, provider: string, modelId?: string): Pro
   return row?.used ?? 0;
 }
 
-async function recordUsage(env: Env, provider: string, modelId: string, taskType: TaskType, units: number) {
+// taskType is `TaskType | "embed"`, not just TaskType — agents/memory.ts's
+// embed() calls env.AI.run() directly (bypassing routeInference/TASK_MODELS
+// entirely, since embedding isn't a chat-completion task) but still needs to
+// record its real cost against the same provider_usage_log/DAILY_CAPS
+// accounting everything else uses (P1-4, docs/INVESTIGATION_2026-07-28.md).
+export async function recordUsage(env: Env, provider: string, modelId: string, taskType: TaskType | "embed", units: number) {
   await env.DB.prepare(
     `INSERT INTO provider_usage_log (day, provider, model_id, task_type, units_used, timestamp)
      VALUES (?, ?, ?, ?, ?, datetime('now'))`

@@ -372,6 +372,50 @@ code compiles clean, but "a forced mid-event Groq exhaustion produces
 retries rather than mixed-model scores" per the backlog's Done-when needs a
 live event to actually trigger that condition.
 
+## P1-3 fix — anti-verbosity clause added to judging prompts
+
+Added an explicit "length is not quality, penalize padding" clause to both
+`judges/scoring.ts`'s real scoring prompt and `judges/calibration.ts`'s
+anchor-scoring prompt, word-for-word identical between the two so
+calibration stays a meaningful predictor of how judges actually score.
+Prompt-only change, not independently live-tested against a real event's
+score-vs-length correlation this pass (would need a full judging cycle).
+
+## P1-4 fix — embed() now records its real Neuron cost
+
+Confirmed live, as the backlog asked before relying on it: the embedding
+model's (`@cf/baai/bge-base-en-v1.5`) usage response has **no
+`usage.neurons` field at all** — only `prompt_tokens`/`completion_tokens`/
+`total_tokens`. That's the actual, previously-undiagnosed reason `embed()`
+recorded zero cost — there was no `neurons` field to read, unlike the chat
+models `router.ts` calls, which do return one directly.
+
+Fix: looked up Cloudflare's published Neuron rate for this specific model
+(developers.cloudflare.com/workers-ai/platform/pricing/: 6058 Neurons per
+1M input tokens for `@cf/baai/bge-base-en-v1.5`) rather than reintroducing
+another flat guess, and derived real per-call cost from the real
+`prompt_tokens` each call reports × that published rate, `Math.ceil`'d to
+match `tryWorkersAI`'s existing over-counting-not-under-counting convention.
+`recordUsage` (`src/router.ts`) exported so `agents/memory.ts`'s `embed()`
+can call it directly — a `"embed"` task-type label added alongside
+`TaskType` for this (embedding isn't a `routeInference`/`TASK_MODELS` task,
+so it doesn't belong in that union itself).
+
+**Not done this pass**: re-deriving `DAILY_CAPS["workers_ai"]` from
+now-accurate numbers, per the backlog's second step. That requires
+observing a real day's usage with this fix live to see the actual
+corrected total — can't be measured synchronously in one session. Worth
+comparing a day's `provider_usage_log` total against the Cloudflare
+dashboard's reported Neuron usage once this has been live for a day, per
+the backlog's own Done-when criterion.
+
+## P1-5 — GitHub PAT scope: user decision, not proceeding
+
+Per explicit user instruction (2026-07-28): keep using the existing
+classic PAT as-is. Not rotating to a fine-grained token, and not raising
+this again — noted here only so the decision isn't lost, not as an open
+item.
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to
