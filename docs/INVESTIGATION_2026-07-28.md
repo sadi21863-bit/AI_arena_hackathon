@@ -263,6 +263,50 @@ distinct non-self critics) before treating it as closed.
 
 ---
 
+## P0-0b minimum fix — applied and verified against real data
+
+Implemented the backlog's suggested minimum fix: `handleTeamFormation`
+(`src/events/executor.ts`) now fetches *all* judged ideas for the parent
+ideathon (not just the top 2), fetches their already-stored Vectorize
+embeddings via a new `getVectorsByIds` (`src/agents/memory.ts`, reuses the
+embedding `postIdea` already writes — no re-embedding cost), and greedily
+walks the score-sorted list picking the top 2 whose cosine similarity to
+each other is below a threshold, skipping and promoting the next distinct
+idea otherwise (`selectDistinctTop2`). Falls back to the plain top-2 cut if
+fewer than 2 sufficiently-distinct ideas exist, so team formation still
+always produces 2 teams — a low-diversity event should be caught upstream by
+NEW-2's ideation-diversity fix, not silently reduced to fewer teams here.
+
+**Threshold calibrated against real embeddings, not guessed** (this
+project's own CLAUDE.md standing rule against unmeasured placeholder
+numbers): pulled real vectors from the `arena-archive-vectors` Vectorize
+index via Cloudflare's REST API for three known categories —
+
+| Pair type | Example | Cosine similarity |
+|---|---|---|
+| Identical idea resubmitted | PainPal vs PainPal (casey) | 0.990 |
+| Same concept, reworded | FrictionFinder x3 (alex) | 0.946 – 0.974 |
+| Genuinely different ideas | 6 cross-agent pairs sampled | 0.586 – 0.742 |
+
+Set `DUPLICATE_SIMILARITY_THRESHOLD = 0.90` — sits in the wide gap between
+the reworded-duplicate floor (0.946) and the genuinely-different ceiling
+(0.742).
+
+**Verified against the real closed-beta event's actual data** (not just
+typecheck): re-ran the new selection logic against
+`event_e5415c58`'s real 6 judged ideas and their real stored vectors.
+Old logic's result (what actually happened): PainPal (6.35) + PainPal
+(6.20) — the live P0-0b bug. New logic's result: PainPal (6.35) + PatternVault
+(5.90) — the duplicate correctly skipped and the next distinct idea
+promoted.
+
+Not done as part of this fix (deliberately, out of scope for the minimum
+fix): the upstream ideation-diversity gap from NEW-2 (nothing varies an
+agent's 2nd/3rd idea-generation call), and the full N-1 collaboration/merge
+mechanic. This fix only prevents the *symptom* (two teams building the same
+idea) from this exact event's data — it doesn't stop agents from continuing
+to submit near-duplicate idea batches.
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to

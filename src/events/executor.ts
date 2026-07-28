@@ -11,7 +11,7 @@ import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea } from "../agents/interactions";
-import { recallMemory } from "../agents/memory";
+import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { createTeamRepo } from "../github/repos";
 import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
@@ -160,6 +160,43 @@ interface IdeaForBuild {
  * used critique_count as a stand-in proxy; that's gone now that real scores
  * exist.
  */
+// Threshold calibrated live 2026-07-28 against real Vectorize embeddings
+// (bge-base-en-v1.5) from the week7 closed-beta ideathon, not guessed:
+// identical idea resubmitted (PainPal vs PainPal) scored 0.990 cosine
+// similarity; the same idea reworded under one agent's 3-idea batch
+// (FrictionFinder x3) scored 0.946-0.974; genuinely different ideas scored
+// 0.586-0.742. 0.90 sits in the wide gap between the reworded-duplicate
+// floor (0.946) and the genuinely-different ceiling (0.742) — see
+// docs/INVESTIGATION_2026-07-28.md NEW-2 for the full measurement.
+const DUPLICATE_SIMILARITY_THRESHOLD = 0.90;
+
+/**
+ * Greedily picks 2 ideas from `candidates` (already ordered by score DESC),
+ * skipping any candidate whose embedding is too similar to an
+ * already-picked one so a hackathon's two teams don't end up building the
+ * same idea twice (P0-0b). Falls back to the plain top 2 by score if fewer
+ * than 2 sufficiently-distinct candidates exist — team formation still
+ * needs to produce 2 teams, and a low-diversity event is a signal for the
+ * upstream ideation gap (NEW-2), not something this selection step alone
+ * can fix by returning fewer teams.
+ */
+function selectDistinctTop2(candidates: IdeaForBuild[], vectors: Map<string, number[]>): IdeaForBuild[] {
+  const picked: IdeaForBuild[] = [];
+  for (const candidate of candidates) {
+    if (picked.length === 2) break;
+    const candidateVector = vectors.get(candidate.id);
+    const tooSimilar = candidateVector && picked.some((p) => {
+      const pickedVector = vectors.get(p.id);
+      return pickedVector ? cosineSimilarity(candidateVector, pickedVector) >= DUPLICATE_SIMILARITY_THRESHOLD : false;
+    });
+    if (!tooSimilar) picked.push(candidate);
+  }
+  if (picked.length === 2) return picked;
+  // Not enough distinct ideas — fall back to plain top 2 by score (original
+  // behavior) rather than forming fewer than 2 teams.
+  return candidates.slice(0, 2);
+}
+
 async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
     .bind(item.event_id).first<{ parent_event_id: string | null }>();
@@ -171,13 +208,24 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
     throw new Error(`Parent ideathon ${event.parent_event_id} isn't judged yet (status=${parent?.status}) — can't pick advancing ideas without real judge scores`);
   }
 
-  const top2 = await env.DB.prepare(
+  // Found live (2026-07-28, docs/INVESTIGATION_2026-07-28.md NEW-2): a plain
+  // top-2-by-score cut can and did pick two near-duplicate ideas from the
+  // same agent (both closed-beta teams built the identical "PainPal" idea).
+  // Fetch every judged candidate, not just 2, and greedily skip a candidate
+  // whose embedding is too similar to an already-picked one — promoting the
+  // next distinct idea instead, per the backlog's minimum-fix sketch (P0-0b).
+  const candidates = await env.DB.prepare(
     `SELECT id, agent_id, title, one_liner, problem, solution, build_scope
      FROM archive_ideas WHERE event_id = ? AND status = 'judged'
-     ORDER BY ideathon_score DESC LIMIT 2`
+     ORDER BY ideathon_score DESC`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
 
-  if (top2.results.length === 0) throw new Error(`No judged ideas found for parent event ${event.parent_event_id}`);
+  if (candidates.results.length === 0) throw new Error(`No judged ideas found for parent event ${event.parent_event_id}`);
+
+  const top2 = selectDistinctTop2(
+    candidates.results,
+    await getVectorsByIds(env, candidates.results.map((c) => c.id))
+  );
 
   // Per-team idempotency (2026-07-22 hardening — see the retry-safety gap
   // flagged at Week 4 gate-pass): a prior team_formation attempt for this
@@ -187,8 +235,8 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   // yet; 'building' = dispatch confirmed, this team is fully done and a
   // retry should skip it entirely rather than fire a duplicate CI run.
   const teamNames: Array<"alpha" | "beta"> = ["alpha", "beta"];
-  for (let i = 0; i < top2.results.length; i++) {
-    const idea = top2.results[i];
+  for (let i = 0; i < top2.length; i++) {
+    const idea = top2[i];
     const teamName = teamNames[i];
 
     let team = await env.DB.prepare(

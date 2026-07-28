@@ -106,3 +106,31 @@ export async function recallMemory(
 ): Promise<RecalledMemory[]> {
   return queryArchive(env, queryText, { agentId }, topK);
 }
+
+/**
+ * Cosine similarity between two already-embedded vectors — for comparing
+ * specific records against each other (e.g. idea deduplication), not
+ * semantic search against the whole index.
+ */
+export function cosineSimilarity(a: number[], b: number[]): number {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/**
+ * Fetches the stored vectors for records already embedded via
+ * rememberMemory (postIdea embeds every idea under its own id) — reuses the
+ * existing embedding instead of re-embedding, and returns a Map so callers
+ * can skip ids Vectorize doesn't have (shouldn't happen for ideas, but
+ * getByIds silently omits unknown ids rather than erroring).
+ */
+export async function getVectorsByIds(env: Env, ids: string[]): Promise<Map<string, number[]>> {
+  if (ids.length === 0) return new Map();
+  const vectors = await env.ARCHIVE_VECTORS.getByIds(ids);
+  return new Map(vectors.map((v) => [v.id, Array.from(v.values)]));
+}
