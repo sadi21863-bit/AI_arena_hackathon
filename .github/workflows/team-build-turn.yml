@@ -169,6 +169,24 @@ jobs:
         if: always()
         run: cat opencode-turn.log 2>/dev/null || echo "opencode-turn.log not found"
 
+      - name: Enforce real build output
+        # Found live (see docs/INVESTIGATION_2026-07-28.md P0-0a / NEW-1): a
+        # build turn can emit a text essay, invoke zero tools, write zero
+        # files, and still exit 0 — `opencode run` succeeding only means the
+        # CLI didn't crash, not that any work happened. This was the actual
+        # gap behind build_pipeline's gate passing while both closed-beta
+        # team repos ended up with no product code. Fail here, before Phase B
+        # or the commit step, so a no-op turn is reported as a failure
+        # instead of a silent success.
+        run: |
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log')
+          if [ -z "$CHANGED" ]; then
+            echo "::error::Build turn produced no file changes outside opencode-turn.log — the agent emitted text without writing any files. Failing the job instead of reporting a false success."
+            exit 1
+          fi
+          echo "Files changed this turn:"
+          echo "$CHANGED"
+
       - name: Phase B — locked-down verification (network=none)
         # This step runs fully --network=none — it runs AFTER the agent's
         # network-needing work is done, testing/building the code that was

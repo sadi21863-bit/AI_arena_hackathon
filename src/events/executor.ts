@@ -213,7 +213,15 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
 
     await dispatchBuildTurn(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
-      taskPrompt: `Build this from scratch: ${idea.title} — ${idea.one_liner}. Problem: ${idea.problem}. Solution: ${idea.solution}. Scope: ${idea.build_scope}`,
+      // Imperative lead + architecture demoted to trailing reference, not the
+      // prompt's bulk — found live (2026-07-28, see docs/INVESTIGATION_2026-07-28.md
+      // NEW-1) that a prompt ending in build_scope's ~185-word architecture
+      // essay makes the model continue that essay as prose instead of
+      // writing files, even though a direct tool-calling test against the
+      // same model/endpoint confirmed tool use itself works fine.
+      taskPrompt: `Write code now. Create the initial project files for "${idea.title}" in this repository using your file-writing tools — do not just describe a plan, actually create real files.\n\n` +
+        `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
+        `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`,
     });
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
   }
@@ -241,7 +249,10 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   await dispatchBuildTurn(env, {
     repoFullName: team.repo_url, team: team.team_name,
     turnId: `${teamId}_turn${priorTurns + 2}`, // +2: turn 1 already happened on formation day
-    taskPrompt: `Continue building "${idea?.title}". Review the existing code in this repo and continue implementing the remaining scope: ${idea?.build_scope}`,
+    // Same imperative-lead/reference-only-scope structure as turn 1's prompt
+    // above — see docs/INVESTIGATION_2026-07-28.md NEW-1.
+    taskPrompt: `Continue building "${idea?.title}". Review the existing code already committed in this repo, then write more code — add or modify files using your tools, do not just describe what should happen next.\n\n` +
+      `Reference architecture notes (guidance only):\n${idea?.build_scope}`,
   });
 }
 
