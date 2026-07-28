@@ -416,6 +416,31 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json({ id: startDateMatch[1], startDate: body.startDate });
     }
 
+    // Test-event cleanup — reusable tooling, same class as start-date above,
+    // not single-use. Only deletes events with zero real ideas/teams (a
+    // genuine hackathon or ideathon that produced real work can't be
+    // deleted through this route at all, by design) so this can't become a
+    // way to destroy a real event's data, only scaffolding created for
+    // verification that never got populated.
+    const deleteEventMatch = url.pathname.match(/^\/admin\/events\/([^/]+)$/);
+    if (deleteEventMatch && request.method === "DELETE") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const eventId = deleteEventMatch[1];
+      const [ideaCount, teamCount] = await Promise.all([
+        env.DB.prepare(`SELECT COUNT(*) as n FROM archive_ideas WHERE event_id = ?`).bind(eventId).first<{ n: number }>(),
+        env.DB.prepare(`SELECT COUNT(*) as n FROM hackathon_teams WHERE event_id = ?`).bind(eventId).first<{ n: number }>(),
+      ]);
+      if ((ideaCount?.n ?? 0) > 0 || (teamCount?.n ?? 0) > 0) {
+        return Response.json({ error: "event has real ideas or teams — refusing to delete" }, { status: 409 });
+      }
+      const result = await env.DB.batch([
+        env.DB.prepare(`DELETE FROM event_queue WHERE event_id = ?`).bind(eventId),
+        env.DB.prepare(`DELETE FROM archive_events WHERE id = ?`).bind(eventId),
+      ]);
+      if (result[1].meta.changes === 0) return Response.json({ error: "not_found" }, { status: 404 });
+      return Response.json({ deleted: eventId });
+    }
+
     // Manual trigger for the same work the cron handler (scheduled()) does
     // automatically — lets phase advancement + queue draining be verified
     // and debugged without waiting for the real schedule.
