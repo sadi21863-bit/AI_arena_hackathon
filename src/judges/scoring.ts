@@ -145,5 +145,19 @@ export async function scoreTarget(
 
   const existingTotal = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
   const newTotal = newResults.reduce((sum, r) => sum + r.score * r.weight, 0);
-  return existingTotal + newTotal;
+
+  // +0.5 collaboration bonus (spec §4, N-1 — ARENA_BACKLOG.md): applies once
+  // an idea has merged (agents/interactions.ts mergeIdeas sets co_agent_id),
+  // and carries through to hackathon team scoring too since the team is
+  // built from that same merged idea. Resolves target -> idea id first since
+  // scoreTarget serves both 'idea' (ideathon) and 'team' (hackathon) phases.
+  const ideaId = opts.targetType === "idea"
+    ? opts.targetId
+    : (await env.DB.prepare(`SELECT idea_id FROM hackathon_teams WHERE id = ?`).bind(opts.targetId).first<{ idea_id: string }>())?.idea_id;
+  const isMerged = ideaId
+    ? !!(await env.DB.prepare(`SELECT 1 FROM archive_ideas WHERE id = ? AND co_agent_id IS NOT NULL`).bind(ideaId).first())
+    : false;
+  const collaborationBonus = isMerged ? 0.5 : 0;
+
+  return Math.min(10, existingTotal + newTotal + collaborationBonus);
 }

@@ -32,14 +32,23 @@ import { runCalibration } from "../judges/calibration";
 import { pickCrossExamineTarget } from "../tribunal/reflection";
 import { queuedPayloadValues } from "./payload-utils";
 import { enqueue } from "./queue";
+import { pairwiseSimilarities } from "../agents/memory";
 
-export type Phase = "deep_research" | "ideation_critique" | "architecture" | "ready_for_judging" | "judged";
+export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged";
 export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete";
 
+// N-1 (spec §4 collaboration, ARENA_BACKLOG.md): inserting a real day-bounded
+// `collaboration` phase between ideation_critique and architecture extends
+// the ideathon from 5 days to 6 (architecture shifts to day 4-5, judging to
+// day 6+) rather than compressing architecture's existing 2-day window —
+// a real, visible change to the event's actual timeline, not just an
+// internal refactor. Flagged here since it's easy to miss reading the code
+// alone.
 export function phaseForDay(daysElapsed: number): Exclude<Phase, "judged"> {
   if (daysElapsed < 2) return "deep_research";
   if (daysElapsed < 3) return "ideation_critique";
-  if (daysElapsed < 5) return "architecture";
+  if (daysElapsed < 4) return "collaboration";
+  if (daysElapsed < 6) return "architecture";
   return "ready_for_judging";
 }
 
@@ -98,6 +107,9 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
       break;
     case "ideation_critique":
       await queueIdeationAndCritique(env, event.id);
+      break;
+    case "collaboration":
+      await queueCollaboration(env, event.id);
       break;
     case "architecture":
       await queueArchitecture(env, event.id);
@@ -440,16 +452,104 @@ async function queueIdeationAndCritique(env: Env, eventId: string): Promise<void
   }
 }
 
+// Threshold calibrated live 2026-07-28 against the same real Vectorize
+// embeddings used for P0-0b's duplicate filter (see
+// docs/INVESTIGATION_2026-07-28.md NEW-2): genuinely different ideas scored
+// 0.586-0.742 cosine similarity; the same idea reworded scored 0.946-0.974;
+// identical resubmission scored 0.990. executor.ts's DUPLICATE_SIMILARITY_
+// THRESHOLD (0.90) rejects the reworded/identical band as "same idea, not
+// a collaboration." COLLABORATION_SIMILARITY_FLOOR sits just above the
+// highest measured "different" pair (0.742) — real ideas above this floor
+// are more related than anything confirmed unrelated so far, even though
+// the upper part of this band (0.75-0.90) hasn't had a real example pair
+// fall into it yet and should be re-calibrated from real accept/refuse
+// outcomes once this phase has run against a few live events.
+const COLLABORATION_SIMILARITY_FLOOR = 0.75;
+const COLLABORATION_SIMILARITY_CEILING = 0.90; // matches executor.ts's duplicate cutoff — same-idea pairs go through P0-0b's filter, not this one
+
+/**
+ * N-1 (spec §4 collaboration): proposes merging idea pairs that are related
+ * enough to be worth combining without being the same idea (that's P0-0b's
+ * job, at team-selection time). Self-healing per-pair, same pattern as
+ * ensureIdeathonJudging above — runs every tick during the `collaboration`
+ * phase, but a pair with a non-failed `propose_collaboration` item already
+ * queued is skipped, so re-running doesn't duplicate proposals. Bounded to
+ * the top 5 (or fewer, for small events) qualifying pairs per event rather
+ * than proposing on every qualifying pair, so a tightly-clustered event
+ * doesn't spam every agent with simultaneous proposals.
+ */
+async function queueCollaboration(env: Env, eventId: string): Promise<void> {
+  // Only ideas still independently eligible — already-merged ideas (either
+  // side of a prior merge) are excluded from further pairing. ORDER BY
+  // created_at: pairwiseSimilarities preserves input order into {a, b}, and
+  // executor.ts's handleProposeCollaboration treats `a` as the earlier
+  // (proposing/primary-if-merged) idea — this ordering is what makes that
+  // assumption hold, not an arbitrary convenience.
+  const ideas = await env.DB.prepare(
+    `SELECT id, agent_id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND co_agent_id IS NULL ORDER BY created_at ASC`
+  ).bind(eventId).all<{ id: string; agent_id: string }>();
+  if (ideas.results.length < 2) return;
+
+  const existingProposals = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'propose_collaboration' AND status != 'failed'`
+  ).bind(eventId).all<{ payload: string | null }>();
+  const alreadyCovered = new Set([
+    ...queuedPayloadValues(existingProposals.results, "ideaA"),
+    ...queuedPayloadValues(existingProposals.results, "ideaB"),
+  ]);
+
+  const eligible = ideas.results.filter((i) => !alreadyCovered.has(i.id));
+  if (eligible.length < 2) return;
+  const agentOf = new Map(eligible.map((i) => [i.id, i.agent_id]));
+
+  const ideaIds = eligible.map((i) => i.id);
+  const pairs = await pairwiseSimilarities(env, ideaIds);
+  // Same-agent pairs excluded — found live checking this against event
+  // e5415c58's real embeddings (docs/INVESTIGATION_2026-07-28.md): the
+  // highest-scoring pairs in this exact band were an agent's OWN
+  // near-duplicate ideas (e.g. gale's ForensicLens/ForensicForge, 0.895),
+  // not a genuine cross-agent overlap — "collaboration" between an agent
+  // and itself isn't a coherent proposal. Real duplicate-batch problem is
+  // NEW-2's upstream ideation-diversity gap, not this phase's job to fix.
+  const qualifying = pairs
+    .filter((p) => agentOf.get(p.a) !== agentOf.get(p.b))
+    .filter((p) => p.score >= COLLABORATION_SIMILARITY_FLOOR && p.score < COLLABORATION_SIMILARITY_CEILING)
+    .sort((a, b) => b.score - a.score);
+
+  const maxProposals = Math.min(5, Math.floor(ideaIds.length / 6));
+  const usedThisPass = new Set<string>(); // each idea in at most one NEW proposal this pass
+  let queued = 0;
+
+  for (const pair of qualifying) {
+    if (queued >= maxProposals) break;
+    if (usedThisPass.has(pair.a) || usedThisPass.has(pair.b)) continue;
+
+    await enqueue(env, {
+      eventId, taskType: "propose_collaboration",
+      payload: { ideaA: pair.a, ideaB: pair.b, score: pair.score },
+      priority: 6,
+    });
+    usedThisPass.add(pair.a);
+    usedThisPass.add(pair.b);
+    queued++;
+  }
+}
+
 async function queueArchitecture(env: Env, eventId: string): Promise<void> {
   // "Top 6 ideas" (spec §3.1) — ranked by critique count as a proxy signal.
   // This one stays a proxy even after Week 5: architecture happens Day 3-4,
   // BEFORE judging (Day 5+) even exists, so there's no real judge score
   // available yet at this point in the event to rank by.
+  // status != 'merged' — N-1 (spec §4 collaboration): a merged-away idea
+  // (the non-primary side of an accepted collaboration, collaboration
+  // phase above) shouldn't compete for an architecture slot as a separate
+  // idea; the primary idea it merged into already carries both agent_ids
+  // forward via co_agent_id.
   const top = await env.DB.prepare(
     `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
      FROM archive_ideas i LEFT JOIN archive_interactions x
        ON x.target_id = i.id AND x.type = 'critique'
-     WHERE i.event_id = ?
+     WHERE i.event_id = ? AND i.status != 'merged'
      GROUP BY i.id
      ORDER BY critique_count DESC
      LIMIT 6`

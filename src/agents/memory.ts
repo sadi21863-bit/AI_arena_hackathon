@@ -157,3 +157,33 @@ export async function getVectorsByIds(env: Env, ids: string[]): Promise<Map<stri
   const vectors = await env.ARCHIVE_VECTORS.getByIds(ids);
   return new Map(vectors.map((v) => [v.id, Array.from(v.values)]));
 }
+
+export interface PairwiseSimilarity {
+  a: string;
+  b: string;
+  score: number;
+}
+
+/**
+ * Full pairwise cosine-similarity matrix over a set of ideas (N-1 spec §4
+ * collaboration — events/scheduler.ts's queueCollaboration). Reuses
+ * getVectorsByIds (one batch fetch, no re-embedding) and cosineSimilarity
+ * above — same infrastructure as executor.ts's selectDistinctTop2 (P0-0b),
+ * just computing every pair instead of a greedy top-2 walk. O(n^2) pairs is
+ * fine at ideathon scale (36 ideas = 630 pairs, pure arithmetic on already-
+ * fetched vectors, no network calls in the loop).
+ */
+export async function pairwiseSimilarities(env: Env, ideaIds: string[]): Promise<PairwiseSimilarity[]> {
+  const vectors = await getVectorsByIds(env, ideaIds);
+  const pairs: PairwiseSimilarity[] = [];
+  for (let i = 0; i < ideaIds.length; i++) {
+    const vecA = vectors.get(ideaIds[i]);
+    if (!vecA) continue;
+    for (let j = i + 1; j < ideaIds.length; j++) {
+      const vecB = vectors.get(ideaIds[j]);
+      if (!vecB) continue;
+      pairs.push({ a: ideaIds[i], b: ideaIds[j], score: cosineSimilarity(vecA, vecB) });
+    }
+  }
+  return pairs;
+}

@@ -105,6 +105,74 @@ export async function critiqueIdea(env: Env, input: CritiqueInput): Promise<stri
   return id;
 }
 
+/**
+ * N-1 (spec §4 collaboration, ARENA_BACKLOG.md): records one agent proposing
+ * to merge their idea with another's. Restored from commit ef0812b's parent
+ * (removed 2026-07-23 as genuinely-uncalled dead code, explicitly left
+ * restorable) — original implementation unchanged. The decision loop this
+ * feeds into is new (see respondToCollaboration below); this function only
+ * ever recorded the proposal itself, one-sided.
+ */
+export async function proposeCollaboration(
+  env: Env,
+  params: { agentId: string; eventId: string; ideaId: string; pitch: string }
+): Promise<string> {
+  return recordInteraction(env, {
+    eventId: params.eventId, actorId: params.agentId, targetId: params.ideaId,
+    type: "propose_collaboration", content: params.pitch,
+  });
+}
+
+/**
+ * Merging two ideas: co_agent_id set, +0.5 collaboration bonus applied at
+ * scoring time (judges/scoring.ts). Restored unchanged from ef0812b's
+ * parent — the original implementation already did exactly this.
+ */
+export async function mergeIdeas(
+  env: Env,
+  params: { primaryIdeaId: string; coAgentId: string; eventId: string }
+): Promise<void> {
+  const idea = await env.DB.prepare(`SELECT agent_id FROM archive_ideas WHERE id = ?`)
+    .bind(params.primaryIdeaId).first<{ agent_id: string }>();
+  if (!idea) throw new Error(`Idea not found: ${params.primaryIdeaId}`);
+
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE archive_ideas SET co_agent_id = ? WHERE id = ?`).bind(params.coAgentId, params.primaryIdeaId),
+    env.DB.prepare(`UPDATE archive_agents SET total_collaborations = total_collaborations + 1 WHERE id = ?`).bind(idea.agent_id),
+    env.DB.prepare(`UPDATE archive_agents SET total_collaborations = total_collaborations + 1 WHERE id = ?`).bind(params.coAgentId),
+  ]);
+}
+
+/**
+ * New (not in the original removed code): records the responding agent's
+ * accept/refuse decision on a proposeCollaboration pitch — refusal is a
+ * real, spec-allowed outcome (spec §4), not a rubber stamp. On mutual
+ * accept, marks the OTHER idea (the one being folded in, not `ideaId` —
+ * the proposal target) as merged and calls mergeIdeas; on refuse, does
+ * nothing further, leaving both ideas independently eligible for later
+ * ticks/pairs.
+ */
+export async function respondToCollaboration(
+  env: Env,
+  params: { agentId: string; eventId: string; proposalIdeaId: string; respondingIdeaId: string; accepted: boolean; reason: string }
+): Promise<void> {
+  // "merge" matches the interaction_types already documented in Week 2's
+  // gate-pass notes (.arena/state.json) — never actually used until now.
+  // "collaboration_refused" is new: no existing type fit a refusal, and
+  // refusal is a real, spec-allowed outcome worth its own distinguishable
+  // record rather than overloading "critique" (a differently-shaped,
+  // required-fields interaction type used elsewhere for ranking/stats).
+  await recordInteraction(env, {
+    eventId: params.eventId, actorId: params.agentId, targetId: params.proposalIdeaId,
+    type: params.accepted ? "merge" : "collaboration_refused", content: params.reason,
+  });
+
+  if (!params.accepted) return;
+
+  await mergeIdeas(env, { primaryIdeaId: params.proposalIdeaId, coAgentId: params.agentId, eventId: params.eventId });
+  await env.DB.prepare(`UPDATE archive_ideas SET status = 'merged' WHERE id = ?`).bind(params.respondingIdeaId).run();
+}
+
 export async function reviseIdea(
   env: Env,
   params: { ideaId: string; agentId: string; eventId: string; problem?: string; solution?: string; buildScope?: string }

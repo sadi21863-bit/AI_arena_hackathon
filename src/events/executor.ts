@@ -10,7 +10,7 @@ import { routeInference } from "../router";
 import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
-import { postIdea, critiqueIdea, reviseIdea } from "../agents/interactions";
+import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
 import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { createTeamRepo } from "../github/repos";
 import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
@@ -126,6 +126,63 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
   }
 
   await critiqueIdea(env, { agentId: agent.id, eventId: item.event_id, ideaId, ...critique });
+}
+
+interface CollaborationDecisionJson { accept: boolean; reason: string }
+
+/**
+ * N-1 (spec §4 collaboration) — event-level task (no single item.agent_id,
+ * same pattern as team_formation/judge_idea): scheduler.ts's
+ * queueCollaboration already did the system-side pairing (embedding
+ * similarity); this handler is where each side's AGENT decides in
+ * character, per the spec's actual ask.
+ *
+ * ideaA is always the earlier-created idea of the pair (queueCollaboration
+ * orders candidates by created_at before pairing) — treated as the
+ * "proposer" and, if accepted, the surviving/primary idea. ideaB's author
+ * makes the real accept/refuse call; refusal is a genuine spec-allowed
+ * outcome, not a rubber stamp — this handler does nothing further on
+ * refuse, leaving both ideas independently eligible for a future pass.
+ */
+async function handleProposeCollaboration(env: Env, item: QueueItem): Promise<void> {
+  const ideaAId = requirePayloadField(item.payload, "ideaA", "propose_collaboration");
+  const ideaBId = requirePayloadField(item.payload, "ideaB", "propose_collaboration");
+
+  const [ideaA, ideaB] = await Promise.all([
+    env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaAId).first<Record<string, unknown>>(),
+    env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaBId).first<Record<string, unknown>>(),
+  ]);
+  if (!ideaA || !ideaB) throw new Error(`propose_collaboration: idea not found (${ideaAId} / ${ideaBId})`);
+
+  const [agentA, agentB] = await Promise.all([getAgent(env, ideaA.agent_id as string), getAgent(env, ideaB.agent_id as string)]);
+  if (!agentA || !agentB) throw new Error(`propose_collaboration: unknown agent for idea ${ideaAId} or ${ideaBId}`);
+
+  const pitch = await callAgent(env, agentA, "validate",
+    `Another agent submitted an idea similar enough to yours that the system flagged it as a possible collaboration:\n\n` +
+    `YOUR IDEA — ${ideaA.title}: ${ideaA.one_liner}\nProblem: ${ideaA.problem}\nSolution: ${ideaA.solution}\n\n` +
+    `THEIR IDEA — ${ideaB.title}: ${ideaB.one_liner}\nProblem: ${ideaB.problem}\nSolution: ${ideaB.solution}\n\n` +
+    `Write a short (1-2 sentence) note to them explaining why merging your two ideas could work, from your lens. Respond with plain text only, no JSON.`
+  );
+  await proposeCollaboration(env, { agentId: agentA.id, eventId: item.event_id, ideaId: ideaBId, pitch: pitch.slice(0, 1000) });
+
+  const decisionText = await callAgent(env, agentB, "validate",
+    `Another agent proposed merging their idea with yours:\n\n` +
+    `THEIR IDEA — ${ideaA.title}: ${ideaA.one_liner}\nProblem: ${ideaA.problem}\nSolution: ${ideaA.solution}\n` +
+    `Their pitch: ${pitch}\n\n` +
+    `YOUR IDEA — ${ideaB.title}: ${ideaB.one_liner}\nProblem: ${ideaB.problem}\nSolution: ${ideaB.solution}\n\n` +
+    `Decide, in character, whether to accept this merge — refusing is a legitimate choice if it doesn't fit your idea's direction. ` +
+    `Respond with ONLY a JSON object: {"accept": boolean, "reason": string (1-2 sentences)}.`
+  );
+  const decision = extractJson<CollaborationDecisionJson>(decisionText);
+  if (!decision || typeof decision.accept !== "boolean" || !decision.reason) {
+    throw new Error(`Malformed collaboration decision JSON from ${agentB.id}: ${decisionText.slice(0, 200)}`);
+  }
+
+  await respondToCollaboration(env, {
+    agentId: agentB.id, eventId: item.event_id,
+    proposalIdeaId: ideaAId, respondingIdeaId: ideaBId,
+    accepted: decision.accept, reason: decision.reason,
+  });
 }
 
 async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
@@ -394,6 +451,7 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
         case "research": await handleResearch(env, item, agent!); break;
         case "submit_idea": await handleSubmitIdea(env, item, agent!); break;
         case "critique": await handleCritique(env, item, agent!); break;
+        case "propose_collaboration": await handleProposeCollaboration(env, item); break;
         case "architecture": await handleArchitecture(env, item, agent!); break;
         case "team_formation": await handleTeamFormation(env, item); break;
         case "dispatch_build_turn": await handleDispatchBuildTurn(env, item); break;
