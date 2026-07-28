@@ -307,6 +307,41 @@ mechanic. This fix only prevents the *symptom* (two teams building the same
 idea) from this exact event's data — it doesn't stop agents from continuing
 to submit near-duplicate idea batches.
 
+## P0-1 fix — judge/architecture model separation, plus a real bug found along the way
+
+Applied the backlog's suggested fix: `judging` in `src/router.ts` no longer
+shares a model family with `architecture` on either tier — now
+`groq: "llama-3.3-70b-versatile"` / `workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"`,
+architecture unchanged (`gpt-oss-120b` / `llama-3.3-70b-instruct-fp8-fast`).
+
+**Re-verifying the Workers AI choice live (as the backlog explicitly asked,
+rather than assuming the 2026-07-22 "too verbose" note still applies)
+surfaced a real, previously-undocumented bug**: `tryWorkersAI` in
+`src/router.ts` never passed `max_tokens` to `env.AI.run()` at all — every
+Workers AI call silently ran at the platform's default budget regardless of
+what a caller requested. Confirmed directly against the live API: the exact
+judging prompt + `deepseek-r1-distill-qwen-32b`, with no `max_tokens`,
+returned `completion_tokens: 256` and got cut off mid-`<think>`, never
+reaching the JSON answer. The identical request with `max_tokens: 700`
+returned `completion_tokens: 522` and completed cleanly with valid trailing
+JSON. **This means the widely-referenced "bumped max_tokens to 700" fix
+(state.json week5_archive_tribunal, judges/scoring.ts, calibration.ts) was
+never actually reaching the Workers AI tier for any task type** — only the
+Groq tier honored it. Fixed `tryWorkersAI` to pass `max_tokens: req.max_tokens ?? 500`,
+matching `tryGroq`'s existing pattern.
+
+With that fixed, `deepseek-r1-distill-qwen-32b` is no longer "too verbose to
+finish" — it was never given enough budget to finish. Verified both new
+model choices directly against their live APIs with a real judging-style
+prompt before committing: Groq's `llama-3.3-70b-versatile` returned clean
+JSON on the first try; Workers AI's `deepseek-r1-distill-qwen-32b` with
+`max_tokens: 700` also returned clean JSON (previous section's test).
+
+**Done when** criteria from the backlog (no score collapse, no parse
+failures) still needs a real event run to confirm end-to-end — not done as
+part of this pass, since it requires a full ideathon judging cycle to
+observe.
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to

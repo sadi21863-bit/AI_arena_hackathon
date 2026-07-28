@@ -28,13 +28,21 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   research: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   design: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   code_generation: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
-  // workers_ai fallback deliberately NOT deepseek-r1-distill-qwen-32b:
-  // found live (2026-07-22, first calibration run) that it's verbose enough
-  // to burn through 700 tokens of hidden <think> reasoning without ever
-  // reaching the visible JSON answer — same failure architecture's fallback
-  // never hits, because llama-3.3-70b-instruct-fp8-fast isn't a reasoning
-  // model. Swapped to match architecture's already-proven-stable choice.
-  judging: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  // judging deliberately does NOT share a model family with architecture
+  // (both used to be gpt-oss-120b / llama-3.3-70b-instruct-fp8-fast on both
+  // tiers) — self-preference bias is a documented effect where an LLM judge
+  // scores its own model family's outputs higher on otherwise-equivalent
+  // content, and this system's entire output is a ranking. Found live
+  // (2026-07-22, first calibration run) that deepseek-r1-distill-qwen-32b's
+  // <think> reasoning burned through the token budget without reaching the
+  // visible JSON answer — re-verified live 2026-07-28
+  // (docs/INVESTIGATION_2026-07-28.md P0-1) that the actual cause was
+  // tryWorkersAI never passing max_tokens at all (see below), capping every
+  // Workers AI call at the platform's 256-token default regardless of what
+  // callers requested. With that fixed, the same model/prompt/max_tokens=700
+  // combination now completes its reasoning and returns valid JSON —
+  // confirmed directly against the live API, not assumed.
+  judging: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   architecture: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   // No groq candidate, deliberately: spec §14 Tribunal reflection is
   // "non-time-critical," so it always routes straight to the cheaper
@@ -132,7 +140,21 @@ async function tryWorkersAI(env: Env, model: string, req: InferenceRequest): Pro
   const used = await unitsUsedToday(env, "workers_ai");
   if (used >= DAILY_CAPS["workers_ai"]) return null;
 
-  const result: any = await env.AI.run(model as any, { messages: [{ role: "user", content: req.prompt }] });
+  // max_tokens was missing here entirely until found live (2026-07-28,
+  // docs/INVESTIGATION_2026-07-28.md P0-1): Workers AI silently defaults to
+  // 256 completion tokens when it's omitted, regardless of what a caller
+  // passed as req.max_tokens (that value only ever reached tryGroq above).
+  // Confirmed directly against the real API: a reasoning-model judging
+  // prompt with no max_tokens burned all 256 tokens on hidden <think>
+  // reasoning and never reached the visible JSON answer; the identical
+  // request with max_tokens:700 completed the reasoning and returned valid
+  // JSON. This affected every task type's Workers AI fallback tier, not
+  // just judging — callers' max_tokens (e.g. judges/scoring.ts and
+  // calibration.ts's 700) is now actually honored on this path too.
+  const result: any = await env.AI.run(model as any, {
+    messages: [{ role: "user", content: req.prompt }],
+    max_tokens: req.max_tokens ?? 500,
+  });
   // env.AI.run()'s response carries the real per-call cost in result.usage.neurons
   // (confirmed 2026-07-21 against the raw HTTP API: a 94-token exchange on
   // llama-3.3-70b-instruct-fp8-fast cost ~9.99 neurons). Use it directly
