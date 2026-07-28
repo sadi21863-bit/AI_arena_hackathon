@@ -44,7 +44,13 @@ const ANCHOR_IDEAS = [
   },
 ];
 
-async function scoreAnchor(env: Env, judgeName: string, criterion: string, anchorText: string): Promise<number> {
+interface AnchorScoreResult {
+  score: number;
+  provider: string;
+  model: string;
+}
+
+async function scoreAnchor(env: Env, judgeName: string, criterion: string, anchorText: string): Promise<AnchorScoreResult> {
   const prompt =
     `You are Judge ${judgeName}, scoring ${criterion} (0-10) for a calibration exercise. ` +
     `Respond with ONLY a JSON object: {"score": number}.\n\nIDEA: ${anchorText}`;
@@ -61,7 +67,7 @@ async function scoreAnchor(env: Env, judgeName: string, criterion: string, ancho
   if (!parsed || typeof parsed.score !== "number") {
     throw new Error(`Malformed calibration score from ${judgeName}: ${result.text.slice(0, 200)}`);
   }
-  return Math.max(0, Math.min(10, parsed.score));
+  return { score: Math.max(0, Math.min(10, parsed.score)), provider: result.provider, model: result.model };
 }
 
 function pearson(a: number[], b: number[]): number {
@@ -93,10 +99,20 @@ export async function runCalibration(env: Env, eventId: string): Promise<Calibra
   // 7-way concurrency, each awaiting its own 3 calls in turn, stays well
   // under that limit while still avoiding a fully-sequential 21x wall time.
   const scoresByJudge: Record<string, number[]> = {};
+  // First successful call's provider/model is pinned for the rest of this
+  // event's judging (P0-2, spec §13 risk mitigation — see judges/scoring.ts)
+  // rather than letting each individual judge_idea/judge_team call re-decide
+  // independently, which is exactly how a mid-event Groq exhaustion could
+  // silently mix gpt-oss-120b and deepseek-r1-distill-qwen-32b scores into
+  // one weighted ranking with no record it happened.
+  let pinnedProvider: string | undefined;
+  let pinnedModel: string | undefined;
   await Promise.all(JUDGES.map(async (judge) => {
     const scores: number[] = [];
     for (const anchor of ANCHOR_IDEAS) {
-      scores.push(await scoreAnchor(env, judge.name, judge.criterion, anchor.text));
+      const result = await scoreAnchor(env, judge.name, judge.criterion, anchor.text);
+      scores.push(result.score);
+      if (!pinnedProvider) { pinnedProvider = result.provider; pinnedModel = result.model; }
     }
     scoresByJudge[judge.name] = scores;
   }));
@@ -110,11 +126,16 @@ export async function runCalibration(env: Env, eventId: string): Promise<Calibra
   const correlation = pairwiseCorrelations.reduce((s, v) => s + v, 0) / pairwiseCorrelations.length;
   const passed = correlation >= 0.6;
 
-  await env.DB.prepare(
-    `INSERT INTO calibration_runs (id, event_id, correlation, passed, details) VALUES (?, ?, ?, ?, ?)`
-  ).bind(
-    `calibration_${crypto.randomUUID()}`, eventId, correlation, passed ? 1 : 0, JSON.stringify(scoresByJudge)
-  ).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO calibration_runs (id, event_id, correlation, passed, details) VALUES (?, ?, ?, ?, ?)`
+    ).bind(
+      `calibration_${crypto.randomUUID()}`, eventId, correlation, passed ? 1 : 0, JSON.stringify(scoresByJudge)
+    ),
+    env.DB.prepare(
+      `UPDATE archive_events SET judging_provider = ?, judging_model = ? WHERE id = ?`
+    ).bind(pinnedProvider ?? null, pinnedModel ?? null, eventId),
+  ]);
 
   return { correlation, passed };
 }

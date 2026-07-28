@@ -14,6 +14,11 @@ interface InferenceRequest {
   task_type: TaskType;
   prompt: string;
   max_tokens?: number;
+  // Skips the normal Groq->Workers AI cascade and only tries this one
+  // provider, returning null (not falling through) if it's unavailable —
+  // see judges/scoring.ts and judges/calibration.ts (spec §13 P0-2: pin the
+  // judging model for an event so it can't silently swap mid-event).
+  pinned_provider?: "groq" | "workers_ai";
 }
 
 import type { Env } from "./env";
@@ -174,17 +179,20 @@ async function tryWorkersAI(env: Env, model: string, req: InferenceRequest): Pro
  * Returns null (rather than throwing) if both are exhausted or fail — caller
  * decides whether to queue.
  */
-export async function routeInference(env: Env, req: InferenceRequest): Promise<{ text: string; provider: string } | null> {
+export async function routeInference(env: Env, req: InferenceRequest): Promise<{ text: string; provider: string; model: string } | null> {
   const candidates = TASK_MODELS[req.task_type];
   if (!candidates) throw new Error(`Unknown task_type: ${req.task_type}`);
 
-  if (candidates.groq) {
-    const text = await tryGroq(env, candidates.groq, req);
-    if (text) return { text, provider: "groq" };
-  }
-  if (candidates.workers_ai) {
-    const text = await tryWorkersAI(env, candidates.workers_ai, req);
-    if (text) return { text, provider: "workers_ai" };
+  // pinned_provider set: only try that one tier, don't fall through to the
+  // other even if it fails — a caller pinning a provider wants a clean
+  // retry-later on the SAME model, not a silent swap to the other one.
+  const tryOrder: Array<"groq" | "workers_ai"> = req.pinned_provider ? [req.pinned_provider] : ["groq", "workers_ai"];
+
+  for (const provider of tryOrder) {
+    const model = candidates[provider];
+    if (!model) continue;
+    const text = provider === "groq" ? await tryGroq(env, model, req) : await tryWorkersAI(env, model, req);
+    if (text) return { text, provider, model };
   }
   return null; // caller should queue the request, not fail the user's turn
 }

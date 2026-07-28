@@ -15,7 +15,14 @@ interface JudgeScoreJson {
   rationale: string;
 }
 
-async function scoreOne(env: Env, judge: Judge, prompt: string): Promise<JudgeScoreJson> {
+interface JudgeScoreResult extends JudgeScoreJson {
+  provider: string;
+  model: string;
+}
+
+async function scoreOne(
+  env: Env, judge: Judge, prompt: string, pinnedProvider?: "groq" | "workers_ai"
+): Promise<JudgeScoreResult> {
   const fullPrompt =
     `You are Judge ${judge.name}, scoring ${judge.criterion} (0-10) for a competition entry. ` +
     `Respond with ONLY a JSON object: {"score": number, "rationale": string (2-3 sentences)}.\n\n${prompt}`;
@@ -25,7 +32,17 @@ async function scoreOne(env: Env, judge: Judge, prompt: string): Promise<JudgeSc
   // gpt-oss-120b / deepseek-r1-distill-qwen-32b) — see calibration.ts for
   // what a too-tight budget actually does (truncates mid-reasoning, never
   // reaches the visible answer).
-  const result = await routeInference(env, { task_type: "judging", prompt: fullPrompt, max_tokens: 700 });
+  //
+  // pinned_provider (P0-2): calibration.ts records which provider/model
+  // actually answered calibration and stores it on the event; every
+  // judge_idea/judge_team call for that event reuses the SAME one instead
+  // of independently re-deciding, so a mid-event Groq exhaustion can't
+  // silently mix model families into one weighted ranking. If the pinned
+  // provider is genuinely unavailable, routeInference returns null here
+  // (not a silent fallback to the other tier) and this throws — the
+  // existing per-judge retry/backoff (ensureIdeathonJudging/
+  // ensureHackathonJudging) picks it up on the next tick.
+  const result = await routeInference(env, { task_type: "judging", prompt: fullPrompt, max_tokens: 700, pinned_provider: pinnedProvider });
   if (!result) throw new Error(`Inference exhausted scoring as Judge ${judge.name}`);
 
   const parsed = extractJson<JudgeScoreJson>(result.text);
@@ -35,7 +52,10 @@ async function scoreOne(env: Env, judge: Judge, prompt: string): Promise<JudgeSc
   // Clamp — a judge occasionally returns 10.5 or similar off-scale noise;
   // clamping keeps the weighted total meaningful without failing the whole
   // scoring pass over one rogue number.
-  return { score: Math.max(0, Math.min(10, parsed.score)), rationale: parsed.rationale };
+  return {
+    score: Math.max(0, Math.min(10, parsed.score)), rationale: parsed.rationale,
+    provider: result.provider, model: result.model,
+  };
 }
 
 /**
@@ -67,6 +87,16 @@ export async function scoreTarget(
   const alreadyScored = new Map(existing.results.map((row) => [row.judge_name, row]));
   const missingJudges = JUDGES.filter((judge) => !alreadyScored.has(judge.name));
 
+  // Pinned at calibration time (judges/calibration.ts) — undefined only if
+  // calibration hasn't run for this event yet, which ensureIdeathonJudging/
+  // ensureHackathonJudging (scheduler.ts) always does before queuing any
+  // judge_idea/judge_team work; undefined falls back to routeInference's
+  // normal Groq->Workers AI cascade rather than throwing, so this doesn't
+  // become a new way to hard-block an event.
+  const event = await env.DB.prepare(`SELECT judging_provider FROM archive_events WHERE id = ?`)
+    .bind(opts.eventId).first<{ judging_provider: string | null }>();
+  const pinnedProvider = (event?.judging_provider ?? undefined) as "groq" | "workers_ai" | undefined;
+
   // Parallel, not sequential: each judge's call is independent, and running
   // them concurrently keeps this well inside a Worker invocation's
   // wall-clock budget (7 sequential ~1-2s LLM calls could otherwise push
@@ -84,22 +114,22 @@ export async function scoreTarget(
   // step re-discarded it every time first.
   const settled = await Promise.allSettled(missingJudges.map(async (judge) => {
     const weight = opts.phase === "ideathon" ? judge.ideathonWeight : judge.hackathonWeight;
-    const { score, rationale } = await scoreOne(env, judge, opts.prompt);
-    return { judge, weight, score, rationale };
+    const { score, rationale, provider, model } = await scoreOne(env, judge, opts.prompt, pinnedProvider);
+    return { judge, weight, score, rationale, provider, model };
   }));
 
   const newResults = settled
-    .filter((r): r is PromiseFulfilledResult<{ judge: Judge; weight: number; score: number; rationale: string }> => r.status === "fulfilled")
+    .filter((r): r is PromiseFulfilledResult<{ judge: Judge; weight: number; score: number; rationale: string; provider: string; model: string }> => r.status === "fulfilled")
     .map((r) => r.value);
   const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
 
-  await Promise.all(newResults.map(({ judge, weight, score, rationale }) =>
+  await Promise.all(newResults.map(({ judge, weight, score, rationale, provider, model }) =>
     env.DB.prepare(
-      `INSERT OR IGNORE INTO judge_scores (id, event_id, judge_name, criterion, weight, target_type, target_id, phase, score, rationale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO judge_scores (id, event_id, judge_name, criterion, weight, target_type, target_id, phase, score, rationale, provider, model_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       `judgescore_${crypto.randomUUID()}`, opts.eventId, judge.name, judge.criterion, weight,
-      opts.targetType, opts.targetId, opts.phase, score, rationale
+      opts.targetType, opts.targetId, opts.phase, score, rationale, provider, model
     ).run()
   ));
 

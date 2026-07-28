@@ -342,6 +342,36 @@ failures) still needs a real event run to confirm end-to-end — not done as
 part of this pass, since it requires a full ideathon judging cycle to
 observe.
 
+## P0-2 fix — judge_scores now records its model, judging model pinned per event
+
+Implemented both parts of the backlog's fix:
+
+1. **Recording**: `judge_scores` gained `provider`/`model_id` columns
+   (`db/schema_week8_judge_model_tracking.sql`, applied live to the
+   production D1 database via `wrangler d1 execute arena-db --remote` and
+   verified with `PRAGMA table_info` afterward). `routeInference`
+   (`src/router.ts`) now returns `model` alongside `text`/`provider`;
+   `scoreOne`/`scoreTarget` (`src/judges/scoring.ts`) thread it through to
+   every inserted row.
+2. **Pinning**: `archive_events` gained `judging_provider`/`judging_model`
+   columns. `runCalibration` (`src/judges/calibration.ts`) now records
+   which provider/model actually answered calibration and stores it on the
+   event. `scoreTarget` looks this up and passes it as a new
+   `pinned_provider` option on `routeInference` — when set, `routeInference`
+   only tries that one tier and returns `null` (not a silent fallback to the
+   other tier) if it's unavailable, so a mid-event Groq exhaustion now
+   produces a normal queued retry (existing backoff machinery) on the same
+   model instead of a silent swap to a different model family. Falls back to
+   the old unpinned cascade if `judging_provider` is ever null (defensive —
+   shouldn't happen since calibration always runs before judging is queued).
+
+Not verified against a real end-to-end event this pass (would need a full
+ideathon judging cycle to observe judge_scores rows populate with real
+provider/model_id values) — the migration itself was verified live, and the
+code compiles clean, but "a forced mid-event Groq exhaustion produces
+retries rather than mixed-model scores" per the backlog's Done-when needs a
+live event to actually trigger that condition.
+
 ## Net effect on `ARENA_BACKLOG.md`
 
 - **P0-0a**: root cause narrowed from "two candidates, verify #1 first" to
