@@ -456,6 +456,20 @@ swallow anything. `GET /headroom` now returns `cron: {...}`, and
 warning with the actual error message, HTML-escaped, if the last tick
 failed).
 
+**Deployed and verified live in production** (important: this repo has no
+Worker auto-deploy workflow — only `public/**` auto-deploys via
+`deploy-pages.yml`; every backend fix in this document required a manual
+`wrangler deploy`, run at the end of this session after all commits landed):
+`GET /headroom` now returns a real `cron` object; `GET /events?type=ideathon`
+now returns real calibration data for `event_e5415c58` —
+`{"correlation":0.4829602505540215,"passed":false}` — a genuinely failed
+calibration that was previously invisible. Loaded the live Observatory
+Live page and confirmed the "⚠ low-confidence calibration" flag renders
+correctly on that exact event in the "Earlier events" list. Loaded the
+Headroom page and confirmed it correctly renders "Cron: no heartbeat
+recorded yet" (accurate — the cron hasn't ticked since this deploy; will
+populate on the next 5-minute trigger).
+
 ## P3-9 housekeeping
 
 - `npm audit fix` applied — 3 high CVEs (sharp via miniflare via wrangler,
