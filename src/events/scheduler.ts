@@ -33,6 +33,16 @@ import { pickCrossExamineTarget } from "../tribunal/reflection";
 import { queuedPayloadValues } from "./payload-utils";
 import { enqueue } from "./queue";
 import { pairwiseSimilarities } from "../agents/memory";
+import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
+
+/**
+ * Ceiling on build turns per team per day. Turns are gated on the previous
+ * one COMPLETING rather than on the calendar, so without a ceiling a turn
+ * that fails in seconds would loop against the GitHub Actions quota. Spec
+ * §3.2's shape (a few turns a day) is preserved; what changes is that a team
+ * finishing early moves on instead of idling until midnight.
+ */
+const MAX_BUILD_TURNS_PER_DAY = 6;
 
 export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged";
 export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete";
@@ -223,29 +233,48 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       await enqueue(env, { eventId: event.id, taskType: "team_formation", priority: 1 });
     }
   } else if (phase === "building") {
-    // One additional build-turn dispatch per team per calendar day —
-    // idempotent per (team, day), not per-event-ever like the ideathon
-    // phases, since building legitimately recurs daily.
-    const today = new Date().toISOString().slice(0, 10);
+    // Pull CI outcomes first — everything below depends on knowing whether
+    // the previous turn actually finished.
+    await reconcileBuildTurns(env, event.id);
+
     const teams = await env.DB.prepare(`SELECT id, team_name FROM hackathon_teams WHERE event_id = ?`)
       .bind(event.id).all<{ id: string; team_name: string }>();
 
-    // status != 'failed' — found live (2026-07-22 code review): without
-    // this, one failed dispatch attempt for a team today permanently skips
-    // that team's build turn for the rest of the day instead of retrying.
+    // A team's next turn is gated on its previous turn COMPLETING, not on the
+    // calendar rolling over. The old rule was one dispatch per team per UTC
+    // day, which meant a turn finishing in ten minutes left the team idle for
+    // the rest of the day — the agents were waiting on a date, not on work.
+    // A per-day ceiling still applies so a fast-failing turn can't spin the
+    // GitHub Actions quota, and the queue-level guard below keeps a dispatch
+    // from being enqueued twice while one is still pending.
+    const today = new Date().toISOString().slice(0, 10);
     const todaysDispatches = await env.DB.prepare(
-      `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn' AND date(created_at) = ? AND status != 'failed'`
+      `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn'
+         AND date(created_at) = ? AND status != 'failed'`
     ).bind(event.id, today).all<{ payload: string | null }>();
-    const dispatchedToday = queuedPayloadValues(todaysDispatches.results, "teamId");
+    const dispatchedTodayCount = new Map<string, number>();
+    for (const id of queuedPayloadValues(todaysDispatches.results, "teamId")) {
+      dispatchedTodayCount.set(id, (dispatchedTodayCount.get(id) ?? 0) + 1);
+    }
+
+    // Anything already queued but not yet executed — don't stack a second.
+    const pending = await env.DB.prepare(
+      `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn'
+         AND status IN ('pending', 'in_progress')`
+    ).bind(event.id).all<{ payload: string | null }>();
+    const alreadyQueued = queuedPayloadValues(pending.results, "teamId");
 
     for (const team of teams.results) {
-      if (!dispatchedToday.has(team.id)) {
-        await enqueue(env, {
-          eventId: event.id, taskType: "dispatch_build_turn",
-          payload: { teamId: team.id, teamName: team.team_name },
-          priority: 3,
-        });
-      }
+      if (alreadyQueued.has(team.id)) continue;
+      if ((dispatchedTodayCount.get(team.id) ?? 0) >= MAX_BUILD_TURNS_PER_DAY) continue;
+      // Still working — let it finish rather than dispatching over the top.
+      if (await teamHasOpenTurn(env, team.id)) continue;
+
+      await enqueue(env, {
+        eventId: event.id, taskType: "dispatch_build_turn",
+        payload: { teamId: team.id, teamName: team.team_name },
+        priority: 3,
+      });
     }
   } else if (phase === "ready_for_judging") {
     return ensurePostBuildWork(env, { ...event, status: phase });

@@ -1,5 +1,14 @@
 name: Team Build Turn
 
+# The run title carries turn_id because the Actions API cannot be queried by
+# workflow_dispatch input — listing runs is the only way to find one, and
+# without the id in the title there is no way to tell which run belongs to
+# which dispatched turn. reconcileBuildTurns (src/events/scheduler.ts) matches
+# on this string, so changing the format means changing that matcher too.
+run-name: >-
+  Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}
+  (${{ github.event.inputs.team || github.event.client_payload.team }})
+
 # Spec §8. Triggered by the Cloudflare Worker via the GitHub API
 # (workflow_dispatch or repository_dispatch, per §8) once per agent build
 # turn — NOT continuously. Each run is a fresh, isolated VM (4 CPU / 16GB RAM

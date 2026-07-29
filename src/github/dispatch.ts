@@ -36,6 +36,13 @@ export interface BuildTurnRunStatus {
   status: string; // "queued" | "in_progress" | "completed"
   conclusion: string | null; // "success" | "failure" | ... | null while not completed
   htmlUrl: string;
+  /** Run title — carries the turn_id via the workflow's `run-name`, which is
+   *  the only way to correlate a run back to the turn that dispatched it
+   *  (the Actions API can't filter by workflow_dispatch input). Empty for
+   *  runs from team repos created before `run-name` was added. */
+  name: string;
+  headSha: string | null;
+  createdAt: string | null;
 }
 
 /**
@@ -56,5 +63,10 @@ export async function listBuildTurnRuns(env: Env, repoFullName: string, perPage 
     status: run.status,
     conclusion: run.conclusion,
     htmlUrl: run.html_url,
+    // display_title reflects `run-name`; `name` is the workflow's own name
+    // and is the fallback for runs predating it.
+    name: run.display_title ?? run.name ?? "",
+    headSha: run.head_sha ?? null,
+    createdAt: run.created_at ?? null,
   }));
 }

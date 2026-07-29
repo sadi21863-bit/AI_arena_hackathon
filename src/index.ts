@@ -16,6 +16,7 @@ import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
 import { ensurePhaseWorkQueued, ensureArenaCadence, createEvent, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
+import { reconcileBuildTurns } from "./events/build-turns";
 import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
@@ -529,6 +530,21 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const phase = await ensurePhaseWorkQueued(env, event);
       const result = await processQueue(env);
       return Response.json({ phase, ...result });
+    }
+
+    // Pull CI outcomes for open build turns without running a full tick.
+    // A tick would also DISPATCH new turns (real Actions minutes, real
+    // inference spend), so reconciliation needs its own trigger to be
+    // verifiable and operable on its own. Same auth class as the ticks.
+    const reconcileMatch = url.pathname.match(/^\/admin\/events\/([^/]+)\/reconcile-build-turns$/);
+    if (reconcileMatch && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const updated = await reconcileBuildTurns(env, reconcileMatch[1]);
+      const rows = await env.DB.prepare(
+        `SELECT turn_id, team_id, turn_number, status, conclusion, run_url, head_sha
+         FROM build_turns WHERE event_id = ? ORDER BY turn_number`
+      ).bind(reconcileMatch[1]).all();
+      return Response.json({ updated, turns: rows.results });
     }
 
     // Manual trigger for ensureArenaCadence (scheduler.ts) -- lets the

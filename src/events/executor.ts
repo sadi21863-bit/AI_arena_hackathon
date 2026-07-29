@@ -17,7 +17,8 @@ import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
 import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
-import { countPayloadFieldMatches, requirePayloadField } from "./payload-utils";
+import { requirePayloadField } from "./payload-utils";
+import { recordBuildTurn } from "./build-turns";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
   const prompt = `${agent.persona}\n\n${instructions}`;
@@ -333,6 +334,10 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       team = { id: teamId, repo_url: repo.fullName, status: "forming" };
     }
 
+    await recordBuildTurn(env, {
+      turnId: `${team.id}_turn1`, eventId: item.event_id, teamId: team.id, turnNumber: 1,
+    });
+
     await dispatchBuildTurn(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
       // Imperative lead + architecture demoted to trailing reference, not the
@@ -363,14 +368,21 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   // countPayloadFieldMatches, not `payload LIKE '%"teamId":"..."%'` — D1
   // throws "LIKE or GLOB pattern too complex" on any pattern containing a
   // literal `"` (found live 2026-07-22, see payload-utils.ts).
-  const completedDispatches = await env.DB.prepare(
-    `SELECT payload FROM event_queue WHERE task_type = 'dispatch_build_turn' AND status = 'completed'`
-  ).all<{ payload: string | null }>();
-  const priorTurns = countPayloadFieldMatches(completedDispatches.results, "teamId", teamId);
+  // Turn number comes from build_turns now, not from counting completed
+  // queue rows. The old query scanned every dispatch_build_turn row ever
+  // completed across all events with no event filter — an unbounded scan
+  // that grew forever — and counted dispatches rather than actual turns.
+  const prior = await env.DB.prepare(
+    `SELECT COALESCE(MAX(turn_number), 1) AS n FROM build_turns WHERE team_id = ?`
+  ).bind(teamId).first<{ n: number }>();
+  const turnNumber = (prior?.n ?? 1) + 1; // turn 1 is dispatched on formation day
+  const turnId = `${teamId}_turn${turnNumber}`;
+
+  await recordBuildTurn(env, { turnId, eventId: item.event_id, teamId, turnNumber });
 
   await dispatchBuildTurn(env, {
     repoFullName: team.repo_url, team: team.team_name,
-    turnId: `${teamId}_turn${priorTurns + 2}`, // +2: turn 1 already happened on formation day
+    turnId,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
     // above — see docs/INVESTIGATION_2026-07-28.md NEW-1.
     taskPrompt: `Continue building "${idea?.title}". Review the existing code already committed in this repo, then write more code — add or modify files using your tools, do not just describe what should happen next.\n\n` +
