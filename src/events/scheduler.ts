@@ -584,26 +584,34 @@ export async function createEvent(env: Env, type: "ideathon" | "hackathon", pare
   return id;
 }
 
-// Designated cadence anchor (2026-07-29, user instruction): the Arena's
-// monthly cycle is pinned to the 1st of each calendar month, starting with
-// this specific date -- not "1 month after whenever the previous ideathon
-// happened to start," which would drift onto arbitrary mid-month dates
-// (event_bba98005 started the 26th, for example). ARENA_CADENCE_FIRST_START
-// is deliberately in the past relative to any ideathon that starts before
-// it -- computeNextArenaStart clamps up to it, it's a floor, not a delay.
+// Designated cadence (2026-07-29, user instruction): 3 Arenas per month --
+// 30 days / 3 = fixed 10-day rolling slots from this anchor, not "1st/11th/
+// 21st of calendar month" labels, which drift on 28/29/31-day months. Rolling
+// fixed-interval slots from a single anchor stay exactly 10 days apart
+// forever with no month-boundary edge cases. Each cycle's own day-gated
+// phases (6-day ideathon + 3-day hackathon = 9 days) plus judging/Tribunal
+// processing time eat nearly all of that 10-day slot -- there's very little
+// real slack, so expect occasional compression toward zero break rather
+// than a guaranteed rest period, if a cycle retries or backs off.
+// ARENA_CADENCE_FIRST_START is deliberately in the past relative to any
+// ideathon that starts before it -- computeNextArenaStart clamps up to it,
+// it's a floor, not a delay.
 const ARENA_CADENCE_FIRST_START = Date.UTC(2026, 7, 1); // month is 0-indexed: 7 = August
+const ARENA_CADENCE_SLOT_MS = 10 * 24 * 60 * 60 * 1000; // 10 days
 
 /**
- * 1st-of-month on/after `latestIdeathonStartDate`, but never earlier than
+ * Next 10-day slot on/after `latestIdeathonStartDate`, floored at
  * ARENA_CADENCE_FIRST_START -- so the very first autonomous cycle lands
- * exactly on that date regardless of what day of the month the last
- * (possibly pre-autonomy) ideathon started on, and every cycle after that
- * falls cleanly on the 1st.
+ * exactly on 2026-08-01 regardless of what day the last (possibly
+ * pre-autonomy) ideathon started on, and every cycle after that falls on
+ * a slot exactly 10 days after the previous one's own slot (Aug 1, 11, 21,
+ * 31, Sep 10, 20, 30, Oct 10, ...).
  */
 export function computeNextArenaStart(latestIdeathonStartDate: string): Date {
   const latest = new Date(latestIdeathonStartDate.replace(" ", "T") + "Z");
   if (latest.getTime() < ARENA_CADENCE_FIRST_START) return new Date(ARENA_CADENCE_FIRST_START);
-  return new Date(Date.UTC(latest.getUTCFullYear(), latest.getUTCMonth() + 1, 1));
+  const slotsSinceAnchor = Math.floor((latest.getTime() - ARENA_CADENCE_FIRST_START) / ARENA_CADENCE_SLOT_MS) + 1;
+  return new Date(ARENA_CADENCE_FIRST_START + slotsSinceAnchor * ARENA_CADENCE_SLOT_MS);
 }
 
 /**
@@ -621,11 +629,11 @@ export function computeNextArenaStart(latestIdeathonStartDate: string): Date {
  *   2. Once the latest cycle's ideathon AND its hackathon are both done,
  *      the next ideathon auto-starts -- but not the instant the hackathon
  *      completes. It's gated on the calendar reaching computeNextArenaStart
- *      (see above), so cadence stays anchored to the 1st of each month
- *      instead of chaining cycles back-to-back whenever one happens to
- *      finish early. If a cycle overruns past its own next slot, the next
- *      one starts on the very next tick once it's done, rather than
- *      waiting out an entire extra month.
+ *      (see above), so cadence stays anchored to fixed 10-day slots (3
+ *      Arenas/month) instead of chaining cycles back-to-back whenever one
+ *      happens to finish early. If a cycle overruns past its own next slot,
+ *      the next one starts on the very next tick once it's done, rather
+ *      than waiting out an entire extra slot.
  *
  * Called once per cron tick from index.ts's scheduled(), alongside (not
  * instead of) the per-event ensurePhaseWorkQueued/processQueue loop that
