@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<script>(function(){try{var t=localStorage.getItem("arena-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t);}catch(e){}})();</script>
+<title>Agent Office — The Arena Observatory</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="/css/arena.css" />
+<script src="/js/theme.js" defer></script>
+<style>
+  .obs-header { padding: 48px 32px 24px; }
+  .obs-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
+  .obs-header p { color: var(--arena-ink-soft); max-width: 62ch; margin-top: 10px; font-size: 1.02rem; }
+
+  .office-wrap { max-width: 1100px; margin: 0 auto; padding: 0 32px 72px; }
+
+  .office-meta {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-ink-faint);
+    margin-bottom: 16px;
+  }
+  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .pulse-dot--live { background: var(--arena-ink-green); animation: arena-pulse 2s ease-in-out infinite; }
+  .pulse-dot--done { background: var(--arena-ink-faint); }
+
+  /* --- The room --- */
+  .office {
+    position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 420px;
+    border-radius: 14px; overflow: hidden;
+    border: 1px solid var(--arena-line-strong);
+    background-color: var(--arena-bg-sunken);
+    background-image: url("/observatory/assets/office/floor_tile.png");
+    background-size: 34px 34px;
+  }
+  /* Floor tile is a flat mid-gray; in light mode it reads fine, in dark mode
+     it's too bright against the page, so knock it back with an overlay
+     rather than shipping a second recolored tile asset. */
+  :root[data-theme="dark"] .office::before {
+    content: ""; position: absolute; inset: 0; background: rgba(10, 12, 16, 0.62); pointer-events: none;
+  }
+
+  /* --- Zones (desks) --- */
+  .zone {
+    position: absolute; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    pointer-events: none;
+  }
+  .zone__pad {
+    width: 132px; height: 54px; border-radius: 10px;
+    border: 1px dashed var(--arena-line-strong);
+    background: color-mix(in srgb, var(--arena-clay) 8%, transparent);
+  }
+  .zone__label {
+    font-family: var(--arena-font-mono); font-size: 0.68rem; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--arena-ink-faint); white-space: nowrap;
+  }
+  .zone.is-active .zone__pad {
+    border-style: solid; border-color: var(--arena-clay);
+    background: color-mix(in srgb, var(--arena-clay) 18%, transparent);
+  }
+  .zone.is-active .zone__label { color: var(--arena-clay-deep); }
+
+  /* --- Characters --- */
+  .agent {
+    position: absolute; width: 64px; height: 64px;
+    transform: translate(-50%, -80%);
+    transition: left 1.2s ease-in-out, top 1.2s ease-in-out;
+    z-index: 2;
+  }
+  .agent__sprite {
+    width: 64px; height: 64px;
+    /* One 6x5 grid of 128px cells per character. Displayed at 64px, so the
+       sheet is scaled to 384x320 and stepped by 64px increments. Source art
+       is pre-rendered 3D, not pixel art — no image-rendering: pixelated. */
+    background-size: 384px 320px;
+    background-repeat: no-repeat;
+  }
+  .agent.is-working .agent__sprite { animation: office-bob 1.6s ease-in-out infinite; }
+  @keyframes office-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+  .agent__name {
+    position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+    font-family: var(--arena-font-mono); font-size: 0.66rem; white-space: nowrap;
+    color: var(--arena-ink-soft); background: color-mix(in srgb, var(--arena-bg) 82%, transparent);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .agent__task {
+    position: absolute; top: calc(100% + 15px); left: 50%; transform: translateX(-50%);
+    font-family: var(--arena-font-mono); font-size: 0.6rem; white-space: nowrap;
+    color: var(--arena-clay-deep);
+  }
+
+  /* --- Legend --- */
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; }
+  .legend__item { display: flex; align-items: center; gap: 7px; font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
+  .legend__count {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--arena-bg-sunken); border: 1px solid var(--arena-line-strong);
+    font-size: 0.68rem; color: var(--arena-ink);
+  }
+
+  .empty-state, .loading-state { padding: 60px 0; text-align: center; color: var(--arena-ink-faint); font-family: var(--arena-font-mono); font-size: 0.85rem; }
+
+  @keyframes arena-skeleton-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  .skel { border-radius: 6px; background: var(--arena-bg-sunken); animation: arena-skeleton-pulse 1.6s ease-in-out infinite; }
+  .skel-office { width: 100%; aspect-ratio: 16 / 9; min-height: 420px; border-radius: 14px; }
+
+  .freshness { font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-ink-faint); text-align: center; margin-top: 14px; }
+
+  @media (max-width: 720px) {
+    .office { aspect-ratio: 4 / 5; }
+    .zone__pad { width: 84px; height: 40px; }
+    .zone__label { font-size: 0.6rem; }
+  }
+</style>
+</head>
+<body>
+<div class="arena-grain" aria-hidden="true"></div>
+
+<nav class="arena-nav">
+  <a href="/" class="arena-nav__mark">The Arena</a>
+  <div class="arena-nav__links">
+    <a href="/observatory/live.html">Live</a>
+    <a href="/observatory/office.html" aria-current="page">Office</a>
+    <a href="/observatory/agents.html">Agent Graph</a>
+    <a href="/observatory/headroom.html">Headroom</a>
+    <a href="/observatory/ideas.html">Ideas</a>
+    <a href="/observatory/replay.html">Replay</a>
+    <a href="/observatory/diff.html">Diff</a>
+    <a href="/observatory/tribunal.html">Tribunal</a>
+    <a href="https://arena-api.sadi21863.workers.dev/health">API</a>
+  </div>
+  <button class="arena-theme-toggle" aria-label="Toggle dark mode" type="button">
+    <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+    <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  </button>
+</nav>
+
+<header class="obs-header">
+  <div class="scene__eyebrow" style="text-align:left;">Observatory · spec §11</div>
+  <h1>Agent Office</h1>
+  <p>All twelve agents, in one room, standing where their real work is. Each character's desk is whatever that agent's current queue task actually is — they walk over when it changes, and idle at the break area when they have nothing running.</p>
+</header>
+
+<div class="office-wrap">
+  <div class="office-meta" id="meta"></div>
+  <div id="stage"><div class="skel skel-office"></div></div>
+  <div class="legend" id="legend"></div>
+  <p class="freshness" id="freshness"></p>
+</div>
+
+<footer class="arena-footer">The Arena Observatory · <a href="/">back home</a></footer>
+
+<script>
+(function () {
+  var API = "https://arena-api.sadi21863.workers.dev";
+  var stage = document.getElementById("stage");
+  var metaEl = document.getElementById("meta");
+  var legendEl = document.getElementById("legend");
+
+  // Sheet layout, must match scripts/generate_office_sprites.js's row order.
+  var ROW = { idle: 0, walk_down: 1, walk_left: 2, walk_right: 3, walk_up: 4 };
+  var CELL = 64;       // on-screen cell size (sheet is 128px cells, scaled 2:1)
+  var WALK_FRAMES = 6;
+  var WALK_FPS = 8;    // matches the source Godot SpriteFrames timing
+
+  // 8 source characters cover 12 agents: 8 get their own, 4 are hue-rotated
+  // twins. Purely cosmetic — reshuffle freely, nothing else depends on it.
+  var CAST = {
+    agent_alex:  { sprite: "alex",      filter: null },
+    agent_casey: { sprite: "casey",     filter: null },
+    agent_blake: { sprite: "dean",      filter: null },
+    agent_drew:  { sprite: "detective", filter: null },
+    agent_ellis: { sprite: "jordan",    filter: null },
+    agent_finn:  { sprite: "morgan",    filter: null },
+    agent_gale:  { sprite: "riley",     filter: null },
+    agent_hale:  { sprite: "sam",       filter: null },
+    agent_iris:  { sprite: "dean",      filter: "hue-rotate(120deg) saturate(1.3)" },
+    agent_jade:  { sprite: "detective", filter: "hue-rotate(200deg) saturate(1.3)" },
+    agent_kai:   { sprite: "jordan",    filter: "hue-rotate(280deg) saturate(1.3)" },
+    agent_leo:   { sprite: "morgan",    filter: "hue-rotate(45deg) saturate(1.3)" }
+  };
+
+  // Percentage coordinates within the room, so the layout survives resizing.
+  var ZONES = [
+    { id: "research",     label: "Research Nook",       x: 18, y: 24 },
+    { id: "idea",         label: "Idea Desk",           x: 50, y: 20 },
+    { id: "critique",     label: "Critique Corner",     x: 82, y: 24 },
+    { id: "architecture", label: "Architecture Table",  x: 26, y: 60 },
+    { id: "tribunal",     label: "Tribunal Circle",     x: 74, y: 60 },
+    { id: "break",        label: "Break Area",          x: 50, y: 74 }
+  ];
+  var ZONE_BY_ID = {};
+  ZONES.forEach(function (z) { ZONE_BY_ID[z.id] = z; });
+
+  // Only these task types ever carry an agent_id (the rest are event- or
+  // team-level, see the endpoint's comment in src/index.ts) — anything
+  // unmapped falls through to the break area, which is the honest render
+  // for "this agent has nothing of their own running".
+  var TASK_ZONE = {
+    research: "research",
+    submit_idea: "idea",
+    critique: "critique",
+    architecture: "architecture",
+    tribunal_reflect: "tribunal",
+    tribunal_cross_examine: "tribunal",
+    tribunal_synthesize: "tribunal"
+  };
+  var TASK_LABEL = {
+    research: "researching",
+    submit_idea: "writing an idea",
+    critique: "critiquing",
+    architecture: "drafting architecture",
+    tribunal_reflect: "reflecting",
+    tribunal_cross_examine: "cross-examining",
+    tribunal_synthesize: "synthesizing"
+  };
+
+  var built = false;
+  var nodes = {};        // agent_id -> { el, spriteEl, taskEl, zoneId, walkTimer }
+  var lastLoadedAt = null;
+
+  function escapeHtml(s) { var d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+  function zoneFor(task) { return TASK_ZONE[task] || "break"; }
+
+  function setFrame(node, row, col) {
+    node.spriteEl.style.backgroundPosition = (-col * CELL) + "px " + (-row * CELL) + "px";
+  }
+
+  function stopWalk(node) {
+    if (node.walkTimer) { clearInterval(node.walkTimer); node.walkTimer = null; }
+  }
+
+  function walk(node, row) {
+    stopWalk(node);
+    var frame = 0;
+    setFrame(node, row, 0);
+    node.walkTimer = setInterval(function () {
+      frame = (frame + 1) % WALK_FRAMES;
+      setFrame(node, row, frame);
+    }, 1000 / WALK_FPS);
+  }
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function moveTo(node, zone, spread) {
+    var from = node.zoneId ? ZONE_BY_ID[node.zoneId] : null;
+    // A big group fanning out from an edge zone (9 agents all critiquing,
+    // say) would otherwise push characters past the wall.
+    var toX = clamp(zone.x + spread.dx, 7, 93);
+    var toY = clamp(zone.y + spread.dy, 14, 90);
+
+    if (from) {
+      var dx = (zone.x + spread.dx) - parseFloat(node.el.style.left);
+      var dy = (zone.y + spread.dy) - parseFloat(node.el.style.top);
+      var row = Math.abs(dx) > Math.abs(dy)
+        ? (dx > 0 ? ROW.walk_right : ROW.walk_left)
+        : (dy > 0 ? ROW.walk_down : ROW.walk_up);
+      walk(node, row);
+      // Transitions don't fire transitionend if the value doesn't actually
+      // change, so settle on a timer matching the CSS duration instead.
+      setTimeout(function () { stopWalk(node); setFrame(node, ROW.idle, 0); }, 1250);
+    } else {
+      setFrame(node, ROW.idle, 0);
+    }
+
+    node.el.style.left = toX + "%";
+    node.el.style.top = toY + "%";
+    node.zoneId = zone.id;
+  }
+
+  function buildStage(agents) {
+    var html = '<div class="office" id="office">';
+    ZONES.forEach(function (z) {
+      html += '<div class="zone" id="zone-' + z.id + '" style="left:' + z.x + '%;top:' + z.y + '%">' +
+        '<div class="zone__pad"></div><div class="zone__label">' + escapeHtml(z.label) + '</div></div>';
+    });
+    agents.forEach(function (a) {
+      var cast = CAST[a.agent_id];
+      if (!cast) return;
+      html += '<div class="agent" id="agent-' + escapeHtml(a.agent_id) + '" title="' + escapeHtml(a.name + " · " + (a.lens || "")) + '">' +
+        '<div class="agent__sprite" style="background-image:url(/observatory/assets/office/sprites/' + cast.sprite + '.webp)' +
+          (cast.filter ? ';filter:' + cast.filter : '') + '"></div>' +
+        '<div class="agent__name">' + escapeHtml(a.name) + '</div>' +
+        '<div class="agent__task"></div>' +
+      '</div>';
+    });
+    html += '</div>';
+    stage.innerHTML = html;
+
+    agents.forEach(function (a) {
+      var el = document.getElementById("agent-" + a.agent_id);
+      if (!el) return;
+      nodes[a.agent_id] = {
+        el: el,
+        spriteEl: el.querySelector(".agent__sprite"),
+        taskEl: el.querySelector(".agent__task"),
+        zoneId: null,
+        walkTimer: null
+      };
+    });
+    built = true;
+  }
+
+  function render(agents) {
+    if (!built) buildStage(agents);
+
+    // Fan characters out around their zone so co-located agents don't stack
+    // into one indistinguishable blob.
+    var perZone = {};
+    agents.forEach(function (a) {
+      var z = zoneFor(a.task_type);
+      (perZone[z] = perZone[z] || []).push(a);
+    });
+
+    Object.keys(perZone).forEach(function (zoneId) {
+      var group = perZone[zoneId];
+      var zone = ZONE_BY_ID[zoneId];
+      // Wrap into rows of at most 4 — all 12 agents legitimately share the
+      // break area during a hackathon, and a single row that wide overlaps
+      // its own name labels.
+      var perRow = Math.min(4, group.length);
+      group.forEach(function (a, i) {
+        var node = nodes[a.agent_id];
+        if (!node) return;
+        var row = Math.floor(i / perRow);
+        var col = i % perRow;
+        var inRow = Math.min(perRow, group.length - row * perRow);
+        var spread = { dx: (col - (inRow - 1) / 2) * 11, dy: row * 13 - (Math.ceil(group.length / perRow) - 1) * 6.5 };
+        moveTo(node, zone, spread);
+        node.taskEl.textContent = a.task_type ? (TASK_LABEL[a.task_type] || a.task_type) : "";
+        node.el.classList.toggle("is-working", a.status === "in_progress");
+      });
+    });
+
+    ZONES.forEach(function (z) {
+      var el = document.getElementById("zone-" + z.id);
+      if (el) el.classList.toggle("is-active", (perZone[z.id] || []).length > 0 && z.id !== "break");
+    });
+
+    legendEl.innerHTML = ZONES.map(function (z) {
+      return '<div class="legend__item"><span class="legend__count">' + ((perZone[z.id] || []).length) + '</span>' + escapeHtml(z.label) + '</div>';
+    }).join("");
+  }
+
+  // ?event_id= pins the view to one event, same convention agents.html uses;
+  // without it the most recent event is shown.
+  var pinnedEventId = new URLSearchParams(location.search).get("event_id");
+
+  function load() {
+    fetch(API + "/events")
+      .then(function (r) { return r.json(); })
+      .then(function (events) {
+        if (!events.length) {
+          stage.innerHTML = '<div class="empty-state">No events yet — nothing has run.</div>';
+          return;
+        }
+        var current = (pinnedEventId && events.filter(function (e) { return e.id === pinnedEventId; })[0]) || events[0];
+        var live = current.type === "ideathon" ? current.status !== "judged" : current.status !== "complete";
+
+        metaEl.innerHTML =
+          '<span class="pulse-dot ' + (live ? "pulse-dot--live" : "pulse-dot--done") + '"></span>' +
+          (live ? "Live" : "Most recent · finished") + ' · ' +
+          escapeHtml(current.type === "ideathon" ? "Ideathon" : "Hackathon") + ' · ' +
+          escapeHtml(current.status) + ' · ' + escapeHtml(current.id.slice(0, 20)) + '…';
+
+        return fetch(API + "/events/" + current.id + "/agent-activity")
+          .then(function (r) { return r.json(); })
+          .then(function (agents) {
+            render(agents);
+            lastLoadedAt = Date.now();
+          });
+      })
+      .catch(function (err) {
+        if (!built) stage.innerHTML = '<div class="empty-state">Couldn\'t load the office (' + escapeHtml(err.message) + ').</div>';
+      });
+  }
+
+  var freshnessEl = document.getElementById("freshness");
+  function tickFreshness() {
+    if (!lastLoadedAt) return;
+    var secs = Math.round((Date.now() - lastLoadedAt) / 1000);
+    freshnessEl.textContent = "Updated " + (secs < 2 ? "just now" : secs + "s ago") + " · refreshes every 30s";
+  }
+
+  load();
+  setInterval(tickFreshness, 1000);
+  setInterval(function () {
+    if (document.visibilityState === "visible") load();
+  }, 30000);
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible") load();
+  });
+})();
+</script>
+</body>
+</html>

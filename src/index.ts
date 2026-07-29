@@ -10,7 +10,7 @@
 import { routeInference, DAILY_CAPS, type TaskType } from "./router";
 import type { Env } from "./env";
 import { requireAgentToken, requireAdminToken } from "./auth";
-import { listAgents, getAgent, isAgentId } from "./agents/personas";
+import { listAgents, getAgent, isAgentId, AGENTS } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
@@ -342,6 +342,68 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         if (row.status in counts) counts[row.status as keyof typeof counts] = row.n;
       }
       return Response.json(counts);
+    }
+
+    // Observatory Agent Office (spec §11): what each of the 12 agents is
+    // doing right now, one representative queue row each, so the office
+    // view can place a character at the desk matching its current task.
+    //
+    // Fetches this event's agent-scoped rows and reduces in JS rather than
+    // trying to pick a per-agent winner in SQL — same reasoning as
+    // payload-utils.ts's existing note about D1 query complexity, and the
+    // row count here is bounded by one event's work.
+    //
+    // Only 7 of the 12 task types ever carry an agent_id at all
+    // (research/submit_idea/critique/architecture/tribunal_*); the rest
+    // (propose_collaboration, team_formation, dispatch_build_turn,
+    // judge_idea, judge_team) are event- or team-level, and judges are a
+    // separate roster entirely (judges/personas.ts) with no agent_id. So an
+    // agent having no row is normal, not missing data — during a
+    // hackathon's whole building phase, every agent legitimately has none.
+    // Every agent is returned either way so the client never has to guess
+    // whether a gap means "idle" or "not loaded yet".
+    const agentActivityMatch = url.pathname.match(/^\/events\/([^/]+)\/agent-activity$/);
+    if (agentActivityMatch && request.method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT agent_id, task_type, status, claimed_at, completed_at, scheduled_for
+         FROM event_queue WHERE event_id = ? AND agent_id IS NOT NULL`
+      ).bind(agentActivityMatch[1]).all<{
+        agent_id: string; task_type: string; status: string;
+        claimed_at: string | null; completed_at: string | null; scheduled_for: string | null;
+      }>();
+
+      type Row = (typeof rows.results)[number];
+      // A failed row is deliberately never representative — it would strand
+      // a character at a dead task indefinitely; falling through to idle is
+      // the more honest render.
+      const RANK: Record<string, number> = { in_progress: 3, completed: 2, pending: 1 };
+      const stamp = (r: Row) => r.claimed_at ?? r.completed_at ?? r.scheduled_for ?? "";
+
+      const best = new Map<string, Row>();
+      for (const row of rows.results) {
+        const rank = RANK[row.status] ?? 0;
+        if (rank === 0) continue;
+        const current = best.get(row.agent_id);
+        if (!current) { best.set(row.agent_id, row); continue; }
+        const currentRank = RANK[current.status] ?? 0;
+        if (rank > currentRank || (rank === currentRank && stamp(row) > stamp(current))) {
+          best.set(row.agent_id, row);
+        }
+      }
+
+      return Response.json(
+        AGENTS.map((agent) => {
+          const row = best.get(agent.id);
+          return {
+            agent_id: agent.id,
+            name: agent.name,
+            lens: agent.lens,
+            task_type: row?.task_type ?? null,
+            status: row?.status ?? null,
+            updated_at: row ? stamp(row) : null,
+          };
+        })
+      );
     }
 
     // Observatory Tribunal Report (spec §11/§14). Public — reflections are
