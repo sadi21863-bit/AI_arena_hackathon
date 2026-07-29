@@ -60,8 +60,25 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const memories = await recallMemory(env, agent.id, `${agent.lens} opportunities and research findings`, 3);
   const context = memories.map((m) => `- ${m.text}`).join("\n") || "(no prior research recalled)";
 
+  // Found live (docs/INVESTIGATION_2026-07-28.md NEW-2): this call runs up to
+  // 3x per agent per event (scheduler.ts's queueIdeationAndCritique) with an
+  // identical prompt each time, so 10/12 agents submitted 2-3 near-duplicate
+  // ideas as their "3 ideas" quota — the P0-0b similarity filter only hides
+  // the symptom at team-selection time, it doesn't stop the duplicates from
+  // being generated. Telling the model what it already submitted this event
+  // and requiring a genuinely different problem/target user attacks the
+  // actual cause instead.
+  const priorIdeas = await env.DB.prepare(
+    `SELECT title, one_liner FROM archive_ideas WHERE event_id = ? AND agent_id = ? ORDER BY created_at ASC`
+  ).bind(item.event_id, agent.id).all<{ title: string; one_liner: string }>();
+  const priorIdeasText = priorIdeas.results.length
+    ? `\n\nYou already submitted these idea(s) earlier this event:\n` +
+      priorIdeas.results.map((p) => `- "${p.title}": ${p.one_liner}`).join("\n") +
+      `\nYour new idea must target a genuinely different problem and user than every idea above — not a rename, feature variant, or rephrasing of one of them.`
+    : "";
+
   const text = await callAgent(env, agent, "design",
-    `Recent research from your own lens:\n${context}\n\n` +
+    `Recent research from your own lens:\n${context}${priorIdeasText}\n\n` +
     `Submit ONE product idea grounded in that research. Respond with ONLY a JSON object: ` +
     `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
     `build_scope should be a short buildable-in-days scope, not a vague vision.`
