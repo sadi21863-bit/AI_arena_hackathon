@@ -1,0 +1,21 @@
+# Cloudflare Pages routing.
+#
+# The Observatory is one shell at /observatory/ with hash routes, so no splat
+# rewrite is needed — and none can be made to work reliably here anyway: Pages
+# 308-canonicalizes /observatory/index.html to /observatory/, and strips .html
+# from any other filename, so every candidate rewrite destination redirects,
+# which turns a 200 rewrite into a 308 that also swallows real asset requests.
+# See the header comment in js/core/router.js.
+#
+# These rules exist only so links and bookmarks to the old page-per-view URLs
+# still land in the right place. A fragment in a Location header is honoured
+# by the browser, which is what carries the route across.
+
+/observatory/live.html      /observatory/#/live      301
+/observatory/office.html    /observatory/#/office    301
+/observatory/agents.html    /observatory/#/graph     301
+/observatory/headroom.html  /observatory/#/headroom  301
+/observatory/ideas.html     /observatory/#/live      301
+/observatory/replay.html    /observatory/#/live      301
+/observatory/diff.html      /observatory/#/live      301
+/observatory/tribunal.html  /observatory/#/live      301

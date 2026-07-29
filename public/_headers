@@ -1,0 +1,27 @@
+# Cache policy.
+#
+# There is no build step, so /js and /css filenames are NOT content-hashed.
+# That rules out a real max-age: with one, a pushed fix stays invisible until
+# the TTL expires, and — found the hard way — a transient failure gets cached
+# too, so a module that 404'd once keeps failing after it exists. `no-cache`
+# means "revalidate before using", which still serves 304s off the ETag, so
+# it costs a conditional request rather than a full download.
+#
+# /vendor and the office sprites carry a version in the filename or never
+# change at all, so they can be immutable.
+
+/js/*
+  Cache-Control: no-cache
+
+/css/*
+  Cache-Control: no-cache
+
+/vendor/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/observatory/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

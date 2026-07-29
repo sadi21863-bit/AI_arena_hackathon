@@ -1,0 +1,29 @@
+/* Tribunal view. Prefix: .v-tribunal__ */
+
+.v-tribunal__stage {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--arena-clay-deep);
+  margin: 40px 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.v-tribunal__stage::after { content: ""; flex: 1; height: 1px; background: var(--arena-line); }
+.v-tribunal__stage:first-child { margin-top: 0; }
+.v-tribunal__stage span { color: var(--arena-ink-faint); }
+
+.v-tribunal__card { padding: 20px 22px; margin-bottom: 12px; }
+.v-tribunal__agent { font-family: var(--arena-font-display); font-size: 1.05rem; margin-bottom: 4px; }
+.v-tribunal__target {
+  font-family: var(--arena-font-mono);
+  font-size: 0.7rem;
+  color: var(--arena-ink-faint);
+  margin-bottom: 9px;
+}
+.v-tribunal__content { color: var(--arena-ink-soft); line-height: 1.62; font-size: 0.95rem; white-space: pre-wrap; }
+
+.v-tribunal__card--synthesis { border-left: 3px solid var(--arena-clay); }
+.v-tribunal__card--synthesis .v-tribunal__content { color: var(--arena-ink); font-style: italic; }

@@ -1,0 +1,49 @@
+/* Headroom view. Prefix: .v-headroom__ */
+
+.v-headroom__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+  margin: 20px 0;
+}
+
+.v-headroom__card { padding: 24px; text-align: center; }
+
+.v-headroom__provider {
+  font-family: var(--arena-font-display);
+  font-size: 1.1rem;
+  color: var(--arena-ink);
+}
+
+.v-headroom__model {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  margin-top: 3px;
+  word-break: break-all;
+}
+
+.v-headroom__svg { width: 180px; height: 180px; margin: 10px auto 4px; display: block; }
+.v-headroom__track { fill: none; stroke: var(--arena-bg-sunken); stroke-width: 14; }
+.v-headroom__fill {
+  fill: none; stroke-width: 14; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 90px 90px;
+  transition: stroke-dashoffset 0.6s ease;
+}
+
+.v-headroom__pct {
+  font-family: var(--arena-font-display);
+  font-size: 1.7rem;
+  fill: var(--arena-ink);
+}
+.v-headroom__frac {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  fill: var(--arena-ink-faint);
+}
+
+.v-headroom__cap {
+  font-family: var(--arena-font-mono);
+  font-size: 0.7rem;
+  color: var(--arena-ink-faint);
+}

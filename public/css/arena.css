@@ -1,22 +1,26 @@
 /*
- * The Arena — shared design system.
+ * The Arena — design system.
  *
- * Aesthetic direction: warm editorial, in the spirit of Claude's own product
- * design language — cream/clay palette, generous whitespace, an editorial
- * serif for display type paired with a precise mono for data — rather than
- * the dark-mode/purple-gradient look most AI dashboards default to. This is
- * a competition + tribunal + observability system; the palette leans
- * "torch-lit arena judgment" (warm clay, ink, muted gold) instead of
- * "SaaS analytics product."
+ * Aesthetic direction: warm editorial — cream/clay palette, generous
+ * whitespace, an editorial serif for display type paired with a precise mono
+ * for data — rather than the dark-mode/purple-gradient look most AI
+ * dashboards default to. This is a competition + tribunal + observability
+ * system; the palette leans "torch-lit arena judgment" instead of "SaaS
+ * analytics product."
  *
- * Fonts are free (Google Fonts), chosen for character rather than
- * ubiquity — deliberately not Inter/Roboto/Arial/Space Grotesk.
+ * This file owns EVERY primitive shared across views. Views own only what is
+ * genuinely theirs, in css/views/<view>.css under a .v-<view>__ prefix. The
+ * previous structure had nine pages each redefining the footer, eyebrow,
+ * picker, empty state and skeleton, which is how the footer ended up styled
+ * in exactly one of them and the eyebrow in none.
+ *
+ * Fonts are loaded via <link> in the two shells, not @import here — an
+ * @import blocks rendering until this file is parsed AND the font CSS is
+ * fetched, serially.
  */
 
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..900&family=Fraunces:ital,opsz,wght@1,9..144,400..600&family=Instrument+Sans:wght@400..700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
-
 :root {
-  /* Warm cream/clay palette — light by default, matching the reference. */
+  /* Surfaces and text — warm cream/clay, light by default. */
   --arena-bg: #f4efe4;
   --arena-bg-raised: #fbf7ee;
   --arena-bg-sunken: #e9e1d1;
@@ -40,10 +44,20 @@
   --arena-chart-3: #a9822e; /* gold */
   --arena-chart-4: #5b6b8c; /* slate blue */
   --arena-chart-5: #7a2e1f; /* ember */
-  --arena-chart-6: #8c7b66; /* faint */
+  --arena-chart-6: #6f6152; /* deep faint */
 
+  /* Semantic. --arena-warning exists so --arena-gold can go back to being a
+     brand accent instead of doing double duty as "caution". The *-tint pair
+     is for fills behind text, which color-mix()ing against `transparent`
+     cannot do correctly on both themes. */
   --arena-danger: #9c3f21;
   --arena-success: #405c46;
+  --arena-warning: #8a6516;
+  --arena-danger-tint: #f6e3da;
+  --arena-success-tint: #dfe8e0;
+  --arena-warning-tint: #f5e9cf;
+
+  --arena-focus: #2f6fb5;
 
   --arena-font-display: "Fraunces", ui-serif, Georgia, serif;
   --arena-font-body: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
@@ -58,8 +72,6 @@
   color-scheme: light;
 }
 
-/* A dark variant exists for later (Headroom/Replay views read comfortably
-   at night) but is not the default — Claude's own product defaults light. */
 :root[data-theme="dark"] {
   --arena-bg: #1a140d;
   --arena-bg-raised: #241b12;
@@ -75,6 +87,34 @@
   --arena-gold: #d1a94a;
   --arena-ember: #c76b4f;
   --arena-ink-green: #7fa387;
+
+  /* Series lifted for a dark field. Previously these were left at their
+     light values, which made chart-1 muddy and put chart-6 within a hair of
+     dark --arena-ink-faint (#8c7860) — i.e. the 6th series was invisible. */
+  --arena-chart-1: #e8815a;
+  --arena-chart-2: #7fa387;
+  --arena-chart-3: #d9b45f;
+  --arena-chart-4: #8ea3c9;
+  --arena-chart-5: #cf7f68;
+  --arena-chart-6: #b9a68e;
+
+  /* Also previously unset, which meant every "something is wrong" signal —
+     the failed-queue segment, the exhausted-quota ring, the calibration
+     warning — was the least legible thing on the page in dark mode. */
+  --arena-danger: #e0714f;
+  --arena-success: #7fa387;
+  --arena-warning: #d9b45f;
+  --arena-danger-tint: #3a1f16;
+  --arena-success-tint: #1e2a20;
+  --arena-warning-tint: #33280f;
+
+  --arena-focus: #7fb0e8;
+
+  /* Near-black shadows on a near-black field just erase the card edge.
+     Let the border carry separation instead. */
+  --arena-shadow-soft: none;
+  --arena-shadow-lifted: none;
+
   color-scheme: dark;
 }
 
@@ -113,7 +153,16 @@ h1, h2, h3, .arena-display {
 a { color: var(--arena-clay-deep); }
 a:hover { color: var(--arena-clay); }
 
-/* Grain overlay — subtle texture so flat cream fields don't feel sterile. */
+/* There was no visible focus ring anywhere in the old site. With client-side
+   routing and keyboard-reachable cards, that stops being survivable. */
+:focus-visible {
+  outline: 2px solid var(--arena-focus);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Grain overlay — subtle texture so flat cream fields don't feel sterile.
+   Multiply is right on cream; on the dark field it would crush to black. */
 .arena-grain {
   position: fixed;
   inset: 0;
@@ -123,12 +172,12 @@ a:hover { color: var(--arena-clay); }
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
+:root[data-theme="dark"] .arena-grain { mix-blend-mode: overlay; opacity: 0.05; }
 
-.arena-container {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 0 32px;
-}
+/* ---------- Layout ---------- */
+
+.arena-container { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+.arena-container--narrow { max-width: 940px; }
 
 .arena-card {
   background: var(--arena-bg-raised);
@@ -137,6 +186,37 @@ a:hover { color: var(--arena-clay); }
   box-shadow: var(--arena-shadow-soft);
 }
 
+/* Page header — was .obs-header, redefined in all 8 observatory pages with
+   slightly different padding each time. */
+.arena-page-header { padding: 44px 0 22px; }
+.arena-page-header h1 { font-size: clamp(2rem, 4vw, 3rem); }
+.arena-page-header p {
+  color: var(--arena-ink-soft);
+  max-width: 62ch;
+  margin: 10px 0 0;
+  font-size: 1.02rem;
+}
+
+/* Was .scene__eyebrow — present in nine pages, defined in zero stylesheets. */
+.arena-eyebrow {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--arena-ink-faint);
+}
+
+.arena-section-label {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--arena-ink-faint);
+  margin-bottom: 12px;
+}
+
+/* ---------- Navigation ---------- */
+
 .arena-nav {
   position: sticky;
   top: 0;
@@ -144,7 +224,8 @@ a:hover { color: var(--arena-clay); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 32px;
+  gap: 16px;
+  padding: 16px 32px;
   background: color-mix(in srgb, var(--arena-bg) 88%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--arena-line);
@@ -160,6 +241,7 @@ a:hover { color: var(--arena-clay); }
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .arena-nav__mark::before {
@@ -172,30 +254,36 @@ a:hover { color: var(--arena-clay); }
   flex: none;
 }
 
-.arena-nav__links {
-  display: flex;
-  gap: 28px;
-  font-size: 0.9rem;
-}
+.arena-nav__links { display: flex; align-items: center; gap: 24px; font-size: 0.9rem; }
+.arena-nav__links a { color: var(--arena-ink-soft); text-decoration: none; font-weight: 500; }
+.arena-nav__links a:hover,
+.arena-nav__links a[aria-current="page"] { color: var(--arena-clay-deep); }
 
-.arena-nav__links a {
-  color: var(--arena-ink-soft);
-  text-decoration: none;
-  font-weight: 500;
-}
-.arena-nav__links a:hover, .arena-nav__links a[aria-current="page"] { color: var(--arena-clay-deep); }
+.arena-nav__actions { display: flex; align-items: center; gap: 8px; }
 
 .arena-theme-toggle {
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--arena-line-strong);
   background: var(--arena-bg-raised); color: var(--arena-ink-soft); cursor: pointer;
-  flex: none; margin-left: 8px; transition: color 0.15s ease, border-color 0.15s ease;
+  flex: none; transition: color 0.15s ease, border-color 0.15s ease;
 }
 .arena-theme-toggle:hover { color: var(--arena-clay-deep); border-color: var(--arena-clay-deep); }
 .arena-theme-toggle svg { width: 15px; height: 15px; }
 .arena-theme-toggle .icon-moon { display: none; }
 :root[data-theme="dark"] .arena-theme-toggle .icon-sun { display: none; }
 :root[data-theme="dark"] .arena-theme-toggle .icon-moon { display: block; }
+
+.arena-footer {
+  padding: 44px 32px 56px;
+  text-align: center;
+  color: var(--arena-ink-faint);
+  font-family: var(--arena-font-mono);
+  font-size: 0.78rem;
+  border-top: 1px solid var(--arena-line);
+  margin-top: 48px;
+}
+
+/* ---------- Status ---------- */
 
 .arena-pill {
   display: inline-flex;
@@ -210,17 +298,86 @@ a:hover { color: var(--arena-clay); }
   border: 1px solid var(--arena-line-strong);
   color: var(--arena-ink-soft);
   background: var(--arena-bg-sunken);
+  white-space: nowrap;
 }
-
 .arena-pill--live { color: var(--arena-ink-green); border-color: currentColor; }
 .arena-pill--live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: arena-pulse 2s ease-in-out infinite; }
+.arena-pill--score { color: var(--arena-clay-deep); border-color: currentColor; text-transform: none; font-feature-settings: "tnum" 1; }
+.arena-pill--warn { color: var(--arena-warning); border-color: currentColor; background: var(--arena-warning-tint); }
+.arena-pill--danger { color: var(--arena-danger); border-color: currentColor; background: var(--arena-danger-tint); }
+.arena-pill--muted { color: var(--arena-ink-faint); }
 
-@keyframes arena-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+.arena-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.arena-dot--live { background: var(--arena-ink-green); animation: arena-pulse 2s ease-in-out infinite; }
+.arena-dot--done { background: var(--arena-ink-faint); }
+.arena-dot--warn { background: var(--arena-warning); }
+
+@keyframes arena-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.arena-note {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 11px 15px; border-radius: var(--arena-radius-sm);
+  font-family: var(--arena-font-mono); font-size: 0.76rem; line-height: 1.55;
+  color: var(--arena-ink-soft);
+  background: var(--arena-bg-sunken); border: 1px solid var(--arena-line-strong);
+}
+.arena-note b { color: var(--arena-ink); font-weight: 600; }
+.arena-note--warn { background: var(--arena-warning-tint); border-color: var(--arena-warning); color: var(--arena-ink); }
+.arena-note--danger { background: var(--arena-danger-tint); border-color: var(--arena-danger); color: var(--arena-ink); }
+
+/* ---------- States ---------- */
+
+.arena-state {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--arena-ink-faint);
+  font-family: var(--arena-font-mono);
+  font-size: 0.85rem;
+}
+.arena-state--error { color: var(--arena-danger); }
+.arena-state__action { margin-top: 14px; }
+
+.arena-freshness {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  text-align: center;
+  margin-top: 14px;
 }
 
-button.arena-btn {
+@keyframes arena-skeleton-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.arena-skel {
+  border-radius: var(--arena-radius-sm);
+  background: var(--arena-bg-sunken);
+  animation: arena-skeleton-pulse 1.6s ease-in-out infinite;
+}
+.arena-skel--text { height: 12px; }
+.arena-skel--title { height: 28px; }
+.arena-skel--block { height: 180px; border-radius: var(--arena-radius); }
+.arena-skel--pill { height: 20px; width: 90px; border-radius: 999px; }
+
+/* ---------- Controls ---------- */
+
+.arena-picker {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 18px;
+  font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-ink-faint);
+}
+
+.arena-select {
+  font-family: var(--arena-font-mono);
+  font-size: 0.8rem;
+  color: var(--arena-ink);
+  background: var(--arena-bg-raised);
+  border: 1px solid var(--arena-line-strong);
+  border-radius: var(--arena-radius-sm);
+  padding: 7px 12px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.arena-select:hover { border-color: var(--arena-clay-deep); }
+
+.arena-btn {
   font-family: var(--arena-font-body);
   font-weight: 600;
   font-size: 0.9rem;
@@ -230,7 +387,57 @@ button.arena-btn {
   background: var(--arena-clay);
   color: #fbf3ec;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex; align-items: center; gap: 8px;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
-button.arena-btn:hover { transform: translateY(-1px); box-shadow: var(--arena-shadow-soft); }
-button.arena-btn--ghost { background: transparent; color: var(--arena-ink); border-color: var(--arena-line-strong); }
+.arena-btn:hover { transform: translateY(-1px); box-shadow: var(--arena-shadow-soft); color: #fbf3ec; }
+.arena-btn--ghost { background: transparent; color: var(--arena-ink); border-color: var(--arena-line-strong); }
+.arena-btn--ghost:hover { color: var(--arena-clay-deep); border-color: var(--arena-clay-deep); }
+.arena-btn--sm { font-size: 0.8rem; padding: 7px 14px; }
+.arena-btn[disabled], .arena-btn[aria-disabled="true"] { opacity: 0.45; pointer-events: none; }
+
+/* ---------- Data ---------- */
+
+.arena-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.arena-table th {
+  text-align: left; padding: 9px 12px;
+  font-family: var(--arena-font-mono); font-size: 0.68rem;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--arena-ink-faint); border-bottom: 1px solid var(--arena-line-strong);
+  white-space: nowrap;
+}
+.arena-table td { padding: 11px 12px; border-bottom: 1px solid var(--arena-line); color: var(--arena-ink-soft); vertical-align: top; }
+.arena-table tr:last-child td { border-bottom: none; }
+.arena-table__num { font-family: var(--arena-font-mono); font-feature-settings: "tnum" 1; color: var(--arena-ink); white-space: nowrap; }
+
+/* Wide content must scroll inside its own box, never the page body. */
+.arena-scroll-x { overflow-x: auto; }
+
+.arena-subcard {
+  padding: 14px 16px;
+  border-radius: var(--arena-radius-sm);
+  background: var(--arena-bg-sunken);
+  border: 1px solid var(--arena-line);
+}
+.arena-subcard--good { border-left: 3px solid var(--arena-success); }
+.arena-subcard--bad { border-left: 3px solid var(--arena-danger); }
+
+/* Queue-health style meter — shared because more than one view shows the
+   same four-way completed/in-progress/pending/failed split. */
+.arena-meter { display: flex; height: 10px; border-radius: 6px; overflow: hidden; background: var(--arena-bg-sunken); }
+.arena-meter__seg { height: 100%; transition: width 0.5s ease; }
+.arena-meter__seg--done { background: var(--arena-success); }
+.arena-meter__seg--progress { background: var(--arena-gold); }
+.arena-meter__seg--pending { background: var(--arena-line-strong); }
+.arena-meter__seg--failed { background: var(--arena-danger); }
+.arena-meter-legend { display: flex; gap: 18px; margin-top: 13px; flex-wrap: wrap; }
+.arena-meter-legend__item { display: flex; align-items: center; gap: 7px; font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
+.arena-meter-legend__swatch { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+@media (max-width: 720px) {
+  .arena-container { padding: 0 20px; }
+  .arena-nav { padding: 14px 20px; gap: 10px; }
+  .arena-nav__links { gap: 16px; font-size: 0.85rem; }
+  .arena-page-header { padding: 30px 0 18px; }
+}
