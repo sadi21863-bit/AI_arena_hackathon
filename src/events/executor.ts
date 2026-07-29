@@ -19,6 +19,7 @@ import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthe
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
 import { requirePayloadField } from "./payload-utils";
 import { recordBuildTurn } from "./build-turns";
+import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
   const prompt = `${agent.persona}\n\n${instructions}`;
@@ -219,7 +220,7 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
 }
 
 interface IdeaForBuild {
-  id: string; agent_id: string; title: string; one_liner: string;
+  id: string; agent_id: string; co_agent_id: string | null; title: string; one_liner: string;
   problem: string; solution: string; build_scope: string;
 }
 
@@ -290,7 +291,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   // whose embedding is too similar to an already-picked one — promoting the
   // next distinct idea instead, per the backlog's minimum-fix sketch (P0-0b).
   const candidates = await env.DB.prepare(
-    `SELECT id, agent_id, title, one_liner, problem, solution, build_scope
+    `SELECT id, agent_id, co_agent_id, title, one_liner, problem, solution, build_scope
      FROM archive_ideas WHERE event_id = ? AND status = 'judged'
      ORDER BY ideathon_score DESC`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
@@ -338,6 +339,15 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       turnId: `${team.id}_turn1`, eventId: item.event_id, teamId: team.id, turnNumber: 1,
     });
 
+    // Roster before the first turn, so turn 1 already belongs to someone —
+    // idempotent (INSERT OR IGNORE), so a retried formation won't duplicate.
+    await assignTeamMembers(env, {
+      eventId: item.event_id,
+      teams: [{ teamId: team.id, ideaAgentId: idea.agent_id, ideaCoAgentId: idea.co_agent_id }],
+    });
+    const opener = await nextBuildAuthor(env, team.id);
+    if (opener) await recordTurnTaken(env, team.id, opener.agent_id);
+
     await dispatchBuildTurn(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
       // Imperative lead + architecture demoted to trailing reference, not the
@@ -346,7 +356,8 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       // essay makes the model continue that essay as prose instead of
       // writing files, even though a direct tool-calling test against the
       // same model/endpoint confirmed tool use itself works fine.
-      taskPrompt: `Write code now. Create the initial project files for "${idea.title}" in this repository using your file-writing tools — do not just describe a plan, actually create real files.\n\n` +
+      taskPrompt: (opener ? turnAttribution(opener) : "") +
+        `Write code now. Create the initial project files for "${idea.title}" in this repository using your file-writing tools — do not just describe a plan, actually create real files.\n\n` +
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`,
     });
@@ -380,12 +391,19 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
 
   await recordBuildTurn(env, { turnId, eventId: item.event_id, teamId, turnNumber });
 
+  // Rotate the turn through the roster: fewest turns first. Who holds the
+  // turn changes what gets built, because turnAttribution puts their persona
+  // and build role at the top of the prompt.
+  const author = await nextBuildAuthor(env, teamId);
+  if (author) await recordTurnTaken(env, teamId, author.agent_id);
+
   await dispatchBuildTurn(env, {
     repoFullName: team.repo_url, team: team.team_name,
     turnId,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
     // above — see docs/INVESTIGATION_2026-07-28.md NEW-1.
-    taskPrompt: `Continue building "${idea?.title}". Review the existing code already committed in this repo, then write more code — add or modify files using your tools, do not just describe what should happen next.\n\n` +
+    taskPrompt: (author ? turnAttribution(author) : "") +
+      `Continue building "${idea?.title}". Review the existing code already committed in this repo, then write more code — add or modify files using your tools, do not just describe what should happen next.\n\n` +
       `Reference architecture notes (guidance only):\n${idea?.build_scope}`,
   });
 }

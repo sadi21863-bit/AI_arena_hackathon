@@ -17,6 +17,7 @@ import { deepResearch, type DeepResearchInput } from "./agents/research";
 import { ensurePhaseWorkQueued, ensureArenaCadence, createEvent, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
+import { rosterFor } from "./events/team-members";
 import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
@@ -452,6 +453,36 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // rationale for every score was readable only via direct D1 access.
     // Same public/no-auth trust level as timeline/teams above: read-only
     // aggregate data, no secrets.
+    // Who is on which team and what they are responsible for. Public, same
+    // tier as /teams — rosters are archive content, not secrets. Joined to
+    // the static AGENTS roster so a client gets names and lenses without a
+    // second call.
+    const rosterMatch = url.pathname.match(/^\/events\/([^/]+)\/roster$/);
+    if (rosterMatch && request.method === "GET") {
+      const [members, teams] = await Promise.all([
+        rosterFor(env, rosterMatch[1]),
+        env.DB.prepare(`SELECT id, team_name, idea_id FROM hackathon_teams WHERE event_id = ?`)
+          .bind(rosterMatch[1]).all<{ id: string; team_name: string; idea_id: string }>(),
+      ]);
+      const teamById = new Map(teams.results.map((t) => [t.id, t]));
+      return Response.json(
+        members.map((m) => {
+          const agent = AGENTS.find((a) => a.id === m.agent_id);
+          const team = teamById.get(m.team_id);
+          return {
+            team_id: m.team_id,
+            team_name: team ? team.team_name : null,
+            agent_id: m.agent_id,
+            name: agent ? agent.name : m.agent_id,
+            lens: agent ? agent.lens : null,
+            membership: m.membership,
+            build_role: m.build_role,
+            turns_taken: m.turns_taken,
+          };
+        })
+      );
+    }
+
     const judgeScoresMatch = url.pathname.match(/^\/events\/([^/]+)\/judge-scores$/);
     if (judgeScoresMatch && request.method === "GET") {
       const scores = await env.DB.prepare(
