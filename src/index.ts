@@ -379,6 +379,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(teams.results);
     }
 
+    // Observatory Ideas Board: judge_scores had no route at all until now
+    // (found live, docs/INVESTIGATION_2026-07-28.md) — every judge's real
+    // rationale for every score was readable only via direct D1 access.
+    // Same public/no-auth trust level as timeline/teams above: read-only
+    // aggregate data, no secrets.
+    const judgeScoresMatch = url.pathname.match(/^\/events\/([^/]+)\/judge-scores$/);
+    if (judgeScoresMatch && request.method === "GET") {
+      const scores = await env.DB.prepare(
+        `SELECT judge_name, criterion, weight, target_type, target_id, phase, score, rationale, provider, model_id
+         FROM judge_scores WHERE event_id = ?`
+      ).bind(judgeScoresMatch[1]).all();
+      return Response.json(scores.results);
+    }
+
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table
     // as written (it lists /admin/models, /admin/trigger-build,
     // /admin/metrics — none of which is "start an event"), but the event

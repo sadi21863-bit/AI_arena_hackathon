@@ -38,7 +38,7 @@
   .replay-item.is-past { opacity: 0.6; transform: translateX(0); }
   .replay-item__kind { font-family: var(--arena-font-mono); font-size: 0.68rem; text-transform: uppercase; color: var(--arena-clay-deep); letter-spacing: 0.04em; }
   .replay-item__title { font-family: var(--arena-font-display); font-size: 1.05rem; margin: 4px 0 6px; }
-  .replay-item__body { color: var(--arena-ink-soft); font-size: 0.9rem; line-height: 1.5; }
+  .replay-item__body { color: var(--arena-ink-soft); font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap; }
 
   .empty-state, .loading-state { padding: 60px 0; text-align: center; color: var(--arena-ink-faint); font-family: var(--arena-font-mono); font-size: 0.85rem; }
 </style>
@@ -52,6 +52,7 @@
     <a href="/observatory/live.html">Live</a>
     <a href="/observatory/agents.html">Agent Graph</a>
     <a href="/observatory/headroom.html">Headroom</a>
+    <a href="/observatory/ideas.html">Ideas</a>
     <a href="/observatory/replay.html" aria-current="page">Replay</a>
     <a href="/observatory/diff.html">Diff</a>
     <a href="/observatory/tribunal.html">Tribunal</a>
@@ -144,8 +145,9 @@
 
   function renderList() {
     content.innerHTML = items.map(function (item, i) {
-      var kind = item.kind === "idea" ? "Idea submitted" : item.type;
-      var title = item.kind === "idea" ? item.title : (name(item.actor_id) + " → " + item.type);
+      var typeLabel = COLLAB_LABELS[item.type] || item.type;
+      var kind = item.kind === "idea" ? "Idea submitted" : typeLabel;
+      var title = item.kind === "idea" ? item.title : (name(item.actor_id) + " — " + typeLabel);
       var body = item.kind === "idea" ? item.one_liner : summarizeInteraction(item);
       return '<div class="arena-card replay-item" data-i="' + i + '">' +
         '<div class="replay-item__kind">' + kind + ' · ' + (item.ts || "").slice(0, 16) + '</div>' +
@@ -155,11 +157,20 @@
     }).join("");
   }
 
+  var COLLAB_LABELS = {
+    propose_collaboration: "proposed collaboration",
+    merge: "accepted merge",
+    collaboration_refused: "refused collaboration"
+  };
+
   function summarizeInteraction(item) {
     if (!item.content) return "";
+    if (COLLAB_LABELS[item.type]) return item.content;
     try {
       var parsed = JSON.parse(item.content);
-      if (parsed.strength) return "Strength: " + parsed.strength;
+      if (parsed.strength) {
+        return "Strength: " + parsed.strength + "\nWeakness: " + (parsed.weakness || "") + "\nSuggestion: " + (parsed.suggestion || "");
+      }
     } catch (e) {}
     return item.content.slice(0, 160);
   }
