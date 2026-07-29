@@ -14,7 +14,7 @@ import { listAgents, getAgent, isAgentId } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
-import { ensurePhaseWorkQueued, type EventRow } from "./events/scheduler";
+import { ensurePhaseWorkQueued, ensureArenaCadence, createEvent, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
 import { listBuildTurnRuns } from "./github/dispatch";
 
@@ -92,6 +92,11 @@ export default {
         await ensurePhaseWorkQueued(env, event);
         await processQueue(env);
       }
+
+      // Spec §1 ("monthly autonomous AI competition"): the loop above only
+      // drives events that already exist. This decides whether a new one
+      // needs to be created -- see its own header comment in scheduler.ts.
+      await ensureArenaCadence(env);
 
       await env.DB.prepare(
         `UPDATE cron_heartbeat SET last_tick_at = datetime('now'), last_success_at = datetime('now'), last_error = NULL WHERE id = 'singleton'`
@@ -403,11 +408,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       if (body.type === "hackathon" && !body.parentEventId) {
         return Response.json({ error: "hackathon events require parentEventId (the ideathon it advanced from)" }, { status: 400 });
       }
-      const id = `event_${crypto.randomUUID()}`;
-      const initialStatus = body.type === "hackathon" ? "team_formation" : "deep_research";
-      await env.DB.prepare(
-        `INSERT INTO archive_events (id, type, start_date, status, parent_event_id, created_at) VALUES (?, ?, datetime('now'), ?, ?, datetime('now'))`
-      ).bind(id, body.type, initialStatus, body.parentEventId ?? null).run();
+      const id = await createEvent(env, body.type, body.parentEventId ?? null);
       return Response.json({ id }, { status: 201 });
     }
 
@@ -466,6 +467,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const phase = await ensurePhaseWorkQueued(env, event);
       const result = await processQueue(env);
       return Response.json({ phase, ...result });
+    }
+
+    // Manual trigger for ensureArenaCadence (scheduler.ts) -- lets the
+    // auto-create-next-hackathon / auto-create-next-ideathon logic be
+    // verified without waiting for the real monthly calendar gate or the
+    // 5-minute cron. Same auth class as /admin/events/:id/tick above.
+    if (url.pathname === "/admin/cadence/tick" && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      await ensureArenaCadence(env);
+      return Response.json({ ok: true });
     }
 
     // Observatory build view (spec §11): "polls GitHub Actions job status

@@ -569,3 +569,75 @@ async function queueArchitecture(env: Env, eventId: string): Promise<void> {
     });
   }
 }
+
+/**
+ * Shared with POST /admin/events (index.ts) so there's one place that knows
+ * how to insert an archive_events row -- extracted here rather than left
+ * duplicated once ensureArenaCadence below needed to create events itself.
+ */
+export async function createEvent(env: Env, type: "ideathon" | "hackathon", parentEventId: string | null): Promise<string> {
+  const id = `event_${crypto.randomUUID()}`;
+  const initialStatus = type === "hackathon" ? "team_formation" : "deep_research";
+  await env.DB.prepare(
+    `INSERT INTO archive_events (id, type, start_date, status, parent_event_id, created_at) VALUES (?, ?, datetime('now'), ?, ?, datetime('now'))`
+  ).bind(id, type, initialStatus, parentEventId).run();
+  return id;
+}
+
+/**
+ * Spec §1: "The Arena is a monthly autonomous AI competition." Everything
+ * above this point drives an event that already exists -- nothing actually
+ * created the NEXT one automatically. Found live (2026-07-29) checking
+ * production: both real judged ideathons only got a hackathon because one
+ * was POSTed manually each time; nothing ever auto-starts the next ideathon
+ * either. This closes both gaps:
+ *
+ *   1. A judged ideathon with no hackathon yet gets one auto-created. From
+ *      there, ensureHackathonWorkQueued (above) already drives team
+ *      formation -> building -> judging -> Tribunal -> complete on its own,
+ *      so this is the only missing link on that side.
+ *   2. Once the latest cycle's ideathon AND its hackathon are both done,
+ *      the next ideathon auto-starts -- but not the instant the hackathon
+ *      completes. It's gated on the calendar reaching one month past the
+ *      PREVIOUS ideathon's start_date, so cadence stays anchored to a real
+ *      monthly rhythm (spec's own word) instead of chaining cycles
+ *      back-to-back whenever one happens to finish early, or drifting later
+ *      every month if one runs long. If a cycle overruns past its own next
+ *      slot, the next one starts on the very next tick once it's done,
+ *      rather than waiting out an entire extra month.
+ *
+ * Called once per cron tick from index.ts's scheduled(), alongside (not
+ * instead of) the per-event ensurePhaseWorkQueued/processQueue loop that
+ * drives whatever's already running -- this function only ever decides
+ * whether a NEW event needs to exist yet.
+ */
+export async function ensureArenaCadence(env: Env): Promise<void> {
+  const judgedNoHackathon = await env.DB.prepare(
+    `SELECT id FROM archive_events e WHERE e.type = 'ideathon' AND e.status = 'judged'
+       AND NOT EXISTS (SELECT 1 FROM archive_events h WHERE h.parent_event_id = e.id)`
+  ).all<{ id: string }>();
+  for (const ideathon of judgedNoHackathon.results) {
+    await createEvent(env, "hackathon", ideathon.id);
+  }
+
+  const latest = await env.DB.prepare(
+    `SELECT id, start_date FROM archive_events WHERE type = 'ideathon' ORDER BY start_date DESC LIMIT 1`
+  ).first<{ id: string; start_date: string }>();
+
+  if (!latest) {
+    await createEvent(env, "ideathon", null); // bootstrap: no Arena has ever run
+    return;
+  }
+
+  const stillRunning = await env.DB.prepare(
+    `SELECT 1 FROM archive_events WHERE (id = ? AND status != 'judged')
+        OR (parent_event_id = ? AND status != 'complete')`
+  ).bind(latest.id, latest.id).first();
+  if (stillRunning) return;
+
+  const nextStart = new Date(latest.start_date.replace(" ", "T") + "Z");
+  nextStart.setUTCMonth(nextStart.getUTCMonth() + 1);
+  if (Date.now() >= nextStart.getTime()) {
+    await createEvent(env, "ideathon", null);
+  }
+}
