@@ -32,12 +32,23 @@ function authed(url, opts = {}) {
 }
 
 function d1(sql) {
+  // Windows execFileSync against a .cmd shim needs shell:true, but shell:true
+  // string-concatenates array args -- a multi-word --command value (spaces
+  // in the SQL itself) gets torn apart by cmd.exe instead of passed as one
+  // argument. Writing the SQL to a file and passing just the filename avoids
+  // that entirely (same fix documented from an earlier session's script).
   const isWindows = process.platform === "win32";
-  execFileSync(
-    isWindows ? "npx.cmd" : "npx",
-    ["wrangler", "d1", "execute", "arena-db", "--remote", "--command", sql],
-    { stdio: "inherit", shell: isWindows }
-  );
+  const sqlPath = path.join(__dirname, ".cadence_test.sql");
+  fs.writeFileSync(sqlPath, sql + ";\n");
+  try {
+    execFileSync(
+      isWindows ? "npx.cmd" : "npx",
+      ["wrangler", "d1", "execute", "arena-db", "--remote", "--file", sqlPath],
+      { stdio: "inherit", shell: isWindows }
+    );
+  } finally {
+    fs.unlinkSync(sqlPath);
+  }
 }
 
 async function createEvent(type, parentEventId) {
