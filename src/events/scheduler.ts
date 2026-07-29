@@ -584,6 +584,28 @@ export async function createEvent(env: Env, type: "ideathon" | "hackathon", pare
   return id;
 }
 
+// Designated cadence anchor (2026-07-29, user instruction): the Arena's
+// monthly cycle is pinned to the 1st of each calendar month, starting with
+// this specific date -- not "1 month after whenever the previous ideathon
+// happened to start," which would drift onto arbitrary mid-month dates
+// (event_bba98005 started the 26th, for example). ARENA_CADENCE_FIRST_START
+// is deliberately in the past relative to any ideathon that starts before
+// it -- computeNextArenaStart clamps up to it, it's a floor, not a delay.
+const ARENA_CADENCE_FIRST_START = Date.UTC(2026, 7, 1); // month is 0-indexed: 7 = August
+
+/**
+ * 1st-of-month on/after `latestIdeathonStartDate`, but never earlier than
+ * ARENA_CADENCE_FIRST_START -- so the very first autonomous cycle lands
+ * exactly on that date regardless of what day of the month the last
+ * (possibly pre-autonomy) ideathon started on, and every cycle after that
+ * falls cleanly on the 1st.
+ */
+export function computeNextArenaStart(latestIdeathonStartDate: string): Date {
+  const latest = new Date(latestIdeathonStartDate.replace(" ", "T") + "Z");
+  if (latest.getTime() < ARENA_CADENCE_FIRST_START) return new Date(ARENA_CADENCE_FIRST_START);
+  return new Date(Date.UTC(latest.getUTCFullYear(), latest.getUTCMonth() + 1, 1));
+}
+
 /**
  * Spec §1: "The Arena is a monthly autonomous AI competition." Everything
  * above this point drives an event that already exists -- nothing actually
@@ -598,13 +620,12 @@ export async function createEvent(env: Env, type: "ideathon" | "hackathon", pare
  *      so this is the only missing link on that side.
  *   2. Once the latest cycle's ideathon AND its hackathon are both done,
  *      the next ideathon auto-starts -- but not the instant the hackathon
- *      completes. It's gated on the calendar reaching one month past the
- *      PREVIOUS ideathon's start_date, so cadence stays anchored to a real
- *      monthly rhythm (spec's own word) instead of chaining cycles
- *      back-to-back whenever one happens to finish early, or drifting later
- *      every month if one runs long. If a cycle overruns past its own next
- *      slot, the next one starts on the very next tick once it's done,
- *      rather than waiting out an entire extra month.
+ *      completes. It's gated on the calendar reaching computeNextArenaStart
+ *      (see above), so cadence stays anchored to the 1st of each month
+ *      instead of chaining cycles back-to-back whenever one happens to
+ *      finish early. If a cycle overruns past its own next slot, the next
+ *      one starts on the very next tick once it's done, rather than
+ *      waiting out an entire extra month.
  *
  * Called once per cron tick from index.ts's scheduled(), alongside (not
  * instead of) the per-event ensurePhaseWorkQueued/processQueue loop that
@@ -635,9 +656,7 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
   ).bind(latest.id, latest.id).first();
   if (stillRunning) return;
 
-  const nextStart = new Date(latest.start_date.replace(" ", "T") + "Z");
-  nextStart.setUTCMonth(nextStart.getUTCMonth() + 1);
-  if (Date.now() >= nextStart.getTime()) {
+  if (Date.now() >= computeNextArenaStart(latest.start_date).getTime()) {
     await createEvent(env, "ideathon", null);
   }
 }
