@@ -1,0 +1,35 @@
+/* Diff view. Prefix: .v-diff__ (plus overrides for diff2html's own markup) */
+
+.v-diff__commits { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+
+.v-diff__commit {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 13px; border-radius: 999px;
+  border: 1px solid var(--arena-line-strong);
+  background: var(--arena-bg-raised);
+  font-size: 0.78rem; color: var(--arena-ink-soft); text-decoration: none;
+  max-width: 100%;
+}
+.v-diff__commit:hover { border-color: var(--arena-clay); color: var(--arena-ink); }
+.v-diff__commit.is-active { border-color: var(--arena-clay); color: var(--arena-clay-deep); background: color-mix(in srgb, var(--arena-clay) 12%, transparent); }
+.v-diff__commit code { font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-clay-deep); }
+.v-diff__commit span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* diff2html ships its own light theme; these keep it inside the design
+   system and readable in dark mode, which its stylesheet does not handle. */
+.d2h-wrapper { color: var(--arena-ink); }
+.d2h-file-header { background: var(--arena-bg-sunken); border-color: var(--arena-line); }
+.d2h-file-name, .d2h-file-stats { color: var(--arena-ink); }
+.d2h-file-wrapper { border-color: var(--arena-line); border-radius: var(--arena-radius-sm); overflow: hidden; }
+.d2h-code-line-ctn, .d2h-code-line-prefix { font-family: var(--arena-font-mono); }
+.d2h-file-list-wrapper { background: var(--arena-bg-raised); border: 1px solid var(--arena-line); border-radius: var(--arena-radius-sm); }
+.d2h-file-list-title, .d2h-file-list-line { color: var(--arena-ink-soft); }
+
+:root[data-theme="dark"] .d2h-diff-table { background: var(--arena-bg-raised); }
+:root[data-theme="dark"] .d2h-code-line, :root[data-theme="dark"] .d2h-code-side-line { color: var(--arena-ink); }
+:root[data-theme="dark"] .d2h-ins { background: color-mix(in srgb, var(--arena-success) 22%, transparent); }
+:root[data-theme="dark"] .d2h-del { background: color-mix(in srgb, var(--arena-danger) 22%, transparent); }
+:root[data-theme="dark"] .d2h-info { background: var(--arena-bg-sunken); color: var(--arena-ink-faint); }
+:root[data-theme="dark"] .d2h-code-linenumber, :root[data-theme="dark"] .d2h-code-side-linenumber {
+  background: var(--arena-bg-sunken); color: var(--arena-ink-faint); border-color: var(--arena-line);
+}

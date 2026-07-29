@@ -1,0 +1,12 @@
+/* Agent Graph. Prefix: .v-graph__ */
+
+.v-graph__legend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; }
+.v-graph__legend-item {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--arena-font-mono); font-size: 0.74rem; color: var(--arena-ink-soft);
+}
+.v-graph__legend-item i { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+.v-graph__count { color: var(--arena-ink-faint); margin-left: auto; }
+
+.v-graph__stage { padding: 8px; overflow: hidden; }
+.v-graph__stage svg { display: block; width: 100%; }

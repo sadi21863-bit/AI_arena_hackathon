@@ -100,24 +100,28 @@ function currentPath() {
 let teardown = null;
 let outlet = null;
 let currentKey = "";
+let mountToken = 0;
 
+/**
+ * `replace: true` means "rewrite the URL to describe what is already on
+ * screen" — a view syncing its own state (the replay scrubber's index, say).
+ * It deliberately does NOT re-resolve: doing so remounts the very view that
+ * asked for it, and since that view sets its state during mount, the result
+ * was an infinite mount -> navigate -> mount loop that hung the page.
+ */
 export function navigate(path, { replace = false } = {}) {
-  if (MODE === "hash") {
-    // Assigning location.hash fires hashchange, which drives resolve().
-    // replaceState avoids stacking history entries for in-place updates
-    // (e.g. the replay scrubber writing its index into the URL).
-    if (replace) history.replaceState({}, "", href(path));
-    else location.hash = path;
-    if (replace) resolve();
-    return;
-  }
   const url = href(path);
-  if (replace) history.replaceState({}, "", url);
-  else history.pushState({}, "", url);
+  if (replace) { history.replaceState({}, "", url); return; }
+  if (MODE === "hash") { location.hash = path; return; }  // fires hashchange
+  history.pushState({}, "", url);
   resolve();
 }
 
 async function resolve() {
+  // Claimed here, BEFORE any await, so tokens follow navigation order. If it
+  // were claimed after the dynamic import, a slower earlier view could take a
+  // higher token than a later one and tear the current view down.
+  const token = ++mountToken;
   const path = currentPath();
   const hit = match(path);
 
@@ -144,7 +148,17 @@ async function resolve() {
     // CSS first and awaited, so the view never paints unstyled for a frame.
     await loadCss(`/css/views/${hit.view}.css`);
     const mod = await import(`/js/views/${hit.view}.js`);
-    teardown = (await mod.mount(outlet, hit.params)) || null;
+
+    // A view that awaits during mount can outlive its own mount: navigate
+    // away before mount() returns and there is no teardown to call yet, so
+    // it keeps going and writes into an outlet the router has already
+    // replaced. If this mount is no longer the current one by the time it
+    // resolves, tear it down immediately rather than leave it running
+    // against detached DOM.
+    if (token !== mountToken) return;
+    const cleanup = (await mod.mount(outlet, hit.params)) || null;
+    if (token !== mountToken) { try { cleanup && cleanup(); } catch { /* already gone */ } return; }
+    teardown = cleanup;
   } catch (err) {
     console.error(err);
     // One bad view must not wedge the shell.
