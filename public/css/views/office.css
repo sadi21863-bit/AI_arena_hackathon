@@ -1,0 +1,181 @@
+/* Agent Office view. Prefix: .v-office__ */
+
+.v-office__room {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 440px;
+  border-radius: var(--arena-radius); overflow: hidden;
+  border: 1px solid var(--arena-line-strong);
+  background: var(--office-floor, #cbbda6);
+}
+:root[data-theme="dark"] .v-office__room { --office-floor: #2b2318; --office-wall: #372c1e; }
+
+/* Floorboards are drawn, not tiled from an image, so they theme cleanly. */
+.v-office__floor {
+  position: absolute; inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent 0 43px, color-mix(in srgb, #000 9%, transparent) 43px 45px),
+    repeating-linear-gradient(90deg, transparent 0 74px, color-mix(in srgb, #000 6%, transparent) 74px 76px);
+}
+.v-office__wall {
+  position: absolute; left: 0; right: 0; top: 0; height: 13%;
+  background: var(--office-wall, #b9a98f);
+  border-bottom: 3px solid color-mix(in srgb, #000 22%, transparent);
+}
+.v-office__wall::after {
+  content: ""; position: absolute; inset: 0;
+  background-image: repeating-linear-gradient(90deg, transparent 0 96px, color-mix(in srgb, #000 7%, transparent) 96px 98px);
+}
+
+/* --- Furniture, CSS-drawn so it needs no extra image assets --- */
+.v-office__prop { position: absolute; transform: translate(-50%, -50%); pointer-events: none; }
+
+.v-office__prop--desk {
+  width: 128px; height: 46px; border-radius: 6px;
+  background: linear-gradient(#a9793f, #8c6132);
+  box-shadow: 0 5px 0 rgba(0,0,0,0.22), inset 0 3px 0 rgba(255,255,255,0.17);
+}
+.v-office__prop--desk::before {
+  content: ""; position: absolute; left: 50%; top: -21px; transform: translateX(-50%);
+  width: 44px; height: 27px; border-radius: 3px;
+  background: #2f3742; border: 2px solid #1d232b; box-shadow: inset 0 0 0 2px #5d7fa6;
+}
+
+.v-office__prop--table {
+  width: 140px; height: 62px; border-radius: 50%;
+  background: linear-gradient(#a9793f, #8a5f31);
+  box-shadow: 0 5px 0 rgba(0,0,0,0.2), inset 0 3px 0 rgba(255,255,255,0.16);
+}
+
+.v-office__prop--board {
+  width: 118px; height: 62px; border-radius: 4px;
+  background: #eee7d7; border: 4px solid #6b5636;
+  box-shadow: 0 4px 0 rgba(0,0,0,0.2);
+  background-image:
+    linear-gradient(120deg, transparent 42%, rgba(120,150,190,0.5) 42% 47%, transparent 47%),
+    linear-gradient(60deg, transparent 55%, rgba(190,120,120,0.45) 55% 60%, transparent 60%);
+}
+
+.v-office__prop--shelf {
+  width: 74px; height: 82px; border-radius: 4px;
+  background: linear-gradient(#8c6132, #6f4b26);
+  box-shadow: 0 4px 0 rgba(0,0,0,0.22);
+  background-image: repeating-linear-gradient(0deg, transparent 0 22px, rgba(0,0,0,0.35) 22px 25px);
+}
+.v-office__prop--shelf::after {
+  content: ""; position: absolute; left: 7px; top: 5px; width: 60px; height: 13px; border-radius: 2px;
+  background: repeating-linear-gradient(90deg, #b4483f 0 7px, #d6a13c 7px 13px, #4f7f9c 13px 20px);
+}
+
+.v-office__prop--couch {
+  width: 122px; height: 44px; border-radius: 10px 10px 6px 6px;
+  background: linear-gradient(#5d7f6d, #47614f);
+  box-shadow: 0 5px 0 rgba(0,0,0,0.22), inset 0 4px 0 rgba(255,255,255,0.12);
+}
+
+.v-office__prop--plant { width: 34px; height: 46px; }
+.v-office__prop--plant::before {
+  content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 22px; height: 17px; border-radius: 3px 3px 5px 5px; background: #a6603a;
+}
+.v-office__prop--plant::after {
+  content: ""; position: absolute; bottom: 13px; left: 50%; transform: translateX(-50%);
+  width: 32px; height: 34px; border-radius: 50% 50% 42% 42%; background: radial-gradient(#5f8a4e, #3f6435);
+}
+
+.v-office__prop--cooler { width: 26px; height: 52px; }
+.v-office__prop--cooler::before {
+  content: ""; position: absolute; bottom: 0; left: 0; width: 26px; height: 32px;
+  border-radius: 3px; background: #d3d8dc; box-shadow: 0 3px 0 rgba(0,0,0,0.2);
+}
+.v-office__prop--cooler::after {
+  content: ""; position: absolute; top: 0; left: 3px; width: 20px; height: 24px;
+  border-radius: 4px 4px 2px 2px; background: rgba(120,180,205,0.85);
+}
+
+.v-office__prop--rug {
+  width: 190px; height: 96px; border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--arena-clay) 34%, transparent), color-mix(in srgb, var(--arena-clay) 16%, transparent));
+}
+
+/* --- Zone labels --- */
+.v-office__zone {
+  position: absolute; transform: translate(-50%, -50%);
+  font-family: var(--arena-font-mono); font-size: 0.66rem; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--arena-ink-faint); white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--arena-bg) 74%, transparent);
+  pointer-events: none;
+}
+.v-office__zone.is-active { color: var(--arena-clay-deep); background: color-mix(in srgb, var(--arena-clay) 22%, transparent); }
+
+/* --- Characters --- */
+.v-office__agent { position: absolute; width: 64px; height: 64px; transform: translate(-50%, -82%); cursor: pointer; }
+.v-office__agent.is-moving { transition: left 1.15s ease-in-out, top 1.15s ease-in-out; }
+.v-office__sprite {
+  /* Fills the parent so character size is defined in exactly one place.
+     The sheet is a 6x5 grid = 600% x 500% of one cell, so frame offsets in
+     % stay correct at any size and JS never needs the pixel dimensions.
+     Source art is pre-rendered 3D, not pixel art — no image-rendering. */
+  width: 100%; height: 100%;
+  background-size: 600% 500%; background-repeat: no-repeat;
+}
+.v-office__agent.is-working .v-office__sprite { animation: office-bob 1.7s ease-in-out infinite; }
+@keyframes office-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+.v-office__agent.is-selected .v-office__sprite { filter: drop-shadow(0 0 0 var(--arena-clay)) drop-shadow(0 0 6px var(--arena-clay)); }
+
+.v-office__name {
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  font-family: var(--arena-font-mono); font-size: 0.66rem; white-space: nowrap;
+  color: var(--arena-ink); background: color-mix(in srgb, var(--arena-bg) 88%, transparent);
+  padding: 1px 6px; border-radius: 4px;
+}
+
+/* Emote bubble: makes "what is it doing" readable without reading text. */
+.v-office__emote {
+  position: absolute; bottom: 84%; left: 50%; transform: translateX(-50%);
+  font-size: 0.86rem; line-height: 1; padding: 3px 6px; border-radius: 9px;
+  background: color-mix(in srgb, var(--arena-bg) 94%, transparent);
+  border: 1px solid var(--arena-line-strong); white-space: nowrap;
+  opacity: 0; transition: opacity 0.25s ease;
+}
+.v-office__emote::after {
+  content: ""; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%);
+  border-left: 4px solid transparent; border-right: 4px solid transparent;
+  border-top: 4px solid var(--arena-line-strong);
+}
+.v-office__agent.has-task .v-office__emote { opacity: 1; }
+.v-office__agent.is-working .v-office__emote { animation: office-emote 2.2s ease-in-out infinite; }
+@keyframes office-emote { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-3px); } }
+
+/* --- Inspector --- */
+.v-office__inspector { padding: 18px 22px; margin-top: 16px; }
+.v-office__inspector-empty { font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-ink-faint); }
+.v-office__inspector-name { font-family: var(--arena-font-display); font-size: 1.16rem; color: var(--arena-ink); }
+.v-office__inspector-lens { font-family: var(--arena-font-mono); font-size: 0.74rem; color: var(--arena-ink-faint); margin-top: 2px; }
+.v-office__inspector-rows { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 13px; }
+.v-office__inspector-rows div { font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
+.v-office__inspector-rows b { color: var(--arena-ink); font-weight: 600; }
+
+/* --- Legend --- */
+.v-office__legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px; }
+.v-office__legend-item { display: flex; align-items: center; gap: 7px; font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
+.v-office__legend-count {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--arena-bg-sunken); border: 1px solid var(--arena-line-strong);
+  font-size: 0.68rem; color: var(--arena-ink);
+}
+
+@media (max-width: 760px) {
+  .v-office__room { aspect-ratio: 3 / 4; }
+  .v-office__prop--desk { width: 84px; height: 32px; }
+  .v-office__prop--desk::before { width: 30px; height: 19px; top: -15px; }
+  .v-office__prop--board, .v-office__prop--table { width: 88px; }
+  .v-office__prop--rug { width: 130px; }
+  .v-office__agent { width: 48px; height: 48px; }
+  .v-office__zone { font-size: 0.58rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v-office__agent.is-moving { transition: none; }
+  .v-office__agent.is-working .v-office__sprite,
+  .v-office__agent.is-working .v-office__emote { animation: none; }
+}
