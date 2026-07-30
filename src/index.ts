@@ -14,7 +14,7 @@ import { listAgents, getAgent, isAgentId, AGENTS } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
-import { ensurePhaseWorkQueued, ensureArenaCadence, createEvent, type EventRow } from "./events/scheduler";
+import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, createEvent, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
@@ -84,10 +84,14 @@ export default {
     // so Cloudflare's own dashboard/logs keep seeing the exception too —
     // this adds visibility, it doesn't swallow the error.
     try {
+      // abandoned_at IS NULL: an event the stall watchdog (below) has given
+      // up on shouldn't keep being handed to ensurePhaseWorkQueued/
+      // processQueue every 5 minutes forever — there's nothing left to drive.
       const events = await env.DB.prepare(
         `SELECT * FROM archive_events
-         WHERE (type = 'ideathon' AND status != 'judged')
-            OR (type = 'hackathon' AND status != 'complete')`
+         WHERE abandoned_at IS NULL
+           AND ((type = 'ideathon' AND status != 'judged')
+             OR (type = 'hackathon' AND status != 'complete'))`
       ).all<EventRow>();
 
       for (const event of events.results) {
@@ -99,6 +103,14 @@ export default {
       // drives events that already exist. This decides whether a new one
       // needs to be created -- see its own header comment in scheduler.ts.
       await ensureArenaCadence(env);
+
+      // Stall watchdog (scheduler.ts) — the last-resort backstop that keeps
+      // one wedged event from silently blocking every future Arena cycle
+      // behind it forever, for a stall shape MAX_ITEM_ATTEMPTS didn't
+      // anticipate. Runs after ensureArenaCadence, not before: an event that
+      // just now crossed its completion threshold shouldn't be judged stale
+      // in the same tick it finished.
+      await checkForStalledEvents(env);
 
       await env.DB.prepare(
         `UPDATE cron_heartbeat SET last_tick_at = datetime('now'), last_success_at = datetime('now'), last_error = NULL WHERE id = 'singleton'`
@@ -153,11 +165,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // this handler).
     if (url.pathname === "/agents/graph" && request.method === "GET") {
       const eventId = url.searchParams.get("event_id");
+      // No JOIN against archive_ideas here (found live, 2026-07-30): an
+      // earlier version of the event-scoped query used `JOIN archive_ideas i
+      // ON x.target_id = i.id`, an INNER JOIN that silently dropped every
+      // interaction whose target_id is an AGENT id, not an idea id —
+      // form_alliance and propose_collaboration (N-1) rows. The unscoped
+      // branch below never had that join and kept them, so scoping the graph
+      // to one event was silently losing exactly the collaboration edges the
+      // memory of adding N-1 called out as worth graphing. Nothing from `i`
+      // was ever selected, so the join served no purpose the WHERE clause
+      // doesn't already serve on its own.
       const edges = await (eventId
         ? env.DB.prepare(
-            `SELECT actor_id, target_id, type, COUNT(*) as weight FROM archive_interactions x
-             JOIN archive_ideas i ON x.target_id = i.id
-             WHERE x.event_id = ? AND x.actor_id IS NOT NULL
+            `SELECT actor_id, target_id, type, COUNT(*) as weight FROM archive_interactions
+             WHERE event_id = ? AND actor_id IS NOT NULL
              GROUP BY actor_id, target_id, type`
           ).bind(eventId)
         : env.DB.prepare(
@@ -169,8 +190,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       // Fold per-idea critique edges into agent-to-agent edges (target_id is
       // an idea id, not an agent id, in archive_interactions) — the graph
       // is agent relationships, so resolve each critiqued idea back to its
-      // author and aggregate by (critic, author).
-      const ideaAuthors = await env.DB.prepare(`SELECT id, agent_id FROM archive_ideas`).all<{ id: string; agent_id: string }>();
+      // author and aggregate by (critic, author). Scoped to the same event
+      // as the edges query above when one was requested — unscoped was a
+      // full-table scan even for a single-event request, and it's also just
+      // the wrong data: an idea's id from a different event can't collide in
+      // practice, but there's no reason to pull every event's ideas to
+      // resolve one event's edges.
+      const ideaAuthors = await (eventId
+        ? env.DB.prepare(`SELECT id, agent_id FROM archive_ideas WHERE event_id = ?`).bind(eventId)
+        : env.DB.prepare(`SELECT id, agent_id FROM archive_ideas`)
+      ).all<{ id: string; agent_id: string }>();
       const authorById = new Map(ideaAuthors.results.map((i) => [i.id, i.agent_id]));
 
       const agentEdges = new Map<string, { source: string; target: string; type: string; weight: number }>();
@@ -234,8 +263,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     if (url.pathname === "/ideas" && request.method === "GET") {
       const eventId = url.searchParams.get("event_id");
+      // Both branches capped now (found live, 2026-07-30): the event-scoped
+      // branch had no LIMIT at all while the unscoped one did — an
+      // inconsistency with no comment explaining it, not a deliberate
+      // "single event needs everything" design choice the way /timeline's
+      // full-replay does. 500 is pure headroom (one event has produced at
+      // most ~40 ideas so far), not a functional cap on real usage.
       const query = eventId
-        ? env.DB.prepare(`SELECT * FROM archive_ideas WHERE event_id = ? ORDER BY created_at DESC`).bind(eventId)
+        ? env.DB.prepare(`SELECT * FROM archive_ideas WHERE event_id = ? ORDER BY created_at DESC LIMIT 500`).bind(eventId)
         : env.DB.prepare(`SELECT * FROM archive_ideas ORDER BY created_at DESC LIMIT 100`);
       const result = await query.all();
       return Response.json(result.results);
@@ -366,9 +401,17 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // whether a gap means "idle" or "not loaded yet".
     const agentActivityMatch = url.pathname.match(/^\/events\/([^/]+)\/agent-activity$/);
     if (agentActivityMatch && request.method === "GET") {
+      // status != 'failed' pushed into the query itself (found live,
+      // 2026-07-30): the RANK table below never assigns a failed row above
+      // rank 0, so every one was always discarded in JS after being fetched
+      // — pure waste that grows with retry-failure history exactly like
+      // event_queue's own accumulation problem the stall watchdog addresses
+      // elsewhere (scheduler.ts). Filtering here changes nothing about which
+      // row wins per agent, only how much dead data crosses the DB boundary
+      // to compute that.
       const rows = await env.DB.prepare(
         `SELECT agent_id, task_type, status, claimed_at, completed_at, scheduled_for
-         FROM event_queue WHERE event_id = ? AND agent_id IS NOT NULL`
+         FROM event_queue WHERE event_id = ? AND agent_id IS NOT NULL AND status != 'failed'`
       ).bind(agentActivityMatch[1]).all<{
         agent_id: string; task_type: string; status: string;
         claimed_at: string | null; completed_at: string | null; scheduled_for: string | null;
@@ -585,6 +628,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/admin/cadence/tick" && request.method === "POST") {
       if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
       await ensureArenaCadence(env);
+      await checkForStalledEvents(env);
       return Response.json({ ok: true });
     }
 

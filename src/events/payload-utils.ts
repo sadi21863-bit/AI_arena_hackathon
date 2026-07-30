@@ -39,6 +39,24 @@ export function countPayloadFieldMatches(rows: Array<{ payload: string | null }>
 }
 
 /**
+ * Per-value failure counts across a whole row set in one pass — used by
+ * scheduler.ts's stall watchdog to find which idea/team/agent has failed a
+ * task_type so many times it should be abandoned rather than retried forever.
+ * countPayloadFieldMatches answers "how many for THIS value"; this answers
+ * "how many for EVERY value", which the watchdog needs since it doesn't know
+ * in advance which key is the stuck one.
+ */
+export function payloadFieldCounts(rows: Array<{ payload: string | null }>, field: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const value = parsePayloadField(row.payload, field);
+    if (value === undefined) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
  * Extracts a required string field from a queue item's payload, throwing a
  * consistent "<taskType> task missing payload.<field>" error if it's
  * absent — replaces 6 near-identical parse+check preambles across

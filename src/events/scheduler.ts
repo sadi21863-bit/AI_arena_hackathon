@@ -30,10 +30,11 @@ import type { Env } from "../env";
 import { AGENTS } from "../agents/personas";
 import { runCalibration } from "../judges/calibration";
 import { pickCrossExamineTarget } from "../tribunal/reflection";
-import { queuedPayloadValues } from "./payload-utils";
+import { queuedPayloadValues, payloadFieldCounts } from "./payload-utils";
 import { enqueue } from "./queue";
 import { pairwiseSimilarities } from "../agents/memory";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
+import { finalizeWithPartialScores } from "../judges/scoring";
 
 /**
  * Ceiling on build turns per team per day. Turns are gated on the previous
@@ -43,6 +44,40 @@ import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
  * finishing early moves on instead of idling until midnight.
  */
 const MAX_BUILD_TURNS_PER_DAY = 6;
+
+/**
+ * Attempt cap for stall prevention. Found live auditing production
+ * (2026-07-30), two days before the autonomous cadence starts: every phase
+ * below is self-healing per item, but the phase-COMPLETION checks
+ * (ensureIdeathonJudging/ensureHackathonJudging waiting for every idea/team to
+ * be judged; isStageComplete waiting for all 12 agents) all require every
+ * item to eventually SUCCEED — there was no cap anywhere, just the existing
+ * time-based backoff. A single permanently-malformed judge response or a
+ * Workers-AI-only task type (Tribunal's `reflect`, no Groq fallback per
+ * router.ts) hitting a real quota wall pins its event below judged/complete
+ * forever, and since ensureArenaCadence's stillRunning guard checks exactly
+ * that status, one stuck event silently stops every future Arena cycle too —
+ * not just its own.
+ *
+ * 6, not something smaller: the existing 2-minute (judging) / 30-minute
+ * (Tribunal) backoffs already absorb ordinary transient failures — this cap
+ * only needs to catch a failure mode that repeats identically every retry,
+ * so it can afford to be generous rather than fast.
+ */
+const MAX_ITEM_ATTEMPTS = 6;
+
+/**
+ * All-time (not just recent, unlike the backoff checks above/below) failure
+ * counts per payload key for one event+task_type, so the caller can tell a
+ * genuinely permanent failure (count >= MAX_ITEM_ATTEMPTS) from an ordinary
+ * one still within its backoff window.
+ */
+async function failedAttemptCounts(env: Env, eventId: string, taskType: string, field: string): Promise<Map<string, number>> {
+  const rows = await env.DB.prepare(
+    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = ? AND status = 'failed'`
+  ).bind(eventId, taskType).all<{ payload: string | null }>();
+  return payloadFieldCounts(rows.results, field);
+}
 
 export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged";
 export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete";
@@ -154,11 +189,28 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   // event over a single low-n (3 anchors) correlation dip, which is a worse
   // failure mode than proceeding with a flagged low-confidence judging pass.
 
-  const unjudged = await env.DB.prepare(
+  const architectureComplete = await env.DB.prepare(
     `SELECT id FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
   ).bind(eventId).all<{ id: string }>();
 
-  if (unjudged.results.length === 0) {
+  // Stall watchdog (MAX_ITEM_ATTEMPTS, see constant above): an idea whose
+  // judging has failed this many times is treated as judged with whatever
+  // judge_scores rows already exist, rather than blocking status='judged'
+  // (and every future Arena cycle behind it) on a judge that will never
+  // succeed. Checked before re-queuing below so an abandoned idea is neither
+  // finalized-and-then-immediately-re-enqueued nor left stuck forever.
+  const judgeFailureCounts = await failedAttemptCounts(env, eventId, "judge_idea", "ideaId");
+  const unjudged: { id: string }[] = [];
+  for (const idea of architectureComplete.results) {
+    if ((judgeFailureCounts.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
+      const score = await finalizeWithPartialScores(env, { targetType: "idea", targetId: idea.id, phase: "ideathon" });
+      await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(score, idea.id).run();
+    } else {
+      unjudged.push(idea);
+    }
+  }
+
+  if (unjudged.length === 0) {
     // Nothing left mid-judging (either all judged, or nothing ever reached
     // architecture_complete) — either way there's nothing more to queue.
     await env.DB.prepare(`UPDATE archive_events SET status = 'judged' WHERE id = ?`).bind(eventId).run();
@@ -197,7 +249,7 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   ).bind(eventId).all<{ payload: string | null }>();
   const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "ideaId");
 
-  for (const idea of unjudged.results) {
+  for (const idea of unjudged) {
     if (!alreadyQueued.has(idea.id) && !inBackoff.has(idea.id)) {
       await enqueue(env, { eventId, taskType: "judge_idea", payload: { ideaId: idea.id }, priority: 2 });
     }
@@ -305,11 +357,33 @@ async function ensurePostBuildWork(env: Env, event: EventRow): Promise<Hackathon
 }
 
 async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
-  const unjudged = await env.DB.prepare(
-    `SELECT id FROM hackathon_teams WHERE event_id = ? AND status != 'judged'`
-  ).bind(eventId).all<{ id: string }>();
+  const notYetJudged = await env.DB.prepare(
+    `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? AND status != 'judged'`
+  ).bind(eventId).all<{ id: string; idea_id: string }>();
 
-  if (unjudged.results.length === 0) {
+  // Stall watchdog (MAX_ITEM_ATTEMPTS) — same reasoning as
+  // ensureIdeathonJudging above: a team whose judging has failed this many
+  // times is finalized from whatever judge_scores rows already exist rather
+  // than blocking status='judged' (and Tribunal, and every future Arena
+  // cycle) on a judge that will never succeed. finalScore uses the same
+  // ideathon 30% / hackathon 70% weights as handleJudgeTeam's success path
+  // (executor.ts) — this only changes how the hackathon-side number was
+  // obtained, not the blend.
+  const judgeFailureCounts = await failedAttemptCounts(env, eventId, "judge_team", "teamId");
+  const unjudged: { id: string; idea_id: string }[] = [];
+  for (const team of notYetJudged.results) {
+    if ((judgeFailureCounts.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
+      const hackathonScore = await finalizeWithPartialScores(env, { targetType: "team", targetId: team.id, phase: "hackathon" });
+      const idea = await env.DB.prepare(`SELECT ideathon_score FROM archive_ideas WHERE id = ?`).bind(team.idea_id).first<{ ideathon_score: number | null }>();
+      const finalScore = (idea?.ideathon_score ?? 0) * 0.3 + hackathonScore * 0.7;
+      await env.DB.prepare(`UPDATE hackathon_teams SET hackathon_score = ?, final_score = ?, status = 'judged' WHERE id = ?`)
+        .bind(hackathonScore, finalScore, team.id).run();
+    } else {
+      unjudged.push(team);
+    }
+  }
+
+  if (unjudged.length === 0) {
     const winner = await env.DB.prepare(
       `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? ORDER BY final_score DESC LIMIT 1`
     ).bind(eventId).first<{ id: string; idea_id: string }>();
@@ -332,7 +406,7 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   ).bind(eventId).all<{ payload: string | null }>();
   const inBackoff = queuedPayloadValues(recentJudgeFailures.results, "teamId");
 
-  for (const team of unjudged.results) {
+  for (const team of unjudged) {
     if (!alreadyQueued.has(team.id) && !inBackoff.has(team.id)) {
       await enqueue(env, { eventId, taskType: "judge_team", payload: { teamId: team.id }, priority: 2 });
     }
@@ -413,6 +487,18 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
   ).bind(eventId, agentId, taskType).first<{ n: number }>();
   if ((nonFailed?.n ?? 0) > 0) return false; // already covered by a pending/in_progress/completed item
 
+  // Stall watchdog (MAX_ITEM_ATTEMPTS) — an agent whose Tribunal item has
+  // failed this many times (all-time, unlike the recency check below) is
+  // permanently abandoned rather than retried forever. isStageComplete
+  // (below) treats this same threshold as satisfying the stage for this
+  // agent, so this doesn't reintroduce the stall it's meant to prevent —
+  // it just stops the otherwise-endless 30-minute retry loop for an item
+  // that isStageComplete has already decided not to keep waiting on.
+  const totalFailures = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed'`
+  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+  if ((totalFailures?.n ?? 0) >= MAX_ITEM_ATTEMPTS) return false;
+
   const recentFailure = await env.DB.prepare(
     `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed' AND completed_at >= datetime('now', ?)`
   ).bind(eventId, agentId, taskType, `-${backoffMinutes} minutes`).first<{ n: number }>();
@@ -434,12 +520,34 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
  * status='judged' indefinitely despite all 12 tribunal_reflect agents
  * having succeeded. Counting DISTINCT agent_id with status='completed'
  * is immune to however much failed-retry history exists.
+ *
+ * Stall watchdog addition (2026-07-30, MAX_ITEM_ATTEMPTS): an agent whose
+ * item has failed >= MAX_ITEM_ATTEMPTS times counts toward the threshold too,
+ * same as a completed one, because shouldEnqueueForAgent stops retrying that
+ * exact agent at that exact threshold — without this, such an agent would be
+ * neither retried nor ever counted, permanently pinning the stage one agent
+ * short of AGENTS.length. Tribunal reflections/cross-exams/syntheses have no
+ * partial-credit concept the way judge scoring does (there's no separate
+ * "whatever succeeded" table to fall back to) — advancing without that
+ * agent's contribution, rather than never advancing, is the point.
  */
 async function isStageComplete(env: Env, eventId: string, taskType: string): Promise<boolean> {
-  const completedAgents = await env.DB.prepare(
-    `SELECT COUNT(DISTINCT agent_id) as n FROM event_queue WHERE event_id = ? AND task_type = ? AND status = 'completed'`
-  ).bind(eventId, taskType).first<{ n: number }>();
-  return (completedAgents?.n ?? 0) >= AGENTS.length;
+  const rows = await env.DB.prepare(
+    `SELECT agent_id, status FROM event_queue WHERE event_id = ? AND task_type = ? AND agent_id IS NOT NULL`
+  ).bind(eventId, taskType).all<{ agent_id: string; status: string }>();
+
+  const completedAgents = new Set<string>();
+  const failedCounts = new Map<string, number>();
+  for (const row of rows.results) {
+    if (row.status === "completed") completedAgents.add(row.agent_id);
+    else if (row.status === "failed") failedCounts.set(row.agent_id, (failedCounts.get(row.agent_id) ?? 0) + 1);
+  }
+
+  let doneCount = 0;
+  for (const agent of AGENTS) {
+    if (completedAgents.has(agent.id) || (failedCounts.get(agent.id) ?? 0) >= MAX_ITEM_ATTEMPTS) doneCount++;
+  }
+  return doneCount >= AGENTS.length;
 }
 
 /** Non-failed count of a task_type queued for one agent in this event — the per-agent idempotency primitive used below. */
@@ -687,13 +795,58 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
     return;
   }
 
+  // abandoned_at IS NULL on both clauses: checkForStalledEvents (below) is
+  // the last-resort backstop for a stall MAX_ITEM_ATTEMPTS didn't anticipate
+  // — without excluding it here, an abandoned event whose status never
+  // reaches judged/complete would keep this returning early forever, which
+  // is exactly the failure mode both mechanisms exist to prevent.
   const stillRunning = await env.DB.prepare(
-    `SELECT 1 FROM archive_events WHERE (id = ? AND status != 'judged')
-        OR (parent_event_id = ? AND status != 'complete')`
+    `SELECT 1 FROM archive_events WHERE (id = ? AND status != 'judged' AND abandoned_at IS NULL)
+        OR (parent_event_id = ? AND status != 'complete' AND abandoned_at IS NULL)`
   ).bind(latest.id, latest.id).first();
   if (stillRunning) return;
 
   if (Date.now() >= computeNextArenaStart(latest.start_date).getTime()) {
     await createEvent(env, "ideathon", null);
+  }
+}
+
+// Generous on purpose: MAX_ITEM_ATTEMPTS above already closes the two known
+// infinite-stall causes (judging, Tribunal). This is the backstop for a stall
+// shaped some OTHER way — team_formation wedged, a phase handler throwing on
+// every tick before it reaches the queue, anything not anticipated here — so
+// it needs to outlast legitimate slow recovery (a Workers AI daily quota
+// exhaustion can take most of a day to clear) rather than fire fast. Getting
+// this wrong in the aggressive direction — abandoning an event that would
+// have recovered on its own — is worse than a slow safety net, since
+// abandonment has no undo.
+const STALL_ABANDON_HOURS = 25;
+
+/**
+ * Marks an event abandoned once it's gone STALL_ABANDON_HOURS with zero real
+ * progress (last_progress_at, touched only by queue.ts's markCompleted on an
+ * actual success — see its comment). Deliberately does not try to route
+ * around whatever's actually stuck; it just stops that ONE event from
+ * blocking every future Arena cycle behind it (ensureArenaCadence's
+ * stillRunning check above), which is the actual harm a silent stall causes.
+ * Called once per cron tick from index.ts's scheduled(), same as
+ * ensureArenaCadence.
+ */
+export async function checkForStalledEvents(env: Env): Promise<void> {
+  const active = await env.DB.prepare(
+    `SELECT id, status, created_at, last_progress_at FROM archive_events
+     WHERE abandoned_at IS NULL
+       AND ((type = 'ideathon' AND status != 'judged') OR (type = 'hackathon' AND status != 'complete'))`
+  ).all<{ id: string; status: string; created_at: string; last_progress_at: string | null }>();
+
+  for (const event of active.results) {
+    const reference = event.last_progress_at ?? event.created_at;
+    const staleSince = new Date(reference.includes("T") ? reference : reference.replace(" ", "T") + "Z");
+    const hoursStale = (Date.now() - staleSince.getTime()) / (60 * 60 * 1000);
+    if (hoursStale < STALL_ABANDON_HOURS) continue;
+
+    await env.DB.prepare(
+      `UPDATE archive_events SET abandoned_at = datetime('now'), abandoned_reason = ? WHERE id = ?`
+    ).bind(`No progress for over ${STALL_ABANDON_HOURS}h — stuck at status '${event.status}'`, event.id).run();
   }
 }

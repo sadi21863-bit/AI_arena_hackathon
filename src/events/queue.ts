@@ -65,10 +65,15 @@ export async function claimNext(env: Env): Promise<QueueItem | null> {
   return result ?? null;
 }
 
-export async function markCompleted(env: Env, id: number): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE event_queue SET status = 'completed', completed_at = datetime('now') WHERE id = ?`
-  ).bind(id).run();
+export async function markCompleted(env: Env, id: number, eventId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE event_queue SET status = 'completed', completed_at = datetime('now') WHERE id = ?`).bind(id),
+    // last_progress_at is the stall watchdog's only signal (scheduler.ts
+    // checkForStalledEvents) — touched on real success only, deliberately not
+    // on every claim/failure, so a pure failure-retry loop still reads as
+    // stalled instead of looking active.
+    env.DB.prepare(`UPDATE archive_events SET last_progress_at = datetime('now') WHERE id = ?`).bind(eventId),
+  ]);
 }
 
 export async function markFailed(env: Env, id: number, errorMessage: string): Promise<void> {

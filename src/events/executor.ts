@@ -508,7 +508,7 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
         case "tribunal_cross_examine": await handleTribunalCrossExamineItem(env, item, agent!); break;
         case "tribunal_synthesize": await handleTribunalSynthesize(env, item.event_id, agent!); break;
       }
-      await markCompleted(env, item.id);
+      await markCompleted(env, item.id, item.event_id);
       processed++;
     } catch (err) {
       await markFailed(env, item.id, err instanceof Error ? err.message : String(err));

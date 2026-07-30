@@ -145,19 +145,51 @@ export async function scoreTarget(
 
   const existingTotal = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
   const newTotal = newResults.reduce((sum, r) => sum + r.score * r.weight, 0);
+  const collaborationBonus = await collaborationBonusFor(env, opts.targetType, opts.targetId);
 
-  // +0.5 collaboration bonus (spec §4, N-1 — ARENA_BACKLOG.md): applies once
-  // an idea has merged (agents/interactions.ts mergeIdeas sets co_agent_id),
-  // and carries through to hackathon team scoring too since the team is
-  // built from that same merged idea. Resolves target -> idea id first since
-  // scoreTarget serves both 'idea' (ideathon) and 'team' (hackathon) phases.
-  const ideaId = opts.targetType === "idea"
-    ? opts.targetId
-    : (await env.DB.prepare(`SELECT idea_id FROM hackathon_teams WHERE id = ?`).bind(opts.targetId).first<{ idea_id: string }>())?.idea_id;
+  return Math.min(10, existingTotal + newTotal + collaborationBonus);
+}
+
+/**
+ * +0.5 collaboration bonus (spec §4, N-1 — ARENA_BACKLOG.md): applies once an
+ * idea has merged (agents/interactions.ts mergeIdeas sets co_agent_id), and
+ * carries through to hackathon team scoring too since the team is built from
+ * that same merged idea. Resolves target -> idea id first since scoreTarget
+ * (and finalizeWithPartialScores below) serve both 'idea' (ideathon) and
+ * 'team' (hackathon) phases.
+ */
+async function collaborationBonusFor(env: Env, targetType: "idea" | "team", targetId: string): Promise<number> {
+  const ideaId = targetType === "idea"
+    ? targetId
+    : (await env.DB.prepare(`SELECT idea_id FROM hackathon_teams WHERE id = ?`).bind(targetId).first<{ idea_id: string }>())?.idea_id;
   const isMerged = ideaId
     ? !!(await env.DB.prepare(`SELECT 1 FROM archive_ideas WHERE id = ? AND co_agent_id IS NOT NULL`).bind(ideaId).first())
     : false;
-  const collaborationBonus = isMerged ? 0.5 : 0;
+  return isMerged ? 0.5 : 0;
+}
 
-  return Math.min(10, existingTotal + newTotal + collaborationBonus);
+/**
+ * Finalizes a target's score from whatever judge_scores rows already exist,
+ * without attempting any further inference — for scheduler.ts's stall
+ * watchdog (MAX_ITEM_ATTEMPTS), which calls this once a judge has failed on a
+ * target so many times that waiting for it to eventually succeed would stall
+ * the whole event's judged/complete transition (and, via ensureArenaCadence's
+ * stillRunning check, every future Arena cycle behind it) forever.
+ *
+ * Same weighted-sum + collaboration-bonus math as scoreTarget's own tail —
+ * this is deliberately "judge with whoever answered", the same standard
+ * Promise.allSettled already applies within one scoring attempt, just applied
+ * across attempts instead of within one.
+ */
+export async function finalizeWithPartialScores(
+  env: Env,
+  opts: { targetType: "idea" | "team"; targetId: string; phase: "ideathon" | "hackathon" }
+): Promise<number> {
+  const existing = await env.DB.prepare(
+    `SELECT score, weight FROM judge_scores WHERE target_type = ? AND target_id = ? AND phase = ?`
+  ).bind(opts.targetType, opts.targetId, opts.phase).all<{ score: number; weight: number }>();
+
+  const total = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
+  const collaborationBonus = await collaborationBonusFor(env, opts.targetType, opts.targetId);
+  return Math.min(10, total + collaborationBonus);
 }
