@@ -12,6 +12,7 @@ import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
 import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
+import { chroniclePhase } from "../agents/chronicle";
 import { createTeamRepo } from "../github/repos";
 import { dispatchBuildTurn } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
@@ -596,6 +597,7 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
         case "tribunal_reflect": await handleTribunalReflectItem(env, item, agent!); break;
         case "tribunal_cross_examine": await handleTribunalCrossExamineItem(env, item, agent!); break;
         case "tribunal_synthesize": await handleTribunalSynthesize(env, item.event_id, agent!); break;
+        case "chronicle": await chroniclePhase(env, item.event_id, requirePayloadField(item.payload, "phase", "chronicle")); break;
       }
       await markCompleted(env, item.id, item.event_id);
       processed++;

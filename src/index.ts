@@ -526,6 +526,17 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       );
     }
 
+    // N-7: the Chronicler's per-phase commentary. Public, same tier as
+    // /timeline and /teams — it is derived entirely from data already exposed
+    // by those routes, just written for a reader instead of a parser.
+    const chronicleMatch = url.pathname.match(/^\/events\/([^/]+)\/chronicle$/);
+    if (chronicleMatch && request.method === "GET") {
+      const entries = await env.DB.prepare(
+        `SELECT phase, narrative, created_at FROM event_chronicle WHERE event_id = ? ORDER BY created_at ASC`
+      ).bind(chronicleMatch[1]).all();
+      return Response.json(entries.results);
+    }
+
     const judgeScoresMatch = url.pathname.match(/^\/events\/([^/]+)\/judge-scores$/);
     if (judgeScoresMatch && request.method === "GET") {
       const scores = await env.DB.prepare(

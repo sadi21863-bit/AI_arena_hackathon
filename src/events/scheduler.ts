@@ -33,6 +33,7 @@ import { pickCrossExamineTarget } from "../tribunal/reflection";
 import { queuedPayloadValues, payloadFieldCounts } from "./payload-utils";
 import { enqueue } from "./queue";
 import { pairwiseSimilarities } from "../agents/memory";
+import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
 import { finalizeWithPartialScores } from "../judges/scoring";
 
@@ -132,6 +133,12 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
 
   if (phase !== event.status) {
     await env.DB.prepare(`UPDATE archive_events SET status = ? WHERE id = ?`).bind(phase, event.id).run();
+    // N-7: narrate the phase that just ENDED (event.status), not the one
+    // starting — the outgoing phase is the one with a completed story to
+    // tell. Queued rather than called inline so a slow or failing summarize
+    // call can't delay the transition it describes; the queue's existing
+    // retry/backoff covers it like any other work.
+    await enqueue(env, { eventId: event.id, taskType: "chronicle", payload: { phase: event.status }, priority: 8 });
   }
 
   if (phase === "ready_for_judging") {
@@ -390,6 +397,12 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
     await env.DB.prepare(
       `UPDATE archive_events SET status = 'judged', winner_team_id = ?, winning_idea_id = ? WHERE id = ?`
     ).bind(winner?.id ?? null, winner?.idea_id ?? null, eventId).run();
+
+    // N-5: rate the agents now that both sides have final scores. Guarded
+    // against replay by its own marker (agents/ratings.ts), which matters
+    // because this branch is reachable on any later tick — everything else
+    // here is safely idempotent, Elo is not.
+    await applyEventRatings(env, eventId);
     return "judged";
   }
 

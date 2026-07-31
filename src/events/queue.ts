@@ -18,7 +18,8 @@ export type TaskType =
   | "research" | "submit_idea" | "critique" | "propose_collaboration" | "architecture"
   | "team_formation" | "dispatch_build_turn"
   | "judge_idea" | "judge_team"
-  | "tribunal_reflect" | "tribunal_cross_examine" | "tribunal_synthesize";
+  | "tribunal_reflect" | "tribunal_cross_examine" | "tribunal_synthesize"
+  | "chronicle";
 export type QueueStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface QueueItem {

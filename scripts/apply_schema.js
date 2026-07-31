@@ -63,6 +63,8 @@ const MIGRATIONS = [
   { file: "schema_team_members.sql", sentinel: { type: "table", name: "hackathon_team_members" } },
   { file: "schema_week8_event_id_indexes.sql", sentinel: { type: "index", name: "idx_event_queue_event" } },
   { file: "schema_week8_stall_tracking.sql", sentinel: { type: "column", table: "archive_events", name: "last_progress_at" } },
+  { file: "schema_week8_agent_ratings.sql", sentinel: { type: "column", table: "archive_agents", name: "elo_rating" } },
+  { file: "schema_week8_chronicle.sql", sentinel: { type: "table", name: "event_chronicle" } },
 ];
 
 function wrangler(args) {
