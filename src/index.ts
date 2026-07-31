@@ -572,6 +572,79 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(entries.results);
     }
 
+    // P3 (docs/OFFICE_INVESTIGATION_2026-07-31.md G3): what each agent has
+    // actually PRODUCED, so the Office can show the work instead of a single
+    // emoji. The room knew who was standing where and nothing about what was
+    // being made — every comparable project renders the content, we rendered
+    // 💡.
+    //
+    // Latest artefact of each kind per agent, resolved client-side against
+    // whatever that agent is currently doing. Kept separate from
+    // /agent-activity deliberately: that endpoint is the positioning data and
+    // is polled on every tick, and it should stay a single cheap query rather
+    // than growing three joins for something the room only displays on
+    // hover.
+    //
+    // Text is truncated here, not in the browser: these are LLM outputs with
+    // no length bound, and a speech bubble has no use for 4KB of prose.
+    const artifactsMatch = url.pathname.match(/^\/events\/([^/]+)\/agent-artifacts$/);
+    if (artifactsMatch && request.method === "GET") {
+      const eventId = artifactsMatch[1];
+      const CLIP = 240;
+      const clip = (s: unknown) => {
+        const text = typeof s === "string" ? s.trim() : "";
+        return text.length > CLIP ? text.slice(0, CLIP - 1) + "…" : text;
+      };
+
+      const [ideas, critiques, reflections] = await Promise.all([
+        env.DB.prepare(
+          `SELECT id, agent_id, title, one_liner, status FROM archive_ideas
+            WHERE event_id = ? ORDER BY created_at DESC LIMIT 100`
+        ).bind(eventId).all<{ id: string; agent_id: string; title: string; one_liner: string; status: string }>(),
+        // LEFT JOIN, not INNER: a critique whose target idea was merged away
+        // (N-1) still says something real about the critic, and dropping it
+        // would silently blank that agent's bubble.
+        env.DB.prepare(
+          `SELECT x.actor_id, x.content, i.title AS target_title
+             FROM archive_interactions x
+             LEFT JOIN archive_ideas i ON i.id = x.target_id
+            WHERE x.event_id = ? AND x.type = 'critique'
+            ORDER BY x.timestamp DESC LIMIT 200`
+        ).bind(eventId).all<{ actor_id: string; content: string | null; target_title: string | null }>(),
+        env.DB.prepare(
+          `SELECT agent_id, reflection_type, content FROM tribunal_reflections
+            WHERE event_id = ? ORDER BY created_at ASC LIMIT 100`
+        ).bind(eventId).all<{ agent_id: string; reflection_type: string; content: string }>(),
+      ]);
+
+      const out: Record<string, Record<string, unknown>> = {};
+      const slot = (agentId: string) => (out[agentId] ||= {});
+
+      // Rows arrive newest-first, so the first one seen per agent wins.
+      for (const idea of ideas.results) {
+        const s = slot(idea.agent_id);
+        if (!s.idea) s.idea = { id: idea.id, title: idea.title, one_liner: clip(idea.one_liner), status: idea.status };
+      }
+      for (const c of critiques.results) {
+        if (!c.actor_id) continue;
+        const s = slot(c.actor_id);
+        if (s.critique) continue;
+        // Stored as JSON by critiqueIdea; show the weakness, which is the
+        // substantive half of a critique. Fall back to the raw string so a
+        // malformed row degrades to something readable rather than nothing.
+        let weakness = "";
+        try { weakness = JSON.parse(c.content || "{}")?.weakness ?? ""; } catch { weakness = c.content || ""; }
+        s.critique = { target_title: c.target_title, weakness: clip(weakness) };
+      }
+      // Reflections are ASC so the LAST wins — the Tribunal's three stages run
+      // in order and the newest stage is the interesting one.
+      for (const r of reflections.results) {
+        slot(r.agent_id).reflection = { type: r.reflection_type, excerpt: clip(r.content) };
+      }
+
+      return Response.json(out);
+    }
+
     // P2 (docs/OFFICE_INVESTIGATION_2026-07-31.md G2): the Agent Office needs
     // per-turn build state to show anything at all during a hackathon, when
     // building is team-level GitHub Actions work and no agent has a queue row.

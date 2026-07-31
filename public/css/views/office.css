@@ -174,6 +174,42 @@
   border: 1px solid color-mix(in srgb, var(--arena-danger, #b3402f) 45%, transparent);
 }
 
+/* --- P3: speech bubbles ------------------------------------------------
+   Hidden until hover or selection: twelve permanently-open bubbles would
+   cover the room they are describing. `visibility` rather than `display` so
+   the box is measured up-front and does not reflow on first hover. */
+.v-office__bubble {
+  position: absolute; left: 50%; bottom: calc(100% + 16px); transform: translateX(-50%);
+  width: max-content; max-width: 210px; z-index: 400;
+  padding: 7px 9px; border-radius: 8px;
+  background: var(--arena-bg); border: 1px solid var(--arena-line-strong);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.16);
+  font-family: var(--arena-font-mono); font-size: 0.66rem; line-height: 1.45;
+  color: var(--arena-ink-soft); text-align: left;
+  opacity: 0; visibility: hidden; transition: opacity 0.12s ease;
+  pointer-events: none; /* never steal the click that selects the character */
+}
+.v-office__bubble b { display: block; color: var(--arena-ink); font-weight: 600; margin-bottom: 2px; }
+.v-office__bubble::after {
+  /* --bubble-shift is set by the edge clamp in office.js: when the bubble is
+     nudged away from a wall, the tail moves back the same distance so it keeps
+     pointing at its own character rather than sliding off them. */
+  content: ""; position: absolute; top: 100%; left: 50%;
+  transform: translateX(calc(-50% + var(--bubble-shift, 0px)));
+  border: 5px solid transparent; border-top-color: var(--arena-line-strong);
+}
+.v-office__agent:hover .v-office__bubble,
+.v-office__agent:focus-visible .v-office__bubble,
+.v-office__agent.is-selected .v-office__bubble { opacity: 1; visibility: visible; }
+.v-office__bubble[data-kind="critique"] b { color: var(--arena-clay-deep); }
+.v-office__bubble[data-kind="reflection"] b { color: var(--arena-ink-faint); }
+
+/* --- P3: Chronicler caption --- */
+.v-office__chronicle {
+  margin: 12px 2px 0; font-family: var(--arena-font-mono); font-size: 0.76rem;
+  line-height: 1.6; color: var(--arena-ink-faint); font-style: italic;
+}
+
 /* --- P2: build-turn holder + per-team CI ------------------------------- */
 .v-office__agent.is-turn-holder::after {
   content: ""; position: absolute; left: 50%; bottom: -3px;
@@ -229,6 +265,10 @@
   .v-office__prop--rug { width: 130px; }
   .v-office__agent { width: 48px; height: 48px; }
   .v-office__zone { font-size: 0.58rem; }
+  /* 210px inside a ~335px room is most of the wall. The JS clamp keeps it in
+     bounds either way, but a bubble that wide covers the character it belongs
+     to and its neighbours. */
+  .v-office__bubble { max-width: 150px; font-size: 0.62rem; }
 }
 @media (prefers-reduced-motion: reduce) {
   .v-office__agent.is-moving { transition: none; }

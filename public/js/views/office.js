@@ -120,6 +120,8 @@ export async function mount(el, params) {
   const latest = {};
   let selectedId = null;
   let built = false;
+  /* agent_id -> { idea, critique, reflection }, the work itself (P3). */
+  let artifacts = {};
   /* agent_id -> roster row, populated for hackathons only. */
   let rosterByAgent = {};
   /* team_id -> latest build turn, for the CI badge on each bench. */
@@ -128,6 +130,37 @@ export async function mount(el, params) {
   let turnHolder = {};
   let ZONES = IDEATHON_ZONES;
   let ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+
+  /**
+   * P3: what this agent is currently making, as one short line.
+   *
+   * Matched to what they are DOING rather than just showing the newest thing
+   * they produced — an agent at Critique Corner should be quoting its critique
+   * even if it wrote an idea more recently. Returns null when there is nothing
+   * real to say, and the bubble is then not rendered at all: an empty bubble
+   * is worse than none, and inventing filler would repeat exactly the failure
+   * (plausible text standing in for real work) this project keeps hitting.
+   */
+  function bubbleFor(agent) {
+    const art = artifacts[agent.agent_id];
+    if (!art) return null;
+    const zone = taskInfo(agent.task_type) ? TASK[agent.task_type].zone : null;
+
+    if (zone === "critique" && art.critique?.weakness) {
+      return { kind: "critique", lead: art.critique.target_title ? `on “${art.critique.target_title}”` : "critique", text: art.critique.weakness };
+    }
+    if (zone === "tribunal" && art.reflection?.excerpt) {
+      return { kind: "reflection", lead: String(art.reflection.type || "").replace("_", " "), text: art.reflection.excerpt };
+    }
+    if ((zone === "idea" || zone === "architecture") && art.idea?.title) {
+      return { kind: "idea", lead: art.idea.title, text: art.idea.one_liner };
+    }
+    // Idle or at a bench: the last thing they actually shipped is still the
+    // most informative thing about them.
+    if (art.idea?.title) return { kind: "idea", lead: art.idea.title, text: art.idea.one_liner };
+    if (art.critique?.weakness) return { kind: "critique", lead: "last critique", text: art.critique.weakness };
+    return null;
+  }
 
   /**
    * Where an agent stands. A real per-agent task always wins — during the
@@ -160,6 +193,7 @@ export async function mount(el, params) {
     </div>
     <div id="of-note"></div>
     <div id="of-stage"><div class="arena-skel arena-skel--block" style="min-height:440px"></div></div>
+    <p class="v-office__chronicle" id="of-chronicle" hidden></p>
     <div class="arena-card v-office__inspector" id="of-inspector">
       <div class="v-office__inspector-empty">Click a character to see what they're working on.</div>
     </div>
@@ -219,6 +253,42 @@ export async function mount(el, params) {
     node.settleTimer = setTimeout(() => { stopWalk(node); setFrame(node, ROW.idle, 0); }, MOVE_MS + 60);
   }
 
+  /**
+   * Keep every bubble inside the walls.
+   *
+   * Same reason the sprite clamp in draw() exists, and the same failure mode
+   * the header comment already warns about: the bubble is a fixed PIXEL width
+   * centred on a PERCENTAGE position, so an agent near a wall (Critique Corner
+   * sits at 83%) pushes it straight through. Found overflowing by 7px on
+   * desktop and 33px on mobile during verification.
+   *
+   * Must run on resize, not only on a data tick — draw() fires when the queue
+   * changes, which can be minutes apart, so a window resize in between would
+   * otherwise leave every bubble clamped to the old room width.
+   */
+  function clampBubbles() {
+    const roomEl = el.querySelector("#of-room");
+    if (!roomEl) return;
+    const width = roomEl.getBoundingClientRect().width;
+    if (!width) return;
+    const margin = 6;
+
+    Object.values(nodes).forEach((node) => {
+      const b = node.bubbleEl;
+      if (!b || b.hidden) return;
+      const half = b.offsetWidth / 2;
+      const centre = (node.x / 100) * width;
+      let shift = 0;
+      if (centre - half < margin) shift = margin - (centre - half);
+      else if (centre + half > width - margin) shift = (width - margin) - (centre + half);
+      shift = Math.round(shift);
+      b.style.transform = `translateX(calc(-50% + ${shift}px))`;
+      // The tail moves back by the same amount so it keeps pointing at its own
+      // character instead of sliding off them.
+      b.style.setProperty("--bubble-shift", `${-shift}px`);
+    });
+  }
+
   function drawInspector() {
     const a = selectedId && latest[selectedId];
     if (!a) {
@@ -271,6 +341,7 @@ export async function mount(el, params) {
           </div>`)}
         ${agents.filter((a) => CAST[a.agent_id]).map((a) => html`
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
+            <div class="v-office__bubble" hidden></div>
             <div class="v-office__emote"></div>
             <div class="v-office__sprite" style="background-image:url(/observatory/assets/office/sprites/${CAST[a.agent_id].sprite}.webp)${CAST[a.agent_id].filter ? `;filter:${CAST[a.agent_id].filter}` : ""}"></div>
             <div class="v-office__name">${a.name}</div>
@@ -284,6 +355,7 @@ export async function mount(el, params) {
         el: node,
         spriteEl: node.querySelector(".v-office__sprite"),
         emoteEl: node.querySelector(".v-office__emote"),
+        bubbleEl: node.querySelector(".v-office__bubble"),
         x: 50, y: 74,          // everyone starts at the break area and walks out
         walkTimer: null, settleTimer: null,
       };
@@ -347,6 +419,28 @@ export async function mount(el, params) {
           : struggling
             ? `${a.name} · ${a.failed_attempts} failed ${a.failed_task_type} attempt(s), still retrying`
             : `${a.name}${info ? ` · ${info.label}` : " · idle"}${a.status ? ` (${a.status})` : ""}`;
+
+        // P3: the work itself. Rendered as text nodes rather than innerHTML —
+        // every string here is LLM output, and it reaches the DOM without
+        // passing through the template escaper.
+        const bubble = bubbleFor(a);
+        if (node.bubbleEl) {
+          node.bubbleEl.textContent = "";
+          if (bubble) {
+            const lead = document.createElement("b");
+            lead.textContent = bubble.lead;
+            node.bubbleEl.append(lead);
+            if (bubble.text) {
+              const body = document.createElement("span");
+              body.textContent = bubble.text;
+              node.bubbleEl.append(body);
+            }
+            node.bubbleEl.hidden = false;
+            node.bubbleEl.dataset.kind = bubble.kind;
+          } else {
+            node.bubbleEl.hidden = true;
+          }
+        }
       });
     });
 
@@ -374,8 +468,20 @@ export async function mount(el, params) {
     render(legendEl, html`${ZONES.map((z) => html`
       <div class="v-office__legend-item"><span class="v-office__legend-count">${(perZone[z.id] || []).length}</span>${z.label}</div>`)}`);
 
+    clampBubbles();
     drawInspector();
   }
+
+  // Bubble geometry depends on the room's pixel width, which changes on
+  // resize without any data changing — so it cannot ride on the data tick.
+  // rAF-coalesced because resize fires continuously while dragging, and each
+  // call measures every visible bubble.
+  let clampFrame = 0;
+  const onResize = () => {
+    if (clampFrame) return;
+    clampFrame = requestAnimationFrame(() => { clampFrame = 0; clampBubbles(); });
+  };
+  window.addEventListener("resize", onResize);
 
   if (!event) {
     render(stage, html`<div class="arena-state">No events yet — nothing has run.</div>`);
@@ -388,13 +494,29 @@ export async function mount(el, params) {
     ${live ? "Live" : "Most recent · finished"} · ${typeLabel(event.type)} · ${phaseLabel(event)} · ${shortId(event.id, 20)}`);
 
   const isHackathon = event.type === "hackathon";
-  const [activity, teams, roster, turns] = await Promise.all([
+  const [activity, teams, roster, turns, arts, chronicle] = await Promise.all([
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/teams`, { optional: true }) : Promise.resolve([]),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve([]),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/build-turns`, { optional: true }) : Promise.resolve([]),
+    // Both optional: they postdate the Worker the Pages site may be talking
+    // to, and the room is still correct without them — bubbles and the
+    // caption simply don't render.
+    fetchJson(`/events/${encodeURIComponent(event.id)}/agent-artifacts`, { optional: true }),
+    fetchJson(`/events/${encodeURIComponent(event.id)}/chronicle`, { optional: true }),
   ]);
   if (disposed) return () => {};
+  if (arts) artifacts = arts;
+
+  // P3: the Chronicler's line for the most recent phase, as a caption under
+  // the room. Set as textContent — this is model-generated prose reaching the
+  // DOM outside the template escaper.
+  const chronicleEl = el.querySelector("#of-chronicle");
+  const latestChronicle = Array.isArray(chronicle) && chronicle.length ? chronicle[chronicle.length - 1] : null;
+  if (chronicleEl && latestChronicle?.narrative) {
+    chronicleEl.textContent = `“${latestChronicle.narrative}” — the Chronicler, on ${latestChronicle.phase}`;
+    chronicleEl.hidden = false;
+  }
 
   /**
    * P2: swap the room to team benches for a hackathon, but only if a roster
@@ -488,7 +610,11 @@ export async function mount(el, params) {
   return () => {
     disposed = true;
     off();
-    // The whole point of the teardown contract: 12 characters x 2 timers.
+    // The whole point of the teardown contract: 12 characters x 2 timers,
+    // plus the resize listener and any frame it has pending — a listener that
+    // outlives its view is the same leak in a different shape.
+    window.removeEventListener("resize", onResize);
+    if (clampFrame) cancelAnimationFrame(clampFrame);
     Object.values(nodes).forEach(stopWalk);
   };
 }
