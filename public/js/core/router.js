@@ -141,8 +141,31 @@ async function resolve() {
     return;
   }
 
+  const viewChanged = key !== currentKey;
   outlet.setAttribute("data-view", hit.view);
   currentKey = key;
+
+  // Scroll to the top when the VIEW changes — not on a param-only change,
+  // which is the replay scrubber stepping through its own timeline and must
+  // keep its position (the comment above says as much).
+  //
+  // Two separate problems this fixes, both of which look like "the scroll is
+  // buggy":
+  //  - Nothing reset scroll, so leaving a long page scrolled down and opening
+  //    a short one dropped you into the middle of it, sometimes past all its
+  //    content.
+  //  - `html { scroll-behavior: smooth }` (arena.css) means the browser
+  //    ANIMATES the correction when a shorter view shrinks the page and the
+  //    scroll offset gets clamped — so the page visibly slides on every
+  //    navigation. "instant" opts this one scroll out of that, without
+  //    removing smooth scrolling for in-page anchors that genuinely want it.
+  if (viewChanged) {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+    } catch {
+      window.scrollTo(0, 0); // older browsers reject the options form
+    }
+  }
 
   try {
     // CSS first and awaited, so the view never paints unstyled for a frame.

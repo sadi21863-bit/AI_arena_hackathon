@@ -372,7 +372,15 @@ export async function mount(el, params) {
     if (first) build(agents);
     agents.forEach((a) => { latest[a.agent_id] = a; });
 
-    const room = el.querySelector("#of-room").getBoundingClientRect();
+    // The room can genuinely be gone by now. mount() awaits several fetches,
+    // and if the router swaps views during that window the outlet is wiped
+    // before this mount's teardown exists to set `disposed` — so an in-flight
+    // draw runs against detached DOM. Observed as a real TypeError while
+    // navigating quickly between views; the same race the router's own header
+    // comment describes, just landing here.
+    const roomEl = el.querySelector("#of-room");
+    if (!roomEl) return;
+    const room = roomEl.getBoundingClientRect();
     const probe = nodes[agents[0] && agents[0].agent_id];
     const halfW = probe ? probe.el.offsetWidth / 2 : 32;
     const padX = room.width ? (halfW / room.width) * 100 + 1 : 7;
