@@ -49,42 +49,202 @@ const CAST = {
   agent_leo:   { sprite: "morgan",    filter: "hue-rotate(45deg) saturate(1.3)" },
 };
 
-const IDEATHON_ZONES = [
-  { id: "research",     label: "Research Nook",      x: 17, y: 34 },
-  { id: "idea",         label: "Idea Desk",          x: 50, y: 31 },
-  { id: "critique",     label: "Critique Corner",    x: 83, y: 34 },
-  { id: "architecture", label: "Architecture Table", x: 25, y: 63 },
-  { id: "tribunal",     label: "Tribunal Circle",    x: 75, y: 63 },
-  { id: "break",        label: "Break Area",         x: 50, y: 74 },
-];
+/**
+ * Per-stage environments (docs/OFFICE_ENVIRONMENTS_PROPOSAL.md §4).
+ *
+ * One room served every phase, which meant it was wrong for all of them: 12
+ * agents research, 6 draft architecture, 6+6 build, and a single fixed layout
+ * cannot be sized for those at once. Each phase now gets a set.
+ *
+ * These are DESCRIPTORS, not scenes. There is one renderer; a set only says
+ * which zones exist, where they sit, and what furniture dresses them. That is
+ * the same shape as project-chimera's `location_manager.gd`, which is a
+ * LOCATIONS dictionary rather than eight hand-built scenes — eight
+ * environments for roughly the cost of one and a half, and a new phase is a
+ * data entry rather than a new view.
+ *
+ * Two rules make this safe to extend:
+ *
+ *  - **Zone ids are stable across sets.** TASK below maps a queue task_type to
+ *    a zone id, and that mapping never changes. A set only decides whether
+ *    that zone is present and where. An agent whose zone is absent from the
+ *    current set falls back to the set's `fallbackZone`, so adding a set can
+ *    never strand a character at coordinates that do not exist.
+ *  - **Props reuse the existing CSS prop classes.** Set dressing is
+ *    rearrangement, not new art — no set can require a stylesheet change.
+ *
+ * Zone `y` is where characters stand; the label renders slightly below it.
+ */
+const SETS = {
+  library: {
+    name: "Research Library",
+    blurb: "Twelve lenses, twelve carrels. Everyone is reading.",
+    fallbackZone: "research",
+    zones: [
+      { id: "research", label: "Carrels",   x: 50, y: 38 },
+      { id: "idea",     label: "Long Table", x: 50, y: 66 },
+      { id: "break",    label: "Break Area", x: 86, y: 80 },
+    ],
+    props: [
+      { cls: "shelf", x: 10, y: 24 }, { cls: "shelf", x: 30, y: 24 },
+      { cls: "shelf", x: 70, y: 24 }, { cls: "shelf", x: 90, y: 24 },
+      { cls: "table", x: 50, y: 62 }, { cls: "plant", x: 6, y: 78 },
+      { cls: "plant", x: 94, y: 60 }, { cls: "cooler", x: 88, y: 74 },
+    ],
+  },
+
+  studio: {
+    name: "Studio Floor",
+    blurb: "Ideas go up, critiques come back. The busiest room in the cycle.",
+    fallbackZone: "break",
+    zones: [
+      { id: "idea",         label: "Idea Desks",       x: 30, y: 34 },
+      { id: "critique",     label: "Critique Corner",  x: 76, y: 36 },
+      { id: "research",     label: "Reading Nook",     x: 12, y: 62 },
+      { id: "architecture", label: "Drafting Table",   x: 46, y: 64 },
+      { id: "break",        label: "Break Area",       x: 82, y: 74 },
+    ],
+    props: [
+      { cls: "desk", x: 20, y: 28 }, { cls: "desk", x: 40, y: 28 },
+      { cls: "board", x: 76, y: 27 }, { cls: "shelf", x: 6, y: 52 },
+      { cls: "table", x: 46, y: 60 }, { cls: "couch", x: 82, y: 70 },
+      { cls: "cooler", x: 94, y: 76 }, { cls: "rug", x: 46, y: 76 },
+      { cls: "plant", x: 62, y: 80 },
+    ],
+  },
+
+  merge: {
+    name: "Merge Tables",
+    blurb: "Paired ideas meet. Either they combine, or both authors walk away.",
+    fallbackZone: "break",
+    zones: [
+      { id: "collaboration", label: "Merge Tables", x: 50, y: 40 },
+      { id: "idea",          label: "Idea Desks",   x: 16, y: 66 },
+      { id: "break",         label: "Break Area",   x: 82, y: 72 },
+    ],
+    props: [
+      { cls: "table", x: 34, y: 36 }, { cls: "table", x: 66, y: 36 },
+      { cls: "desk", x: 16, y: 62 }, { cls: "couch", x: 82, y: 68 },
+      { cls: "rug", x: 50, y: 52 }, { cls: "plant", x: 6, y: 82 },
+      { cls: "plant", x: 94, y: 50 },
+    ],
+  },
+
+  drafting: {
+    name: "Drafting Room",
+    blurb: "Only the top ideas get built out — half the room is watching.",
+    fallbackZone: "break",
+    zones: [
+      { id: "architecture", label: "Drafting Tables", x: 42, y: 40 },
+      { id: "critique",     label: "Review Wall",     x: 84, y: 40 },
+      { id: "break",        label: "Observers",       x: 50, y: 74 },
+    ],
+    props: [
+      { cls: "board", x: 84, y: 30 }, { cls: "table", x: 30, y: 36 },
+      { cls: "table", x: 55, y: 36 }, { cls: "couch", x: 50, y: 70 },
+      { cls: "rug", x: 50, y: 78 }, { cls: "shelf", x: 8, y: 30 },
+      { cls: "plant", x: 8, y: 80 },
+    ],
+  },
+
+  judging: {
+    name: "Judging Hall",
+    blurb: "Seven judges score the field. The agents can only wait.",
+    fallbackZone: "break",
+    zones: [
+      { id: "judging", label: "Judges' Bench", x: 50, y: 30 },
+      { id: "break",   label: "The Floor",     x: 50, y: 68 },
+    ],
+    props: [
+      { cls: "table", x: 34, y: 26 }, { cls: "table", x: 66, y: 26 },
+      { cls: "board", x: 50, y: 16 }, { cls: "rug", x: 50, y: 66 },
+      { cls: "plant", x: 8, y: 40 }, { cls: "plant", x: 92, y: 40 },
+    ],
+  },
+
+  /**
+   * P2's team benches, kept as a set. Tribunal stays present because
+   * tribunal_* tasks ARE per-agent and run at the end of a hackathon — agents
+   * legitimately leave their benches for the circle, and a real task always
+   * outranks bench placement (see zoneFor).
+   */
+  teams: {
+    name: "Team Rooms",
+    blurb: "Two teams, one build each. The ring marks whose turn it is.",
+    fallbackZone: "break",
+    zones: [
+      { id: "team_alpha", label: "Team Alpha",      x: 24, y: 40 },
+      { id: "team_beta",  label: "Team Beta",       x: 76, y: 40 },
+      { id: "tribunal",   label: "Tribunal Circle", x: 50, y: 66 },
+      { id: "break",      label: "Break Area",      x: 50, y: 80 },
+    ],
+    props: [
+      { cls: "desk", x: 24, y: 34 }, { cls: "desk", x: 76, y: 34 },
+      { cls: "board", x: 10, y: 30 }, { cls: "board", x: 90, y: 30 },
+      { cls: "table", x: 50, y: 62 }, { cls: "couch", x: 50, y: 78 },
+      { cls: "cooler", x: 92, y: 76 }, { cls: "plant", x: 6, y: 76 },
+    ],
+  },
+
+  tribunal: {
+    name: "Tribunal Circle",
+    blurb: "Everyone reflects on what just happened, in front of everyone else.",
+    fallbackZone: "tribunal",
+    zones: [
+      { id: "tribunal", label: "The Circle", x: 50, y: 46 },
+      { id: "break",    label: "Break Area", x: 86, y: 80 },
+    ],
+    props: [
+      { cls: "rug", x: 50, y: 50 }, { cls: "table", x: 50, y: 32 },
+      { cls: "plant", x: 8, y: 34 }, { cls: "plant", x: 92, y: 34 },
+      { cls: "couch", x: 86, y: 76 },
+    ],
+  },
+
+  records: {
+    name: "Hall of Records",
+    blurb: "The cycle is closed. What is left is the archive.",
+    fallbackZone: "break",
+    zones: [
+      { id: "team_alpha", label: "Winners",    x: 34, y: 40 },
+      { id: "team_beta",  label: "Runners-up", x: 66, y: 44 },
+      { id: "break",      label: "The Floor",  x: 50, y: 76 },
+    ],
+    props: [
+      { cls: "board", x: 50, y: 18 }, { cls: "table", x: 34, y: 36 },
+      { cls: "table", x: 66, y: 40 }, { cls: "rug", x: 50, y: 74 },
+      { cls: "shelf", x: 8, y: 28 }, { cls: "shelf", x: 92, y: 28 },
+    ],
+  },
+};
 
 /**
- * P2 (docs/OFFICE_INVESTIGATION_2026-07-31.md G2). During a hackathon nobody
- * has a queue row — building is team-level GitHub Actions work — so the room
- * used to park all twelve at the break area behind an apology banner for
- * roughly half of every cycle.
+ * Which set a given event is currently in.
  *
- * The layout swaps to two team benches instead. Placement comes from the
- * roster (hackathon_team_members), not from event_queue, so it works precisely
- * when the queue has nothing to say. Tribunal is kept because tribunal_* tasks
- * ARE per-agent and run at the end of a hackathon — during that phase agents
- * legitimately leave their benches for the circle.
+ * `ready_for_judging` and `judged` occur in BOTH event types, so the type has
+ * to be part of the decision — keying on status alone would put an ideathon
+ * mid-judging into a hackathon set.
  */
-const HACKATHON_ZONES = [
-  { id: "team_alpha", label: "Team Alpha", x: 24, y: 40 },
-  { id: "team_beta",  label: "Team Beta",  x: 76, y: 40 },
-  { id: "tribunal",   label: "Tribunal Circle", x: 50, y: 66 },
-  { id: "break",      label: "Break Area", x: 50, y: 80 },
-];
-
-const PROPS = [
-  { cls: "rug",    x: 50, y: 78 }, { cls: "shelf",  x: 11, y: 26 },
-  { cls: "desk",   x: 19, y: 28 }, { cls: "desk",   x: 50, y: 25 },
-  { cls: "desk",   x: 83, y: 28 }, { cls: "board",  x: 25, y: 54 },
-  { cls: "table",  x: 75, y: 60 }, { cls: "couch",  x: 50, y: 71 },
-  { cls: "cooler", x: 88, y: 76 }, { cls: "plant",  x: 8,  y: 82 },
-  { cls: "plant",  x: 93, y: 47 },
-];
+function setForEvent(event, hasRoster) {
+  const status = String(event.status || "");
+  if (event.type === "hackathon") {
+    if (status === "tribunal") return SETS.tribunal;
+    if (status === "complete") return SETS.records;
+    if (status === "ready_for_judging" || status === "judged") return SETS.judging;
+    // team_formation / building — benches need a roster to place anyone; without
+    // one the studio is the honest render (see the note where hasRoster is set).
+    return hasRoster ? SETS.teams : SETS.studio;
+  }
+  switch (status) {
+    case "deep_research":     return SETS.library;
+    case "ideation_critique": return SETS.studio;
+    case "collaboration":     return SETS.merge;
+    case "architecture":      return SETS.drafting;
+    case "ready_for_judging":
+    case "judged":            return SETS.judging;
+    default:                  return SETS.studio;
+  }
+}
 
 /* Only these task types ever carry an agent_id — the rest are event- or
    team-level, and judges are a separate roster. An agent with none of these
@@ -128,8 +288,10 @@ export async function mount(el, params) {
   let turnByTeam = {};
   /* team_id -> agent_id whose turn it is next. */
   let turnHolder = {};
-  let ZONES = IDEATHON_ZONES;
+  let SET = SETS.studio;
+  let ZONES = SET.zones;
   let ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+  let PROPS = SET.props;
 
   /**
    * P3: what this agent is currently making, as one short line.
@@ -171,10 +333,18 @@ export async function mount(el, params) {
    */
   function zoneFor(agent) {
     const info = taskInfo(agent.task_type);
-    if (info) return info.zone;
-    const member = rosterByAgent[agent.agent_id];
-    if (member) return member.team_name === "beta" ? "team_beta" : "team_alpha";
-    return "break";
+    // A real per-agent task always wins. During the Tribunal at the end of a
+    // hackathon the tribunal_* tasks ARE per-agent, and an agent doing real
+    // work belongs at the work, not at a bench.
+    let wanted = info ? info.zone : null;
+    if (!wanted) {
+      const member = rosterByAgent[agent.agent_id];
+      wanted = member ? (member.team_name === "beta" ? "team_beta" : "team_alpha") : "break";
+    }
+    // The set decides which zones exist. Falling back rather than trusting the
+    // id is what makes adding a set safe: a phase whose layout has no Critique
+    // Corner must not place anyone at coordinates that are not in the room.
+    return ZONE_BY_ID[wanted] ? wanted : (ZONE_BY_ID[SET.fallbackZone] ? SET.fallbackZone : ZONES[0].id);
   }
 
   await store.loadAgents();
@@ -192,6 +362,7 @@ export async function mount(el, params) {
       <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
     </div>
     <div id="of-note"></div>
+    <div class="v-office__set" id="of-set"></div>
     <div id="of-stage"><div class="arena-skel arena-skel--block" style="min-height:440px"></div></div>
     <p class="v-office__chronicle" id="of-chronicle" hidden></p>
     <div class="arena-card v-office__inspector" id="of-inspector">
@@ -603,17 +774,23 @@ export async function mount(el, params) {
    * room.
    */
   const hasRoster = isHackathon && Array.isArray(roster) && roster.length > 0;
-  if (hasRoster) {
-    rosterByAgent = Object.fromEntries(roster.map((m) => [m.agent_id, m]));
-    ZONES = HACKATHON_ZONES.map((z) => {
-      if (z.id !== "team_alpha" && z.id !== "team_beta") return z;
-      const wanted = z.id === "team_beta" ? "beta" : "alpha";
-      const team = (teams || []).find((t) => t.team_name === wanted);
-      return { ...z, teamId: team ? team.id : "", label: team ? `Team ${wanted}` : z.label };
-    });
-    ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
-    applyTurnState(turns, roster);
-  }
+  if (hasRoster) rosterByAgent = Object.fromEntries(roster.map((m) => [m.agent_id, m]));
+
+  // Pick the set for whatever phase this event is in, then bind the team zones
+  // to real team ids so the CI badge and turn ring have something to key on.
+  // Zones are copied, never mutated — SETS is module-level and shared across
+  // every mount, so writing teamId onto it would leak one event's teams into
+  // the next event rendered.
+  SET = setForEvent(event, hasRoster);
+  ZONES = SET.zones.map((z) => {
+    if (z.id !== "team_alpha" && z.id !== "team_beta") return { ...z };
+    const wanted = z.id === "team_beta" ? "beta" : "alpha";
+    const team = (teams || []).find((t) => t.team_name === wanted);
+    return { ...z, teamId: team ? team.id : "", label: team ? `Team ${wanted}` : z.label };
+  });
+  ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+  PROPS = SET.props;
+  if (hasRoster) applyTurnState(turns, roster);
 
   /** Latest turn per team, and whose turn it is next on each. */
   function applyTurnState(allTurns, rosterRows) {
@@ -645,6 +822,13 @@ export async function mount(el, params) {
     </div>`);
     return () => { disposed = true; };
   }
+
+  // Name the set. The room changing shape between phases is only legible if
+  // it says which room it is — otherwise a returning viewer just sees the
+  // furniture moved.
+  render(el.querySelector("#of-set"), html`
+    <span class="v-office__set-name">${SET.name}</span>
+    <span class="v-office__set-blurb">${SET.blurb}</span>`);
 
   if (hasRoster) {
     // P2: the room now shows the build, so this explains what is being shown

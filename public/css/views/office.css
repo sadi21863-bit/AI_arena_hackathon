@@ -195,6 +195,15 @@
   border: 1px solid color-mix(in srgb, var(--arena-danger, #b3402f) 45%, transparent);
 }
 
+/* --- Set identity: which room this phase is --- */
+.v-office__set { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 2px 8px; }
+.v-office__set-name {
+  font-family: var(--arena-font-display); font-size: 1.02rem; color: var(--arena-ink);
+}
+.v-office__set-blurb {
+  font-family: var(--arena-font-mono); font-size: 0.72rem; color: var(--arena-ink-faint);
+}
+
 /* --- P3: speech bubbles ------------------------------------------------
    Hidden until hover or selection: twelve permanently-open bubbles would
    cover the room they are describing. `visibility` rather than `display` so
