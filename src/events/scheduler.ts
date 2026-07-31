@@ -65,7 +65,7 @@ const MAX_BUILD_TURNS_PER_DAY = 6;
  * only needs to catch a failure mode that repeats identically every retry,
  * so it can afford to be generous rather than fast.
  */
-const MAX_ITEM_ATTEMPTS = 6;
+export const MAX_ITEM_ATTEMPTS = 6;
 
 /**
  * All-time (not just recent, unlike the backoff checks above/below) failure

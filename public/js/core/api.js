@@ -11,7 +11,25 @@
  * restart is worse than paying for one fetch.
  */
 
-export const API_ORIGIN = "https://arena-api.sadi21863.workers.dev";
+const DEFAULT_API_ORIGIN = "https://arena-api.sadi21863.workers.dev";
+
+/**
+ * Production origin, overridable for local work via
+ * `localStorage.setItem("arena_api_origin", "http://127.0.0.1:8799")`.
+ *
+ * Without this the only way to point the Observatory at a local Worker is to
+ * edit this constant, which means every UI change is either verified against
+ * production data or not verified at all — and an edited constant is one
+ * absent-minded commit away from shipping a dev origin to the live site.
+ * Read once at module load; set it, reload, and clear it when done.
+ */
+export const API_ORIGIN = (() => {
+  try {
+    return localStorage.getItem("arena_api_origin") || DEFAULT_API_ORIGIN;
+  } catch {
+    return DEFAULT_API_ORIGIN; // storage blocked (private mode, embedded)
+  }
+})();
 
 /** Entries: url -> { at, value, promise } */
 const cache = new Map();

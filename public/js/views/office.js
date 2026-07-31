@@ -49,7 +49,7 @@ const CAST = {
   agent_leo:   { sprite: "morgan",    filter: "hue-rotate(45deg) saturate(1.3)" },
 };
 
-const ZONES = [
+const IDEATHON_ZONES = [
   { id: "research",     label: "Research Nook",      x: 17, y: 34 },
   { id: "idea",         label: "Idea Desk",          x: 50, y: 31 },
   { id: "critique",     label: "Critique Corner",    x: 83, y: 34 },
@@ -57,7 +57,25 @@ const ZONES = [
   { id: "tribunal",     label: "Tribunal Circle",    x: 75, y: 63 },
   { id: "break",        label: "Break Area",         x: 50, y: 74 },
 ];
-const ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+
+/**
+ * P2 (docs/OFFICE_INVESTIGATION_2026-07-31.md G2). During a hackathon nobody
+ * has a queue row — building is team-level GitHub Actions work — so the room
+ * used to park all twelve at the break area behind an apology banner for
+ * roughly half of every cycle.
+ *
+ * The layout swaps to two team benches instead. Placement comes from the
+ * roster (hackathon_team_members), not from event_queue, so it works precisely
+ * when the queue has nothing to say. Tribunal is kept because tribunal_* tasks
+ * ARE per-agent and run at the end of a hackathon — during that phase agents
+ * legitimately leave their benches for the circle.
+ */
+const HACKATHON_ZONES = [
+  { id: "team_alpha", label: "Team Alpha", x: 24, y: 40 },
+  { id: "team_beta",  label: "Team Beta",  x: 76, y: 40 },
+  { id: "tribunal",   label: "Tribunal Circle", x: 50, y: 66 },
+  { id: "break",      label: "Break Area", x: 50, y: 80 },
+];
 
 const PROPS = [
   { cls: "rug",    x: 50, y: 78 }, { cls: "shelf",  x: 11, y: 26 },
@@ -83,7 +101,18 @@ const TASK = {
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const taskInfo = (t) => TASK[t] || null;
-const zoneFor = (t) => (taskInfo(t) ? TASK[t].zone : "break");
+
+/* A turn's CI state, collapsed to the three things a viewer cares about.
+   `status` is the workflow run's lifecycle, `conclusion` only exists once it
+   finished — so an unfinished turn is "running" regardless of conclusion. */
+const ciState = (t) =>
+  t.status !== "completed" ? "running" : t.conclusion === "success" ? "success" : "failure";
+const ciLabel = (t) => {
+  const s = ciState(t);
+  return s === "running" ? `⏳ turn ${t.turn_number} running`
+    : s === "success" ? `✅ turn ${t.turn_number} passed`
+    : `❌ turn ${t.turn_number} failed`;
+};
 
 export async function mount(el, params) {
   let disposed = false;
@@ -91,6 +120,29 @@ export async function mount(el, params) {
   const latest = {};
   let selectedId = null;
   let built = false;
+  /* agent_id -> roster row, populated for hackathons only. */
+  let rosterByAgent = {};
+  /* team_id -> latest build turn, for the CI badge on each bench. */
+  let turnByTeam = {};
+  /* team_id -> agent_id whose turn it is next. */
+  let turnHolder = {};
+  let ZONES = IDEATHON_ZONES;
+  let ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+
+  /**
+   * Where an agent stands. A real per-agent task always wins — during the
+   * Tribunal at the end of a hackathon the tribunal_* tasks are genuinely
+   * per-agent, and an agent doing real work should be at the work, not at a
+   * bench. Team membership is the fallback that fills the otherwise-empty
+   * building phase.
+   */
+  function zoneFor(agent) {
+    const info = taskInfo(agent.task_type);
+    if (info) return info.zone;
+    const member = rosterByAgent[agent.agent_id];
+    if (member) return member.team_name === "beta" ? "team_beta" : "team_alpha";
+    return "break";
+  }
 
   await store.loadAgents();
   const all = store.events.get().data || (await store.refreshEvents()).data || [];
@@ -174,14 +226,30 @@ export async function mount(el, params) {
       return;
     }
     const info = taskInfo(a.task_type);
+    const member = rosterByAgent[a.agent_id];
     render(inspectorEl, html`
       <div class="v-office__inspector-name">${a.name}</div>
       <div class="v-office__inspector-lens">${a.lens || ""}</div>
+      ${a.abandoned ? html`
+        <div class="v-office__inspector-alert v-office__inspector-alert--stop">
+          <b>The scheduler has given up on this agent.</b>
+          ${a.failed_attempts} failed <code>${a.failed_task_type}</code> attempts hit the retry cap, so it is no longer being retried for this event.
+          ${a.last_error ? html`<div class="v-office__inspector-err">${a.last_error}</div>` : ""}
+        </div>` : ""}
+      ${!a.abandoned && a.failed_attempts ? html`
+        <div class="v-office__inspector-alert v-office__inspector-alert--warn">
+          <b>${a.failed_attempts} failed <code>${a.failed_task_type}</code> attempt(s)</b> — still within the retry cap, so this should recover on its own.
+          ${a.last_error ? html`<div class="v-office__inspector-err">${a.last_error}</div>` : ""}
+        </div>` : ""}
       <div class="v-office__inspector-rows">
         <div>Doing: <b>${info ? `${info.emote} ${info.label}` : "nothing right now"}</b></div>
         <div>Queue task: <b>${a.task_type || "—"}</b></div>
         <div>Status: <b>${a.status || "idle"}</b></div>
         <div>Last update: <b>${a.updated_at || "—"}</b></div>
+        ${member ? html`
+          <div>Team: <b>${member.team_name || "—"}</b> (${member.membership})</div>
+          <div>Build role: <b>${member.build_role || "—"}</b></div>
+          <div>Turns taken: <b>${member.turns_taken ?? 0}</b></div>` : ""}
       </div>`);
   }
 
@@ -197,7 +265,10 @@ export async function mount(el, params) {
         <div class="v-office__floor"></div>
         <div class="v-office__wall"></div>
         ${PROPS.map((p) => html`<div class="v-office__prop v-office__prop--${p.cls}" style="left:${p.x}%;top:${p.y}%;z-index:${10 + Math.round(p.y * 2) - 1}"></div>`)}
-        ${ZONES.map((z) => html`<div class="v-office__zone" id="of-zone-${z.id}" style="left:${z.x}%;top:${z.y + 9}%">${z.label}</div>`)}
+        ${ZONES.map((z) => html`
+          <div class="v-office__zone" id="of-zone-${z.id}" data-team-id="${z.teamId || ""}" style="left:${z.x}%;top:${z.y + 9}%">
+            ${z.label}${z.teamId ? html`<span class="v-office__zone-turn"></span>` : ""}
+          </div>`)}
         ${agents.filter((a) => CAST[a.agent_id]).map((a) => html`
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
             <div class="v-office__emote"></div>
@@ -237,7 +308,7 @@ export async function mount(el, params) {
     const padBottom = room.height ? (18 / room.height) * 100 : 4;
 
     const perZone = {};
-    agents.forEach((a) => { (perZone[zoneFor(a.task_type)] ||= []).push(a); });
+    agents.forEach((a) => { (perZone[zoneFor(a)] ||= []).push(a); });
 
     Object.keys(perZone).forEach((zoneId) => {
       const group = perZone[zoneId];
@@ -258,16 +329,46 @@ export async function mount(el, params) {
         place(node, x, y, !first);
 
         const info = taskInfo(a.task_type);
-        node.emoteEl.textContent = info ? info.emote : "";
+        // P1: a failed row still never positions anyone — but it must not be
+        // silent either. Without this, an agent the watchdog has permanently
+        // given up on renders exactly like one relaxing on the couch.
+        // Abandoned outranks the current task in the badge, because "the
+        // system stopped retrying this agent" is the more important fact.
+        const abandoned = !!a.abandoned;
+        const struggling = !abandoned && (a.failed_attempts || 0) > 0;
+
+        node.emoteEl.textContent = abandoned ? "🛑" : struggling ? "⚠️" : info ? info.emote : "";
         node.el.classList.toggle("has-task", !!info);
         node.el.classList.toggle("is-working", a.status === "in_progress");
-        node.el.title = `${a.name}${info ? ` · ${info.label}` : " · idle"}${a.status ? ` (${a.status})` : ""}`;
+        node.el.classList.toggle("is-abandoned", abandoned);
+        node.el.classList.toggle("is-struggling", struggling);
+        node.el.title = abandoned
+          ? `${a.name} · GIVEN UP ON — ${a.failed_attempts} failed ${a.failed_task_type} attempts, no longer retrying`
+          : struggling
+            ? `${a.name} · ${a.failed_attempts} failed ${a.failed_task_type} attempt(s), still retrying`
+            : `${a.name}${info ? ` · ${info.label}` : " · idle"}${a.status ? ` (${a.status})` : ""}`;
       });
+    });
+
+    // P2: mark whoever holds the current build turn. Mirrors nextBuildAuthor
+    // (src/events/team-members.ts) — fewest turns first, leads breaking the
+    // tie, then roster order — so the room agrees with the code that actually
+    // picks, rather than guessing.
+    Object.values(nodes).forEach((n) => n.el.classList.remove("is-turn-holder"));
+    Object.values(turnHolder).forEach((agentId) => {
+      if (nodes[agentId]) nodes[agentId].el.classList.add("is-turn-holder");
     });
 
     ZONES.forEach((z) => {
       const zEl = el.querySelector(`#of-zone-${z.id}`);
-      if (zEl) zEl.classList.toggle("is-active", z.id !== "break" && (perZone[z.id] || []).length > 0);
+      if (!zEl) return;
+      zEl.classList.toggle("is-active", z.id !== "break" && (perZone[z.id] || []).length > 0);
+      const turn = zEl.querySelector(".v-office__zone-turn");
+      if (turn) {
+        const t = turnByTeam[zEl.dataset.teamId];
+        turn.textContent = t ? ciLabel(t) : "";
+        turn.className = `v-office__zone-turn ${t ? `is-${ciState(t)}` : ""}`;
+      }
     });
 
     render(legendEl, html`${ZONES.map((z) => html`
@@ -286,13 +387,56 @@ export async function mount(el, params) {
     <span class="arena-dot ${live ? "arena-dot--live" : "arena-dot--done"}"></span>
     ${live ? "Live" : "Most recent · finished"} · ${typeLabel(event.type)} · ${phaseLabel(event)} · ${shortId(event.id, 20)}`);
 
-  const [activity, teams] = await Promise.all([
+  const isHackathon = event.type === "hackathon";
+  const [activity, teams, roster, turns] = await Promise.all([
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
-    event.type === "hackathon"
-      ? fetchJson(`/events/${encodeURIComponent(event.id)}/teams`, { optional: true })
-      : Promise.resolve([]),
+    isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/teams`, { optional: true }) : Promise.resolve([]),
+    isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve([]),
+    isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/build-turns`, { optional: true }) : Promise.resolve([]),
   ]);
   if (disposed) return () => {};
+
+  /**
+   * P2: swap the room to team benches for a hackathon, but only if a roster
+   * actually came back. Teams formed before rosters existed have none, and
+   * older Workers have no /roster or /build-turns route at all — in both cases
+   * the ideathon layout plus the original banner is still the correct render,
+   * so this degrades to exactly the previous behaviour rather than an empty
+   * room.
+   */
+  const hasRoster = isHackathon && Array.isArray(roster) && roster.length > 0;
+  if (hasRoster) {
+    rosterByAgent = Object.fromEntries(roster.map((m) => [m.agent_id, m]));
+    ZONES = HACKATHON_ZONES.map((z) => {
+      if (z.id !== "team_alpha" && z.id !== "team_beta") return z;
+      const wanted = z.id === "team_beta" ? "beta" : "alpha";
+      const team = (teams || []).find((t) => t.team_name === wanted);
+      return { ...z, teamId: team ? team.id : "", label: team ? `Team ${wanted}` : z.label };
+    });
+    ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
+    applyTurnState(turns, roster);
+  }
+
+  /** Latest turn per team, and whose turn it is next on each. */
+  function applyTurnState(allTurns, rosterRows) {
+    turnByTeam = {};
+    for (const t of allTurns || []) {
+      const prev = turnByTeam[t.team_id];
+      if (!prev || (t.turn_number ?? 0) >= (prev.turn_number ?? 0)) turnByTeam[t.team_id] = t;
+    }
+    turnHolder = {};
+    const byTeam = {};
+    for (const m of rosterRows || []) (byTeam[m.team_id] ||= []).push(m);
+    for (const [teamId, members] of Object.entries(byTeam)) {
+      // Same ordering as nextBuildAuthor: fewest turns, leads first, then id.
+      const next = [...members].sort((a, b) =>
+        (a.turns_taken ?? 0) - (b.turns_taken ?? 0) ||
+        (b.membership === "lead") - (a.membership === "lead") ||
+        String(a.agent_id).localeCompare(String(b.agent_id))
+      )[0];
+      if (next) turnHolder[teamId] = next.agent_id;
+    }
+  }
 
   if (!activity) {
     // The endpoint ships with the Worker, which deploys separately from
@@ -304,10 +448,20 @@ export async function mount(el, params) {
     return () => { disposed = true; };
   }
 
-  if (event.type === "hackathon") {
+  if (hasRoster) {
+    // P2: the room now shows the build, so this explains what is being shown
+    // rather than apologising for showing nothing.
+    const built = (teams || []).map((t) => `${t.team_name} (${t.status || "?"})`).join(" · ");
+    render(noteEl, html`<div class="arena-note"><span>🏗️</span><span>
+      <b>Hackathon — agents are at their team benches.</b> Building runs as team-level GitHub Actions turns, so placement comes from the team roster rather than the work queue. The ring marks whoever holds the next build turn; each bench shows that team's latest CI result. Agents move to the Tribunal Circle at the end, where the work is per-agent again.
+      ${built ? ` Teams: ${built}.` : ""}
+    </span></div>`);
+  } else if (isHackathon) {
+    // Pre-roster teams, or a Worker without /roster — the old render is still
+    // the truthful one here.
     const built = (teams || []).map((t) => `${t.team_name} (${t.status || "?"})`).join(" · ");
     render(noteEl, html`<div class="arena-note arena-note--warn"><span>🏗️</span><span>
-      <b>Hackathon phase — the agents are between rounds.</b> Building runs as team-level GitHub Actions turns, not per-agent queue tasks, so everyone idles at the break area until the next ideathon.
+      <b>Hackathon phase — the agents are between rounds.</b> Building runs as team-level GitHub Actions turns, not per-agent queue tasks, so everyone idles at the break area until the next ideathon. This event has no team roster recorded, so there are no benches to show.
       ${built ? ` Teams: ${built}.` : ""}
     </span></div>`);
   }
@@ -317,8 +471,18 @@ export async function mount(el, params) {
   // Re-draw off the shared store tick rather than a private timer.
   const off = store.events.subscribe(async () => {
     if (disposed) return;
-    const next = await fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true });
-    if (!disposed && next) draw(next);
+    // Turn state is refetched alongside activity: during a hackathon it is the
+    // only thing that actually changes between ticks, so polling activity
+    // alone would leave the CI badge and the turn ring permanently stale.
+    const [next, nextTurns, nextRoster] = await Promise.all([
+      fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
+      hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/build-turns`, { optional: true }) : Promise.resolve(null),
+      hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve(null),
+    ]);
+    if (disposed || !next) return;
+    if (nextRoster && nextRoster.length) rosterByAgent = Object.fromEntries(nextRoster.map((m) => [m.agent_id, m]));
+    if (nextTurns) applyTurnState(nextTurns, nextRoster || Object.values(rosterByAgent));
+    draw(next);
   });
 
   return () => {

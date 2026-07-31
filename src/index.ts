@@ -14,7 +14,7 @@ import { listAgents, getAgent, isAgentId, AGENTS } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
-import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, createEvent, type EventRow } from "./events/scheduler";
+import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, createEvent, MAX_ITEM_ATTEMPTS, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
@@ -401,31 +401,53 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // whether a gap means "idle" or "not loaded yet".
     const agentActivityMatch = url.pathname.match(/^\/events\/([^/]+)\/agent-activity$/);
     if (agentActivityMatch && request.method === "GET") {
-      // status != 'failed' pushed into the query itself (found live,
-      // 2026-07-30): the RANK table below never assigns a failed row above
-      // rank 0, so every one was always discarded in JS after being fetched
-      // — pure waste that grows with retry-failure history exactly like
-      // event_queue's own accumulation problem the stall watchdog addresses
-      // elsewhere (scheduler.ts). Filtering here changes nothing about which
-      // row wins per agent, only how much dead data crosses the DB boundary
-      // to compute that.
+      // Failed rows ARE fetched now (P1, docs/OFFICE_INVESTIGATION_2026-07-31.md
+      // G1). They are still never allowed to POSITION a character — the
+      // original reasoning holds, a failed row would strand a sprite at a dead
+      // task forever — but excluding them entirely meant the Office rendered
+      // three different situations identically: an agent that never had work,
+      // one that finished, and one the stall watchdog had permanently
+      // abandoned. The watchdog (MAX_ITEM_ATTEMPTS) made that third state real
+      // and permanent this week, so "looks idle" could now mean "the system
+      // gave up on this agent" with nothing on screen to say so.
       const rows = await env.DB.prepare(
-        `SELECT agent_id, task_type, status, claimed_at, completed_at, scheduled_for
-         FROM event_queue WHERE event_id = ? AND agent_id IS NOT NULL AND status != 'failed'`
+        `SELECT agent_id, task_type, status, claimed_at, completed_at, scheduled_for, error_message
+         FROM event_queue WHERE event_id = ? AND agent_id IS NOT NULL`
       ).bind(agentActivityMatch[1]).all<{
         agent_id: string; task_type: string; status: string;
         claimed_at: string | null; completed_at: string | null; scheduled_for: string | null;
+        error_message: string | null;
       }>();
 
       type Row = (typeof rows.results)[number];
       // A failed row is deliberately never representative — it would strand
       // a character at a dead task indefinitely; falling through to idle is
-      // the more honest render.
+      // the more honest render. Failure is reported separately below instead.
       const RANK: Record<string, number> = { in_progress: 3, completed: 2, pending: 1 };
       const stamp = (r: Row) => r.claimed_at ?? r.completed_at ?? r.scheduled_for ?? "";
 
       const best = new Map<string, Row>();
+      // Per (agent, task_type) failure tallies — the same grain the watchdog
+      // counts at, so "abandoned" here means exactly what it means in
+      // scheduler.ts rather than an approximation of it.
+      const failsByAgentTask = new Map<string, number>();
+      const failInfo = new Map<string, { count: number; lastError: string | null; taskType: string }>();
+      const completedByAgentTask = new Set<string>();
+
       for (const row of rows.results) {
+        const key = `${row.agent_id}|${row.task_type}`;
+        if (row.status === "completed") completedByAgentTask.add(key);
+        if (row.status === "failed") {
+          const n = (failsByAgentTask.get(key) ?? 0) + 1;
+          failsByAgentTask.set(key, n);
+          const prev = failInfo.get(row.agent_id);
+          // Keep whichever task_type this agent has failed most on — that is
+          // the one blocking it, and the one worth naming in the UI.
+          if (!prev || n > prev.count) {
+            failInfo.set(row.agent_id, { count: n, lastError: row.error_message, taskType: row.task_type });
+          }
+          continue; // never eligible to be the representative row
+        }
         const rank = RANK[row.status] ?? 0;
         if (rank === 0) continue;
         const current = best.get(row.agent_id);
@@ -439,6 +461,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(
         AGENTS.map((agent) => {
           const row = best.get(agent.id);
+          const fail = failInfo.get(agent.id);
           return {
             agent_id: agent.id,
             name: agent.name,
@@ -446,6 +469,18 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
             task_type: row?.task_type ?? null,
             status: row?.status ?? null,
             updated_at: row ? stamp(row) : null,
+            // P1. `abandoned` mirrors the watchdog exactly: at or past the cap
+            // on some task_type, with nothing completed for that same
+            // task_type — i.e. scheduler.ts has stopped retrying and will not
+            // start again. `failed_attempts` is reported even below the cap so
+            // the room can show an agent struggling before it is written off.
+            failed_attempts: fail?.count ?? 0,
+            failed_task_type: fail?.taskType ?? null,
+            last_error: fail?.lastError ?? null,
+            abandoned:
+              !!fail &&
+              fail.count >= MAX_ITEM_ATTEMPTS &&
+              !completedByAgentTask.has(`${agent.id}|${fail.taskType}`),
           };
         })
       );
@@ -535,6 +570,23 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         `SELECT phase, narrative, created_at FROM event_chronicle WHERE event_id = ? ORDER BY created_at ASC`
       ).bind(chronicleMatch[1]).all();
       return Response.json(entries.results);
+    }
+
+    // P2 (docs/OFFICE_INVESTIGATION_2026-07-31.md G2): the Agent Office needs
+    // per-turn build state to show anything at all during a hackathon, when
+    // building is team-level GitHub Actions work and no agent has a queue row.
+    // The existing build-turn route is /admin/events/:id/build-status, which is
+    // admin-gated because it POLLS the GitHub API on every call. This one only
+    // reads the build_turns table the cron already reconciles, so it is public
+    // and free — same trust tier as /teams and /roster.
+    const buildTurnsMatch = url.pathname.match(/^\/events\/([^/]+)\/build-turns$/);
+    if (buildTurnsMatch && request.method === "GET") {
+      const turns = await env.DB.prepare(
+        `SELECT turn_id, team_id, turn_number, status, conclusion, run_url, head_sha,
+                dispatched_at, completed_at
+           FROM build_turns WHERE event_id = ? ORDER BY turn_number ASC LIMIT 200`
+      ).bind(buildTurnsMatch[1]).all();
+      return Response.json(turns.results);
     }
 
     const judgeScoresMatch = url.pathname.match(/^\/events\/([^/]+)\/judge-scores$/);
