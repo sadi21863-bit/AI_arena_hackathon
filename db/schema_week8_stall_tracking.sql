@@ -24,6 +24,27 @@
 
 ALTER TABLE archive_events ADD COLUMN last_progress_at DATETIME;
 
+-- Backfill, and NOT optional. ALTER TABLE ADD COLUMN leaves every existing row
+-- NULL, and checkForStalledEvents falls back to created_at when it is — so
+-- without this, the first cron tick after deploy would judge every event that
+-- started more than STALL_ABANDON_HOURS ago as stalled and abandon it, healthy
+-- in-flight events included. Caught in local verification 2026-07-30 (an event
+-- fixture with no completed rows was abandoned on its first tick), before this
+-- ever reached production.
+--
+-- MAX(completed_at) over completed queue items is the honest reconstruction of
+-- "when did this event last finish real work" — the same thing markCompleted
+-- records going forward. COALESCE to created_at covers an event that has never
+-- completed anything, where created_at genuinely is the last thing that
+-- happened to it.
+UPDATE archive_events
+   SET last_progress_at = COALESCE(
+         (SELECT MAX(completed_at) FROM event_queue
+           WHERE event_queue.event_id = archive_events.id
+             AND event_queue.status = 'completed'),
+         created_at)
+ WHERE last_progress_at IS NULL;
+
 -- Set once when the watchdog gives up on an event, alongside status='abandoned'.
 -- Kept as its own column rather than inferred from status so that "when did we
 -- stop waiting" survives any later status change, and so an operator can tell an
