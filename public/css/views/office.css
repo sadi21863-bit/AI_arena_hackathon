@@ -5,6 +5,16 @@
   border-radius: var(--arena-radius); overflow: hidden;
   border: 1px solid var(--arena-line-strong);
   background: var(--office-floor, #cbbda6);
+  /* Character size lives here as a fallback only — draw() overwrites it with
+     a measured pixel value (see office.js). It is NOT a container query.
+     `8.5cqw` was tried first and is subtly unreliable here: the agents are
+     created by the view, while office.css is injected by the router's lazy
+     loadCss, so the elements can exist before the container is established
+     and never re-resolve. Reproduced live — a probe element with the same
+     parent computed 8.5cqw as 61px while an agent computed it as 64px,
+     because the agent was still resolving against the viewport fallback.
+     JS owns this so size and spacing derive from the same measurement. */
+  --office-char: 64px;
 }
 :root[data-theme="dark"] .v-office__room { --office-floor: #2b2318; --office-wall: #372c1e; }
 
@@ -108,7 +118,18 @@
 .v-office__zone.is-active { color: var(--arena-clay-deep); background: color-mix(in srgb, var(--arena-clay) 22%, transparent); }
 
 /* --- Characters --- */
-.v-office__agent { position: absolute; width: 64px; height: 64px; transform: translate(-50%, -82%); cursor: pointer; }
+/* The root cause of the room feeling cramped: a fixed PIXEL character placed
+   on a PERCENTAGE grid, so density changed with viewport instead of staying
+   constant. Measured at a 573px room the 11% row pitch was 63px against a
+   64px character — neighbours literally overlapped.
+   8.5cqw against an 11%-ish pitch leaves roughly a quarter of the pitch as
+   gap at every width. The 64px ceiling keeps the original desktop look; the
+   36px floor stops characters vanishing on a phone. */
+.v-office__agent {
+  position: absolute;
+  width: var(--office-char, 64px); height: var(--office-char, 64px);
+  transform: translate(-50%, -82%); cursor: pointer;
+}
 .v-office__agent.is-moving { transition: left 1.15s ease-in-out, top 1.15s ease-in-out; }
 .v-office__sprite {
   /* Fills the parent so character size is defined in exactly one place.
@@ -263,7 +284,9 @@
   .v-office__prop--desk::before { width: 30px; height: 19px; top: -15px; }
   .v-office__prop--board, .v-office__prop--table { width: 88px; }
   .v-office__prop--rug { width: 130px; }
-  .v-office__agent { width: 48px; height: 48px; }
+  /* No character size here any more — the container-query clamp handles every
+     width continuously, and a hard 48px override would reintroduce exactly
+     the fixed-pixel-on-a-percentage-grid problem it replaced. */
   .v-office__zone { font-size: 0.58rem; }
   /* 210px inside a ~335px room is most of the wall. The JS clamp keeps it in
      bounds either way, but a bubble that wide covers the character it belongs

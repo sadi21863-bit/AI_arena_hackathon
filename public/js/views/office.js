@@ -367,7 +367,15 @@ export async function mount(el, params) {
     built = true;
   }
 
-  function draw(agents) {
+  /**
+   * @param {object[]} agents
+   * @param {{animate?: boolean}} [opts] animate:false repositions silently —
+   *   used on resize, where every character's coordinates change because the
+   *   room did, not because anyone moved. Replaying walk cycles there would
+   *   have the whole cast stroll across the room every time the window is
+   *   dragged.
+   */
+  function draw(agents, { animate = true } = {}) {
     const first = !built;
     if (first) build(agents);
     agents.forEach((a) => { latest[a.agent_id] = a; });
@@ -381,11 +389,55 @@ export async function mount(el, params) {
     const roomEl = el.querySelector("#of-room");
     if (!roomEl) return;
     const room = roomEl.getBoundingClientRect();
+
+    // Character size, measured — the root cause of the room feeling cramped
+    // was a fixed 64px character on a percentage grid, so density changed
+    // with viewport instead of staying constant. 8.5% of room width keeps
+    // the character at roughly two-thirds of the row pitch below; the 64px
+    // ceiling preserves the original desktop look and the 36px floor stops
+    // it disappearing on a phone.
+    //
+    // Written straight onto each element rather than through CSS. Two other
+    // routes were tried against a live room and both failed the same way —
+    // the agents' style simply did not re-resolve:
+    //   - `clamp(36px, 8.5cqw, 64px)`: a probe element with the SAME parent
+    //     computed 61px while an agent computed 64px, the agent still
+    //     resolving cqw against the viewport.
+    //   - an inherited `--office-char` set on the room: the agent's computed
+    //     value read 59px while its width still resolved to the 64px var()
+    //     fallback.
+    // An explicit inline width has no such ambiguity, and this loop already
+    // touches every node. Applied before the probe is measured — the pitch
+    // maths below reads the character's real rendered width.
+    if (room.width) {
+      const charPx = Math.round(Math.max(36, Math.min(64, room.width * 0.085)));
+      Object.values(nodes).forEach((n) => {
+        n.el.style.width = `${charPx}px`;
+        n.el.style.height = `${charPx}px`;
+      });
+    }
+
     const probe = nodes[agents[0] && agents[0].agent_id];
     const halfW = probe ? probe.el.offsetWidth / 2 : 32;
     const padX = room.width ? (halfW / room.width) * 100 + 1 : 7;
     const padTop = room.height ? ((probe ? probe.el.offsetHeight : 64) / room.height) * 100 + 14 : 17;
     const padBottom = room.height ? (18 / room.height) * 100 : 4;
+
+    // Spacing derives from the character's REAL rendered size rather than the
+    // old hardcoded 11%. Scaling the sprite alone would not have helped: an
+    // 11% pitch is 63px in a 573px room against what used to be a 64px
+    // character, so the overlap came from the pitch being a percentage while
+    // the character was pixels. Both ends are measured now, so the gap stays
+    // proportional at every width.
+    //
+    // 1.35x horizontally leaves ~26% of the pitch as gap — which lands within
+    // a percent of the original 11% at desktop width, so the desktop layout is
+    // preserved rather than re-tuned. 1.5x vertically because the name label
+    // sits below the sprite and needs the extra room.
+    const charW = probe ? probe.el.offsetWidth : 64;
+    const charH = probe ? probe.el.offsetHeight : 64;
+    const colPitch = room.width ? (charW * 1.35 / room.width) * 100 : 11;
+    const rowPitch = room.height ? (charH * 1.5 / room.height) * 100 : 11;
 
     const perZone = {};
     agents.forEach((a) => { (perZone[zoneFor(a)] ||= []).push(a); });
@@ -393,9 +445,12 @@ export async function mount(el, params) {
     Object.keys(perZone).forEach((zoneId) => {
       const group = perZone[zoneId];
       const zone = ZONE_BY_ID[zoneId];
-      // Rows of at most 4: all 12 legitimately share the break area during a
-      // hackathon, and one row that wide overlaps its own name labels.
-      const perRow = Math.min(4, group.length);
+      // Rows of at most 4, but fewer when the room cannot fit 4 — all 12
+      // legitimately share one zone during a hackathon, and on a narrow room a
+      // 4-wide row overruns the walls and collides with the neighbouring
+      // zone's row. Falling back to more, shorter rows keeps them apart.
+      const fitPerRow = Math.max(1, Math.floor((100 - 2 * padX) / colPitch));
+      const perRow = Math.max(1, Math.min(4, group.length, fitPerRow));
       const rowCount = Math.ceil(group.length / perRow);
 
       group.forEach((a, i) => {
@@ -403,10 +458,10 @@ export async function mount(el, params) {
         if (!node) return;
         const r = Math.floor(i / perRow), c = i % perRow;
         const inRow = Math.min(perRow, group.length - r * perRow);
-        const x = clamp(zone.x + (c - (inRow - 1) / 2) * 11, padX, 100 - padX);
-        const y = clamp(zone.y + r * 11 - (rowCount - 1) * 5.5, padTop, 100 - padBottom);
+        const x = clamp(zone.x + (c - (inRow - 1) / 2) * colPitch, padX, 100 - padX);
+        const y = clamp(zone.y + r * rowPitch - (rowCount - 1) * (rowPitch / 2), padTop, 100 - padBottom);
 
-        place(node, x, y, !first);
+        place(node, x, y, animate && !first);
 
         const info = taskInfo(a.task_type);
         // P1: a failed row still never positions anyone — but it must not be
@@ -480,14 +535,27 @@ export async function mount(el, params) {
     drawInspector();
   }
 
-  // Bubble geometry depends on the room's pixel width, which changes on
-  // resize without any data changing — so it cannot ride on the data tick.
-  // rAF-coalesced because resize fires continuously while dragging, and each
-  // call measures every visible bubble.
-  let clampFrame = 0;
+  // Layout depends on the room's pixel size, which changes on resize with no
+  // data change at all — so it cannot ride on the data tick. Since characters
+  // now scale with the room (--office-char), their spacing changes too, and a
+  // resize without a re-layout would leave them at coordinates computed for
+  // the old character size. rAF-coalesced because resize fires continuously
+  // while dragging.
+  // Debounced with a timer rather than requestAnimationFrame: rAF is
+  // suspended whenever the page is not compositing — a background tab, or a
+  // hidden pane — so an rAF-coalesced handler silently never runs and the
+  // layout stays sized for the old room until the next data tick, which can
+  // be minutes away. Found exactly that while verifying this: rAF never
+  // fired in the preview pane.
+  let resizeTimer = 0;
   const onResize = () => {
-    if (clampFrame) return;
-    clampFrame = requestAnimationFrame(() => { clampFrame = 0; clampBubbles(); });
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      resizeTimer = 0;
+      const known = Object.values(latest);
+      if (built && known.length) draw(known, { animate: false });
+      else clampBubbles();
+    }, 120);
   };
   window.addEventListener("resize", onResize);
 
@@ -622,7 +690,7 @@ export async function mount(el, params) {
     // plus the resize listener and any frame it has pending — a listener that
     // outlives its view is the same leak in a different shape.
     window.removeEventListener("resize", onResize);
-    if (clampFrame) cancelAnimationFrame(clampFrame);
+    clearTimeout(resizeTimer);
     Object.values(nodes).forEach(stopWalk);
   };
 }
