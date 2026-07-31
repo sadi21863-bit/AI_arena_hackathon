@@ -1,0 +1,59 @@
+name: Deploy Worker to Cloudflare
+
+# Closes the standing gap that `deploy-pages.yml` closed for the frontend:
+# public/ auto-deployed, but the WORKER never did. Every backend commit needed
+# someone to remember `npx wrangler deploy` from a dev machine, and a commit
+# that reached master without it simply never ran in production — which is
+# exactly what happened repeatedly during Weeks 5-8.
+#
+# Added 2026-07-31 for a second reason: `wrangler deploy` from the maintainer's
+# machine was failing with 520/522 and api.cloudflare.com was timing out
+# entirely from that network, hours before the first autonomous cadence. The
+# Pages deploy — same API, same credentials — succeeded from Actions in the
+# same window, which located the fault in local routing rather than in
+# Cloudflare. Deploying from Actions is therefore both the permanent fix and
+# the way around a broken local route.
+#
+# Deliberately scoped to the paths that actually change Worker behaviour, so
+# a docs- or scripts-only commit doesn't redeploy production for nothing.
+# Schema changes are NOT here on purpose: migrations are applied by
+# scripts/apply_schema.js and must land BEFORE the code that reads the new
+# columns, so they stay a deliberate human step rather than a side effect of
+# a push (see db/APPLY_ORDER.md).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "wrangler.toml"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck before deploying
+        # A Worker that fails to typecheck should never reach production. The
+        # local flow always ran tsc first; making it part of the deploy means
+        # that discipline survives the move into CI.
+        run: npx tsc --noEmit -p .
+
+      - name: Deploy Worker
+        run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
