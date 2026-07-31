@@ -144,6 +144,80 @@ noexec `tmpfs` mounted at `/tmp` sized only for `HOME=/tmp`: something
 OpenCode writes under `$HOME` for multi-step session bookkeeping may not
 tolerate that combination past a handful of steps.
 
+> **SUPERSEDED 2026-07-31 — the sandbox theory above is wrong. Root cause
+> found and fixed; see the correction below.**
+
+### NEW-1b (2026-07-31) — correction: P0-0a's second crash is a tool-call-id type mismatch, not a sandbox restriction
+
+The conclusion above ("very likely specific to the GitHub Actions sandbox")
+does not survive contact with the error string. It rested on a single
+inference — one un-sandboxed local run succeeded, therefore the sandbox is
+what differs — and that inference is invalid, because the bug is
+**nondeterministic**. One clean run is one lucky sample, not a control.
+
+What the error actually is:
+
+- `Expected 'id' to be a string.` is the Vercel AI SDK's
+  `AI_InvalidResponseDataError`, not an OpenCode error and not an OS/sandbox
+  error. `@ai-sdk/openai-compatible` — the exact npm provider
+  `docker/opencode.json` names — validates every `tool_calls[].id` against the
+  OpenAI spec, which requires a **string**, and throws when it isn't one. The
+  same failure is reported upstream against other providers whose models
+  return integer tool-call ids.
+- Cloudflare's changelog, **2026-02-17**: "`/v1/chat/completions` now
+  preserves original tool call IDs from models instead of regenerating them."
+  Before that change every id was a Cloudflare-generated string and this bug
+  was structurally impossible. After it, whatever `@cf/openai/gpt-oss-120b`
+  emits reaches the client untouched.
+
+That explains every piece of evidence the sandbox theory could not:
+the crash landing on the ~5th tool call after four clean round trips (it is a
+per-tool-call property of model output, so it appears when the model happens
+to emit a non-string id), and the local run passing (a different sample).
+Neither Squid, nor the read-only rootfs, nor `HOME=/tmp` has any mechanism by
+which it would corrupt one field of one JSON object and leave four prior
+identical round trips intact.
+
+Same entry also confirms the *other* wrinkle this investigation hit directly
+against the API — "Assistant messages with `content: null` and `tool_calls`
+are now accepted" — so both observed incompatibilities are the same family.
+
+**Fix (`scripts/workers_ai_shim.js`):** a small normalizing proxy on the
+Actions runner between OpenCode and Cloudflare. It coerces non-string
+`tool_calls[].id` to strings on the response path and rewrites assistant
+`content: null` to `""` on the request path. Null/undefined ids are
+deliberately *not* stringified — inventing the id `"null"` would silently
+break the tool-result correlation ids exist for, converting a loud crash into
+a wrong answer.
+
+Because the shim injects `Authorization` itself, `CF_API_TOKEN` and
+`CF_ACCOUNT_ID` are no longer passed into the container at all, and
+`api.cloudflare.com` was dropped from the Squid allowlist. The sandbox's
+egress filtering exists to stop an `--auto` agent exfiltrating that
+credential; not putting the credential in the container is strictly stronger
+than containing it.
+
+**Verified without a CI run:** the transforms are pure, so
+`scripts/test_workers_ai_shim.js` reproduces the crash from a synthetic
+response — 16 checks including a frame split mid-JSON across chunk
+boundaries and a realistic 5-tool-call stream where only the last id is bad.
+That matters here specifically: a passing live run would prove nothing, which
+is how this got misdiagnosed the first time. The shim's HTTP path was
+separately smoke-tested end to end against the real `api.cloudflare.com`
+using dummy credentials (correct upstream URL built, TLS established,
+response returned cleanly).
+
+**Still unverified, honestly:** no live build turn has run against this yet,
+so "the crash no longer occurs in CI" is not yet an observed fact. Two
+supporting changes hedge that. A crash no longer discards the turn's work —
+files written before the crash are now verified, committed and pushed, and
+the failure is reported *after* that, so a recurrence costs a turn's status
+rather than a turn's output. And stderr is now captured separately
+(`opencode-turn.err.log`) alongside the shim's own log, because Phase A
+previously redirected only stdout, which is a large part of why this took two
+passes to pin down. OpenCode is also pinned (`1.18.8`, the version actually
+validated locally) instead of installing "latest" into every image build.
+
 ### NEW-2 — The duplicate-idea bug is systemic self-duplication within ideation, not two agents converging. P0-0b's scope is bigger than one pair.
 
 Pulled all 36 ideas from the actual week7 closed-beta ideathon

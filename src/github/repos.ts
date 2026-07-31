@@ -171,10 +171,16 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     }
   }
 
-  const [workflow, dockerfile, opencodeConfig] = await Promise.all([
+  const [workflow, dockerfile, opencodeConfig, aiShim] = await Promise.all([
     fetchMainRepoFile(".github/workflows/team-build-turn.yml"),
     fetchMainRepoFile("docker/Dockerfile.arena-team-base"),
     fetchMainRepoFile("docker/opencode.json"),
+    // The build-turn workflow starts this on the runner and points OpenCode
+    // at it instead of at Cloudflare directly (P0-0a — see the shim's own
+    // header). A team repo without it would fail every turn at the "Start
+    // Workers AI shim" step, so it has to be scaffolded alongside the three
+    // files that were already here.
+    fetchMainRepoFile("scripts/workers_ai_shim.js"),
   ]);
 
   const readme = `# ${idea.title}\n\nTeam ${teamName} — spec §3.2 hackathon build.\n\n**One-liner:** ${idea.oneLiner}\n\n**Problem:** ${idea.problem}\n\n**Solution:** ${idea.solution}\n\n**Build scope:** ${idea.buildScope}\n\nBuilt entirely by an AI coding agent across discrete GitHub Actions build turns (spec §8) — no human-written code.\n`;
@@ -190,6 +196,7 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   await putFile(env, owner, repoName, ".github/workflows/team-build-turn.yml", workflow, "Scaffold: build-turn workflow");
   await putFile(env, owner, repoName, "docker/Dockerfile.arena-team-base", dockerfile, "Scaffold: container image");
   await putFile(env, owner, repoName, "docker/opencode.json", opencodeConfig, "Scaffold: OpenCode provider config");
+  await putFile(env, owner, repoName, "scripts/workers_ai_shim.js", aiShim, "Scaffold: Workers AI compatibility shim");
 
   await Promise.all([
     setRepoSecret(env, owner, repoName, "CF_ACCOUNT_ID", env.CF_ACCOUNT_ID),

@@ -5,8 +5,8 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "Cloudflare Workers AI",
       "options": {
-        "baseURL": "https://api.cloudflare.com/client/v4/accounts/{env:CF_ACCOUNT_ID}/ai/v1",
-        "apiKey": "{env:CF_API_TOKEN}"
+        "baseURL": "{env:ARENA_AI_BASE_URL}",
+        "apiKey": "{env:ARENA_AI_API_KEY}"
       },
       "models": {
         "@cf/openai/gpt-oss-120b": {

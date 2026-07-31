@@ -101,14 +101,14 @@ jobs:
         # container traffic, they're not something a process inside the
         # container can opt out of.
         #
-        # Only 2 domains allowed, matching what Phase A's container actually
-        # touches (checked docker/opencode.json + Dockerfile.arena-team-base
-        # directly rather than guessing): api.cloudflare.com (Workers AI,
-        # opencode.json's baseURL) and registry.npmjs.org (whatever the
-        # coding agent's own build needs to npm install). github.com/
-        # api.github.com are deliberately NOT allowlisted — the "Commit
-        # progress" step below does git push from the RUNNER, outside any
-        # container, so nothing inside Phase A's container legitimately
+        # Only registry.npmjs.org is allowed now (whatever the coding agent's
+        # own build needs to npm install). api.cloudflare.com was removed when
+        # the Workers AI shim landed below: the container no longer talks to
+        # Cloudflare at all, it talks to the shim on the runner, so leaving
+        # Cloudflare allowlisted would only widen egress for no reason.
+        # github.com/api.github.com are deliberately NOT allowlisted — the
+        # "Commit progress" step below does git push from the RUNNER, outside
+        # any container, so nothing inside Phase A's container legitimately
         # needs GitHub access at all.
         run: |
           sudo apt-get update -qq
@@ -117,7 +117,7 @@ jobs:
           http_port 3128
           acl allowed_ssl_ports port 443
           acl CONNECT method CONNECT
-          acl allowed_domains dstdomain .api.cloudflare.com .registry.npmjs.org
+          acl allowed_domains dstdomain .registry.npmjs.org
           http_access allow CONNECT allowed_domains allowed_ssl_ports
           http_access allow allowed_domains
           http_access deny all
@@ -131,7 +131,47 @@ jobs:
           sudo iptables -I DOCKER-USER -p tcp --dport 443 -j DROP
           sudo iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
 
-      - name: "Phase A — agent work (network-scoped to api.cloudflare.com + registry.npmjs.org)"
+      - name: Start Workers AI compatibility shim (P0-0a)
+        # Fixes the crash that killed every build turn mid-run:
+        # `AI_InvalidResponseDataError: Expected 'id' to be a string.`
+        #
+        # docs/INVESTIGATION_2026-07-28.md guessed this was sandbox-specific
+        # because one un-sandboxed local run passed. It isn't. The error comes
+        # from the Vercel AI SDK, which validates tool_calls[].id as a string
+        # per the OpenAI spec, and Cloudflare's 2026-02-17 change ("preserves
+        # original tool call IDs from models instead of regenerating them")
+        # means whatever gpt-oss-120b emits now reaches the client raw. It is
+        # a per-tool-call property of model output, so it is nondeterministic
+        # — which is why it struck on the ~5th tool call and why a single
+        # clean local run proved nothing.
+        #
+        # The shim normalizes those ids (and the assistant `content: null`
+        # incompatibility found in the same investigation) and holds
+        # CF_API_TOKEN itself, so the --auto agent's container never receives
+        # the credential the egress filtering above exists to protect.
+        #
+        # Logs go to $RUNNER_TEMP, deliberately NOT into the workspace: any
+        # file the shim wrote there would show up in "Enforce real build
+        # output"'s `git status` and make a do-nothing turn look like it
+        # produced changes, defeating the very guard that catches a no-op
+        # agent. nohup + redirect also stops the backgrounded process from
+        # holding this step's stdout open, which can hang the step.
+        run: |
+          nohup node scripts/workers_ai_shim.js > "$RUNNER_TEMP/shim.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            # -s (not -sf): the shim answering with any HTTP status means it is
+            # up. Only a refused connection is worth waiting out.
+            if curl -s -o /dev/null -m 2 http://127.0.0.1:3129/v1/models; then
+              echo "shim reachable on 3129"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Workers AI shim never became reachable on 3129"
+          cat "$RUNNER_TEMP/shim.log" || true
+          exit 1
+
+      - name: "Phase A — agent work (network-scoped to the shim + registry.npmjs.org)"
         # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
@@ -147,7 +187,25 @@ jobs:
         # above (which runs on the runner host, reachable via the Docker-
         # provided host-gateway alias) — the DOCKER-USER DROP rules block any
         # attempt to bypass it and go direct.
+        #
+        # NO_PROXY includes host.docker.internal so the shim call goes direct
+        # rather than being bounced through Squid (which no longer allowlists
+        # Cloudflare anyway).
+        #
+        # CF_ACCOUNT_ID/CF_API_TOKEN are deliberately NOT passed in any more —
+        # the shim on the runner holds them. The container gets only a
+        # placeholder key, because @ai-sdk/openai-compatible requires the
+        # option to be non-empty.
+        #
+        # `set +e` + explicit exit-code capture: a crash partway through a
+        # turn still leaves real files on disk, and git history is the
+        # persistence layer between turns (spec §8). Failing the step here
+        # threw that work away and re-ran the same turn from scratch. The
+        # acceptance check below still fails a genuinely empty turn; this only
+        # stops a late crash from discarding work that did happen.
+        id: agent
         run: |
+          set +e
           docker run --rm \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
             --read-only \
@@ -156,9 +214,9 @@ jobs:
             --add-host=host.docker.internal:host-gateway \
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
-            -e NO_PROXY=localhost,127.0.0.1 \
-            -e CF_ACCOUNT_ID \
-            -e CF_API_TOKEN \
+            -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
+            -e ARENA_AI_BASE_URL=http://host.docker.internal:3129/v1 \
+            -e ARENA_AI_API_KEY=shim-injects-the-real-credential \
             -e HOME=/tmp \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
@@ -166,7 +224,11 @@ jobs:
             opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
               --model workers-ai/@cf/openai/gpt-oss-120b \
               --auto \
-              --format json > opencode-turn.log
+              --format json > opencode-turn.log 2> opencode-turn.err.log
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "opencode exited $code"
+          exit 0
         # --auto approves OpenCode's own permission prompts (needed since
         # there's no human to click "yes" in CI) — the container's cap-drop
         # and non-root user are what actually bound what --auto can do, not
@@ -176,7 +238,22 @@ jobs:
 
       - name: Show turn log (debug)
         if: always()
-        run: cat opencode-turn.log 2>/dev/null || echo "opencode-turn.log not found"
+        # stderr is captured separately now. Phase A previously redirected
+        # only stdout, so when opencode crashed the actual diagnostic went to
+        # the void and the failure had to be reconstructed from the JSON
+        # stream — a large part of why P0-0a took as long as it did to pin
+        # down. --format json means stdout must stay pure, hence two files
+        # rather than 2>&1.
+        run: |
+          echo "--- stdout ---"
+          cat opencode-turn.log 2>/dev/null || echo "opencode-turn.log not found"
+          echo "--- stderr ---"
+          cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
+          echo "--- shim ---"
+          cat "$RUNNER_TEMP/shim.log" 2>/dev/null || echo "shim.log not found"
+          echo "--- crash signature (empty means the P0-0a id bug did not recur) ---"
+          grep -iE "expected 'id'|InvalidResponseData|upstream error" \
+            opencode-turn.log opencode-turn.err.log "$RUNNER_TEMP/shim.log" 2>/dev/null || true
 
       - name: Enforce real build output
         # Found live (see docs/INVESTIGATION_2026-07-28.md P0-0a / NEW-1): a
@@ -188,9 +265,9 @@ jobs:
         # or the commit step, so a no-op turn is reported as a failure
         # instead of a silent success.
         run: |
-          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log')
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log')
           if [ -z "$CHANGED" ]; then
-            echo "::error::Build turn produced no file changes outside opencode-turn.log — the agent emitted text without writing any files. Failing the job instead of reporting a false success."
+            echo "::error::Build turn produced no file changes outside the turn logs — the agent emitted text without writing any files. Failing the job instead of reporting a false success."
             exit 1
           fi
           echo "Files changed this turn:"
@@ -229,9 +306,21 @@ jobs:
           name: build-turn-${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}
           path: |
             opencode-turn.log
+            opencode-turn.err.log
             **/*.log
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: Report agent crash (after the work was preserved)
+        # Runs last on purpose. If opencode crashed but still produced files,
+        # everything above has already verified, committed and pushed that
+        # work — the next turn continues from it instead of redoing it. The
+        # turn is still reported as failed, because it did fail: honest CI
+        # status, without throwing away real progress to get it.
+        if: steps.agent.outputs.exit_code != '0'
+        run: |
+          echo "::error::opencode exited ${{ steps.agent.outputs.exit_code }}. Any files it produced before crashing were committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
+          exit 1
 # Re-pushed 2026-07-23 to trigger GitHub Actions workflow_dispatch re-indexing
 # (recurring GitHub quirk, same fix as before — dispatches 422 with
 # "Workflow does not have 'workflow_dispatch' trigger" immediately after a

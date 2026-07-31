@@ -12,8 +12,18 @@
 
 FROM node:20-alpine
 
+# Pinned, not "whatever latest is at image-build time". The image is rebuilt
+# every single turn, so an unpinned install meant the agent driver could
+# change under a running competition with no commit to point at — and during
+# the P0-0a investigation it meant the crashing version could not be named or
+# re-tested. Bump this deliberately.
+ARG OPENCODE_VERSION=1.18.8
+
+# VERSION is consumed by the installer script (`requested_version=${VERSION:-}`),
+# so it has to be set on the `bash` that RUNS it, not on the `curl` that fetches
+# it — `VERSION=x curl ... | bash` looks right and silently installs latest.
 RUN apk add --no-cache git=~2 ripgrep curl bash && \
-    curl -fsSL https://opencode.ai/install | bash && \
+    curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash && \
     mv /root/.opencode /opt/opencode 2>/dev/null || true && \
     apk del curl bash && \
     rm -rf /var/cache/apk/*
@@ -25,6 +35,11 @@ ENV PATH="/opt/opencode/bin:${PATH}"
 # which matters here since HOME gets pointed at the per-run tmpfs at runtime
 # (see team-build-turn.yml) and anything baked in under it would be hidden
 # by that mount.
+#
+# Its baseURL/apiKey now come from ARENA_AI_BASE_URL/ARENA_AI_API_KEY, which
+# team-build-turn.yml points at the Workers AI shim running on the runner
+# rather than at Cloudflare directly (P0-0a). The real CF credentials stay
+# outside this container entirely.
 COPY opencode.json /opt/opencode/config/opencode.json
 ENV OPENCODE_CONFIG=/opt/opencode/config/opencode.json
 
