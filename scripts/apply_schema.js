@@ -23,7 +23,6 @@ const path = require("path");
 
 const DB_NAME = "arena-db";
 const DB_DIR = path.join(__dirname, "..", "db");
-const isWindows = process.platform === "win32";
 
 /**
  * Canonical apply order. This list is the source of truth — db/APPLY_ORDER.md
@@ -67,28 +66,47 @@ const MIGRATIONS = [
   { file: "schema_week8_chronicle.sql", sentinel: { type: "table", name: "event_chronicle" } },
 ];
 
+/**
+ * Runs wrangler's JS entry point directly under node, with NO shell.
+ *
+ * The obvious `npx wrangler ...` needs shell:true on Windows (npx.cmd is a
+ * batch script and execFileSync throws EINVAL without it), and shell:true
+ * string-concatenates argv — which is what forced every query through a temp
+ * file to dodge quoting. Going straight to bin/wrangler.js removes the shell,
+ * so arguments are passed through verbatim and `--command` is safe to use.
+ * That matters for correctness, not just tidiness — see execSql below.
+ */
+const WRANGLER_BIN = path.join(__dirname, "..", "node_modules", "wrangler", "bin", "wrangler.js");
+
 function wrangler(args) {
-  return execFileSync(isWindows ? "npx.cmd" : "npx", ["wrangler", ...args], {
+  return execFileSync(process.execPath, [WRANGLER_BIN, ...args], {
     encoding: "utf8",
-    shell: isWindows,
     maxBuffer: 32 * 1024 * 1024,
   });
 }
 
 /**
- * Runs SQL via a temp file rather than --command. Deliberate: passing SQL
- * inline needs shell quoting, and on Windows execFileSync with shell:true
- * string-concatenates arguments, so any quote or space in the statement
- * corrupts the command. A file path has neither problem.
+ * Runs a query and returns wrangler's raw --json output.
+ *
+ * MUST use --command, never --file. Found live 2026-07-31, mid-deploy, against
+ * production: `d1 execute --remote --file` does not return the query's rows at
+ * all — it returns a batch SUMMARY, `[{"Total queries executed": 1, "Rows
+ * read": 43, ...}]`. parseRows sees exactly one row and every sentinel check
+ * therefore answers "present", for every table and column, including ones that
+ * do not exist.
+ *
+ * The consequence was not a crash. `--baseline` would have recorded all 15
+ * migrations as already applied — the four genuinely new ones included — then
+ * printed "Nothing to do", leaving production without the new schema while the
+ * tracking table asserted it was fully migrated. A silent no-op reported as
+ * success, which is the exact failure shape docs/ARENA_BACKLOG.md opens by
+ * warning about.
+ *
+ * `--command` returns real rows. assertQueryRows below makes a regression
+ * loud rather than silent.
  */
 function execSql(target, sql) {
-  const tmp = path.join(__dirname, `.apply_schema_${process.pid}.sql`);
-  fs.writeFileSync(tmp, sql);
-  try {
-    return wrangler(["d1", "execute", DB_NAME, target, "--json", "--file", tmp]);
-  } finally {
-    fs.unlinkSync(tmp);
-  }
+  return wrangler(["d1", "execute", DB_NAME, target, "--json", "--command", sql]);
 }
 
 function execMigration(target, file) {
@@ -102,23 +120,45 @@ function parseRows(stdout) {
   return JSON.parse(stdout.slice(start)).flatMap((r) => r.results ?? []);
 }
 
+/**
+ * Refuses to treat a batch summary as query results.
+ *
+ * `d1 execute --file` answers with `{"Total queries executed": N, "Rows read":
+ * ...}` instead of the rows. Every sentinel check then reads as "present" and
+ * the tool silently decides there is nothing to migrate. Detecting the summary
+ * shape turns a wrong answer into a stopped run — the difference between
+ * noticing at deploy time and noticing when production is missing columns.
+ */
+function assertQueryRows(rows, what) {
+  if (rows.some((r) => r && Object.prototype.hasOwnProperty.call(r, "Total queries executed"))) {
+    console.error(
+      `Refusing to continue: got a batch summary instead of rows when checking ${what}.\n` +
+      `This means a query ran through --file rather than --command; every sentinel would read as present.`
+    );
+    process.exit(1);
+  }
+  return rows;
+}
+
 function sentinelPresent(target, sentinel) {
   if (sentinel.type === "column") {
     // PRAGMA returns nothing (not an error) for a table that doesn't exist,
     // which is the right answer here anyway: no table means no column.
     const out = execSql(target, `PRAGMA table_info(${sentinel.table});`);
-    return parseRows(out).some((r) => r.name === sentinel.name);
+    const rows = assertQueryRows(parseRows(out), `${sentinel.table}.${sentinel.name}`);
+    return rows.some((r) => r.name === sentinel.name);
   }
   const out = execSql(
     target,
     `SELECT name FROM sqlite_master WHERE type='${sentinel.type}' AND name='${sentinel.name}';`
   );
-  return parseRows(out).length > 0;
+  return assertQueryRows(parseRows(out), `${sentinel.type} ${sentinel.name}`).length > 0;
 }
 
 function appliedSet(target) {
   if (!sentinelPresent(target, { type: "table", name: "schema_migrations" })) return new Set();
-  return new Set(parseRows(execSql(target, "SELECT name FROM schema_migrations;")).map((r) => r.name));
+  const rows = assertQueryRows(parseRows(execSql(target, "SELECT name FROM schema_migrations;")), "schema_migrations");
+  return new Set(rows.map((r) => r.name));
 }
 
 function record(target, files, method) {
