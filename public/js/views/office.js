@@ -285,6 +285,9 @@ export async function mount(el, params) {
   /* P5: the seven judges — roster, progress and which model actually answered. */
   let judging = null;
   let selectedJudge = null;
+  /* P4: agent_id -> the pair it is part of, for the Merge Tables. */
+  let collabByAgent = {};
+  let collabPairs = [];
   /* agent_id -> roster row, populated for hackathons only. */
   let rosterByAgent = {};
   /* team_id -> latest build turn, for the CI badge on each bench. */
@@ -340,6 +343,14 @@ export async function mount(el, params) {
     // hackathon the tribunal_* tasks ARE per-agent, and an agent doing real
     // work belongs at the work, not at a bench.
     let wanted = info ? info.zone : null;
+    // P4: an agent whose pair is still being decided belongs at the Merge
+    // Table. Only PENDING pairs move anyone — once accepted or refused the
+    // conversation is over and standing there would misrepresent a settled
+    // outcome as an ongoing one.
+    if (!wanted) {
+      const pair = collabByAgent[agent.agent_id];
+      if (pair && pair.state === "pending") wanted = "collaboration";
+    }
     if (!wanted) {
       const member = rosterByAgent[agent.agent_id];
       wanted = member ? (member.team_name === "beta" ? "team_beta" : "team_alpha") : "break";
@@ -562,6 +573,24 @@ export async function mount(el, params) {
           <b>${a.failed_attempts} failed <code>${a.failed_task_type}</code> attempt(s)</b> — still within the retry cap, so this should recover on its own.
           ${a.last_error ? html`<div class="v-office__inspector-err">${a.last_error}</div>` : ""}
         </div>` : ""}
+      ${(() => {
+        // P4: who this agent is paired with, and how it went. Shown for
+        // settled pairs too — "Gale refused Iris, and why" stays interesting
+        // after the phase ends, and it is the only place the reason is
+        // readable outside the raw interaction log.
+        const pair = collabByAgent[a.agent_id];
+        if (!pair) return "";
+        const verb = pair.state === "accepted" ? "merged with"
+          : pair.state === "refused" ? "declined a merge with"
+          : pair.state === "failed" ? "pairing failed with"
+          : "deciding on a merge with";
+        return html`
+          <div class="v-office__inspector-alert ${pair.state === "accepted" ? "v-office__inspector-alert--ok" : "v-office__inspector-alert--warn"}">
+            <b>${verb} ${pair.partner.title}</b>
+            ${pair.score != null ? html` · similarity ${pair.score}` : ""}
+            ${pair.reason ? html`<div class="v-office__inspector-err">${pair.reason}</div>` : ""}
+          </div>`;
+      })()}
       <div class="v-office__inspector-rows">
         <div>Doing: <b>${info ? `${info.emote} ${info.label}` : "nothing right now"}</b></div>
         <div>Queue task: <b>${a.task_type || "—"}</b></div>
@@ -829,7 +858,12 @@ export async function mount(el, params) {
   // queries server-side, and asking for it during deep_research would be a
   // round trip for a guaranteed-empty answer.
   const isJudgingPhase = event.status === "ready_for_judging" || event.status === "judged";
-  const [activity, teams, roster, turns, arts, chronicle, judgingData] = await Promise.all([
+  // Collaboration outlives its own phase: pairs decided during `collaboration`
+  // still explain why an idea has two authors when you look back during
+  // architecture or judging, so this is fetched for any ideathon rather than
+  // only while the phase is live.
+  const wantsCollab = event.type === "ideathon";
+  const [activity, teams, roster, turns, arts, chronicle, judgingData, collabData] = await Promise.all([
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/teams`, { optional: true }) : Promise.resolve([]),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve([]),
@@ -840,10 +874,23 @@ export async function mount(el, params) {
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-artifacts`, { optional: true }),
     fetchJson(`/events/${encodeURIComponent(event.id)}/chronicle`, { optional: true }),
     isJudgingPhase ? fetchJson(`/events/${encodeURIComponent(event.id)}/judging`, { optional: true }) : Promise.resolve(null),
+    wantsCollab ? fetchJson(`/events/${encodeURIComponent(event.id)}/collaborations`, { optional: true }) : Promise.resolve(null),
   ]);
   if (disposed) return () => {};
   if (arts) artifacts = arts;
   if (judgingData) judging = judgingData;
+  if (collabData) applyCollaborations(collabData);
+
+  /** Index pairs by agent so zoneFor can ask "is this agent mid-negotiation?". */
+  function applyCollaborations(pairs) {
+    collabPairs = Array.isArray(pairs) ? pairs : [];
+    collabByAgent = {};
+    for (const p of collabPairs) {
+      // Both sides of a pending pair walk to the table; the proposer is `a`.
+      collabByAgent[p.a.agent_id] = { ...p, side: "a", partner: p.b };
+      collabByAgent[p.b.agent_id] = { ...p, side: "b", partner: p.a };
+    }
+  }
 
   // P3: the Chronicler's line for the most recent phase, as a caption under
   // the room. Set as textContent — this is model-generated prose reaching the
@@ -920,6 +967,20 @@ export async function mount(el, params) {
     <span class="v-office__set-name">${SET.name}</span>
     <span class="v-office__set-blurb">${SET.blurb}</span>`);
 
+  // P4: what the pairing actually produced. Refusals are reported alongside
+  // merges rather than hidden — an agent declining is a legitimate spec
+  // outcome, and a room that only showed successful merges would overstate
+  // how much collaboration is really happening.
+  if (collabPairs.length) {
+    const n = (s) => collabPairs.filter((p) => p.state === s).length;
+    const pending = n("pending"), accepted = n("accepted"), refused = n("refused");
+    render(noteEl, html`<div class="arena-note"><span>🤝</span><span>
+      <b>Collaboration — ${collabPairs.length} pair(s) proposed.</b>
+      ${accepted} merged, ${refused} refused, ${pending} still deciding.
+      Pairs are chosen by embedding similarity, then each responding agent accepts or refuses in character — refusing is allowed, so a low merge count is a real result rather than a broken step.
+    </span></div>`);
+  }
+
   // P5: the judging contract, stated where the judging happens. The pinned
   // model matters because a mid-event swap mixes model families into one
   // weighted ranking (P0-2), and a failed calibration matters because judging
@@ -963,7 +1024,7 @@ export async function mount(el, params) {
     // Turn state is refetched alongside activity: during a hackathon it is the
     // only thing that actually changes between ticks, so polling activity
     // alone would leave the CI badge and the turn ring permanently stale.
-    const [next, nextTurns, nextRoster, nextJudging] = await Promise.all([
+    const [next, nextTurns, nextRoster, nextJudging, nextCollab] = await Promise.all([
       fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
       hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/build-turns`, { optional: true }) : Promise.resolve(null),
       hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve(null),
@@ -971,11 +1032,17 @@ export async function mount(el, params) {
       // and no agent has a queue row then — polling activity alone would leave
       // the bench frozen through the whole phase.
       isJudgingPhase ? fetchJson(`/events/${encodeURIComponent(event.id)}/judging`, { optional: true }) : Promise.resolve(null),
+      // Pairs resolving one at a time IS the motion of the collaboration
+      // phase, and it produces no per-agent queue rows — polling activity
+      // alone would leave the Merge Tables frozen through the whole phase,
+      // the same way it would have frozen the judges' bench.
+      wantsCollab ? fetchJson(`/events/${encodeURIComponent(event.id)}/collaborations`, { optional: true }) : Promise.resolve(null),
     ]);
     if (disposed || !next) return;
     if (nextRoster && nextRoster.length) rosterByAgent = Object.fromEntries(nextRoster.map((m) => [m.agent_id, m]));
     if (nextTurns) applyTurnState(nextTurns, nextRoster || Object.values(rosterByAgent));
     if (nextJudging) judging = nextJudging;
+    if (nextCollab) applyCollaborations(nextCollab);
     draw(next);
   });
 

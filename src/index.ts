@@ -663,6 +663,71 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(turns.results);
     }
 
+    // P4 (docs/OFFICE_INVESTIGATION_2026-07-31.md G4): who is pairing up with
+    // whom, and how it went.
+    //
+    // The one phase that is explicitly ABOUT agents interacting was the one
+    // the room could not show, because `propose_collaboration` is an
+    // event-level queue task with no agent_id — the pair is identified by two
+    // IDEA ids in the payload, and nothing resolved those back to their
+    // authors. Kai's whole persona is Team Facilitator and there was nothing
+    // on screen to facilitate.
+    //
+    // Outcome is derived from what actually happened (the merge state and the
+    // recorded interactions), not from the queue row's status: a completed
+    // queue item only means the handler ran, and the agent is allowed to
+    // refuse — refusal is a real spec outcome, not a failure.
+    const collabMatch = url.pathname.match(/^\/events\/([^/]+)\/collaborations$/);
+    if (collabMatch && request.method === "GET") {
+      const eventId = collabMatch[1];
+
+      const [queued, ideas, responses] = await Promise.all([
+        env.DB.prepare(
+          `SELECT payload, status FROM event_queue
+            WHERE event_id = ? AND task_type = 'propose_collaboration'
+            ORDER BY id ASC LIMIT 50`
+        ).bind(eventId).all<{ payload: string | null; status: string }>(),
+        env.DB.prepare(
+          `SELECT id, agent_id, co_agent_id, title, status FROM archive_ideas WHERE event_id = ?`
+        ).bind(eventId).all<{ id: string; agent_id: string; co_agent_id: string | null; title: string; status: string }>(),
+        env.DB.prepare(
+          `SELECT actor_id, target_id, type, content FROM archive_interactions
+            WHERE event_id = ? AND type IN ('merge', 'collaboration_refused')
+            ORDER BY timestamp ASC LIMIT 100`
+        ).bind(eventId).all<{ actor_id: string; target_id: string; type: string; content: string | null }>(),
+      ]);
+
+      const ideaById = new Map(ideas.results.map((i) => [i.id, i]));
+      const pairs = [];
+
+      for (const row of queued.results) {
+        let payload: { ideaA?: string; ideaB?: string; score?: number };
+        try { payload = JSON.parse(row.payload || "{}"); } catch { continue; }
+        const a = payload.ideaA && ideaById.get(payload.ideaA);
+        const b = payload.ideaB && ideaById.get(payload.ideaB);
+        if (!a || !b) continue;
+
+        // The responder is ideaB's author, answering about ideaA (see
+        // respondToCollaboration in agents/interactions.ts).
+        const response = responses.results.find((r) => r.actor_id === b.agent_id && r.target_id === a.id);
+        const accepted = a.co_agent_id === b.agent_id;
+        const state = accepted ? "accepted"
+          : response?.type === "collaboration_refused" ? "refused"
+          : row.status === "failed" ? "failed"
+          : "pending";
+
+        pairs.push({
+          state,
+          score: typeof payload.score === "number" ? +payload.score.toFixed(3) : null,
+          reason: response?.content ? String(response.content).slice(0, 300) : null,
+          a: { idea_id: a.id, title: a.title, agent_id: a.agent_id, status: a.status },
+          b: { idea_id: b.id, title: b.title, agent_id: b.agent_id, status: b.status },
+        });
+      }
+
+      return Response.json(pairs);
+    }
+
     // P5 (docs/OFFICE_INVESTIGATION_2026-07-31.md G5): the seven judges decide
     // which ideas advance and which team wins, and nothing anywhere exposed
     // them — not the roster, not their progress, not which model actually

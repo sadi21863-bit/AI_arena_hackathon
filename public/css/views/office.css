@@ -322,6 +322,11 @@
   background: color-mix(in srgb, var(--arena-danger, #b3402f) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--arena-danger, #b3402f) 35%, transparent);
 }
+.v-office__inspector-alert--ok {
+  color: var(--arena-ok, #3f7d52);
+  background: color-mix(in srgb, var(--arena-ok, #3f7d52) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--arena-ok, #3f7d52) 35%, transparent);
+}
 .v-office__inspector-alert--warn {
   color: var(--arena-clay-deep);
   background: color-mix(in srgb, var(--arena-clay) 12%, transparent);
