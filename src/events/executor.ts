@@ -13,12 +13,13 @@ import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
 import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { createTeamRepo } from "../github/repos";
-import { dispatchBuildTurn, listBuildTurnRuns } from "../github/dispatch";
+import { dispatchBuildTurn } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
+import { pairwiseRunoff, RUNOFF_MARGIN, type RunoffVerdict } from "../judges/runoff";
 import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
 import { requirePayloadField } from "./payload-utils";
-import { recordBuildTurn } from "./build-turns";
+import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence } from "./build-turns";
 import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
@@ -134,8 +135,18 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
     ? `Real competitor/precedent research:\n${grounding.results.map((r) => `- ${r.title}: ${r.snippet}`).join("\n")}\n\n`
     : "";
 
+  // N-2 (docs/ARENA_BACKLOG.md, "related, smaller"): recall keyed to the idea
+  // actually being critiqued, rather than the fixed generic lens query used
+  // at ideation time. A critic who already reasoned about a near-identical
+  // idea — in this event or a past one — should be consistent with itself
+  // instead of re-deriving an opinion from nothing each time.
+  const priorViews = await recallMemory(env, agent.id, `${idea.title} — ${idea.problem}`, 3);
+  const priorViewsText = priorViews.length
+    ? `Your own earlier take on related ideas:\n${priorViews.map((p) => `- ${p.text.slice(0, 240)}`).join("\n")}\n\n`
+    : "";
+
   const text = await callAgent(env, agent, "validate",
-    `${groundingText}Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
+    `${groundingText}${priorViewsText}Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
     `Respond with ONLY a JSON object: {"strength": string, "weakness": string, "suggestion": string}. All three fields are required, spec §4.`
   );
 
@@ -221,7 +232,7 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
 
 interface IdeaForBuild {
   id: string; agent_id: string; co_agent_id: string | null; title: string; one_liner: string;
-  problem: string; solution: string; build_scope: string;
+  problem: string; solution: string; build_scope: string; ideathon_score: number | null;
 }
 
 /**
@@ -273,6 +284,76 @@ function selectDistinctTop2(candidates: IdeaForBuild[], vectors: Map<string, num
   return candidates.slice(0, 2);
 }
 
+/**
+ * N-3: if the idea that just missed the cut is within RUNOFF_MARGIN of the
+ * second qualifier, settle the pair head-to-head instead of on a score gap
+ * that's inside judge noise. Only the second slot is contested — the top idea
+ * won on its own merits and isn't re-litigated.
+ *
+ * The challenger is drawn from the same distinctness-filtered pool the
+ * selection used (P0-0b): promoting a near-duplicate of the winning idea would
+ * undo that filter and recreate the both-teams-build-PainPal failure.
+ * Inconclusive verdicts change nothing, so a runoff can only promote on
+ * evidence that survived both orderings.
+ */
+async function applyRunoff(
+  env: Env, parentEventId: string, candidates: IdeaForBuild[], picked: IdeaForBuild[]
+): Promise<IdeaForBuild[]> {
+  if (picked.length < 2) return picked;
+
+  const scoreOf = new Map(candidates.map((c) => [c.id, c.ideathon_score ?? 0]));
+  const runnerUp = picked[1];
+  const pickedIds = new Set(picked.map((p) => p.id));
+
+  // Nearest non-selected candidate below the runner-up. Candidates are already
+  // ordered by score DESC, so the first unpicked one is the closest.
+  const challenger = candidates.find((c) => !pickedIds.has(c.id));
+  if (!challenger) return picked;
+
+  const gap = (scoreOf.get(runnerUp.id) ?? 0) - (scoreOf.get(challenger.id) ?? 0);
+  if (gap > RUNOFF_MARGIN) return picked; // a real gap — absolute scores still mean something
+
+  // A challenger too similar to the already-locked winner would reintroduce
+  // the duplicate-teams bug the distinctness filter exists to prevent.
+  const vectors = await getVectorsByIds(env, [picked[0].id, challenger.id]);
+  const winnerVec = vectors.get(picked[0].id);
+  const challengerVec = vectors.get(challenger.id);
+  if (winnerVec && challengerVec && cosineSimilarity(winnerVec, challengerVec) >= DUPLICATE_SIMILARITY_THRESHOLD) {
+    return picked;
+  }
+
+  const event = await env.DB.prepare(`SELECT judging_provider FROM archive_events WHERE id = ?`)
+    .bind(parentEventId).first<{ judging_provider: string | null }>();
+  const pinned = (event?.judging_provider ?? undefined) as "groq" | "workers_ai" | undefined;
+
+  let verdict: RunoffVerdict;
+  try {
+    verdict = await pairwiseRunoff(env, runnerUp, challenger, pinned);
+  } catch {
+    return picked; // never block team formation on a tie-breaker
+  }
+
+  if (verdict === "b") {
+    // Recorded so a promotion isn't invisible: the Observatory's replay
+    // timeline reads archive_interactions, and "why did the 3rd-place idea
+    // get built?" should be answerable from the archive rather than only from
+    // Worker logs. actor_id is null because no agent decided this — the
+    // judging tier did, same shape as other event-level rows.
+    await env.DB.prepare(
+      `INSERT INTO archive_interactions (event_id, timestamp, actor_id, target_id, type, content)
+       VALUES (?, datetime('now'), NULL, ?, 'runoff_promotion', ?)`
+    ).bind(
+      parentEventId,
+      challenger.id,
+      `Pairwise runoff promoted "${challenger.title}" over "${runnerUp.title}" for the second build slot ` +
+        `(scores ${(scoreOf.get(runnerUp.id) ?? 0).toFixed(2)} vs ${(scoreOf.get(challenger.id) ?? 0).toFixed(2)}, ` +
+        `inside the ${RUNOFF_MARGIN} noise margin; verdict consistent across both orderings).`
+    ).run();
+    return [picked[0], challenger];
+  }
+  return picked;
+}
+
 async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
     .bind(item.event_id).first<{ parent_event_id: string | null }>();
@@ -291,16 +372,21 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   // whose embedding is too similar to an already-picked one — promoting the
   // next distinct idea instead, per the backlog's minimum-fix sketch (P0-0b).
   const candidates = await env.DB.prepare(
-    `SELECT id, agent_id, co_agent_id, title, one_liner, problem, solution, build_scope
+    `SELECT id, agent_id, co_agent_id, title, one_liner, problem, solution, build_scope, ideathon_score
      FROM archive_ideas WHERE event_id = ? AND status = 'judged'
      ORDER BY ideathon_score DESC`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
 
   if (candidates.results.length === 0) throw new Error(`No judged ideas found for parent event ${event.parent_event_id}`);
 
-  const top2 = selectDistinctTop2(
+  const top2 = await applyRunoff(
+    env,
+    event.parent_event_id,
     candidates.results,
-    await getVectorsByIds(env, candidates.results.map((c) => c.id))
+    selectDistinctTop2(
+      candidates.results,
+      await getVectorsByIds(env, candidates.results.map((c) => c.id))
+    )
   );
 
   // Per-team idempotency (2026-07-22 hardening — see the retry-safety gap
@@ -440,11 +526,14 @@ async function handleJudgeTeam(env: Env, item: QueueItem): Promise<void> {
   const idea = await env.DB.prepare(`SELECT title, one_liner, problem, solution, build_scope, ideathon_score FROM archive_ideas WHERE id = ?`)
     .bind(team.idea_id).first<{ title: string; one_liner: string; problem: string; solution: string; build_scope: string; ideathon_score: number | null }>();
 
-  const runs = await listBuildTurnRuns(env, team.repo_url, 10);
-  const succeeded = runs.filter((r) => r.conclusion === "success").length;
-  const failed = runs.filter((r) => r.conclusion === "failure").length;
-  const runsSummary = runs.length
-    ? `${runs.length} GitHub Actions build turns: ${succeeded} succeeded, ${failed} failed.`
+  // N-4 (docs/ARENA_BACKLOG.md): real measured build signal, not just CI
+  // pass/fail counts — diff size, product-file count and test presence, so
+  // "Code Quality" is partly measured rather than pure impression. Also
+  // surfaces the P0-0a false-success shape (green runs, zero product code)
+  // directly to the judge instead of leaving it invisible.
+  const evidence = await collectBuildEvidence(env, teamId, team.repo_url);
+  const runsSummary = evidence.turnsDispatched > 0 || evidence.commits > 0
+    ? describeBuildEvidence(evidence)
     : "No build-turn run history available.";
 
   const prompt =

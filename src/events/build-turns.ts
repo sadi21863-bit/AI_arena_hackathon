@@ -17,6 +17,7 @@
 
 import type { Env } from "../env";
 import { listBuildTurnRuns } from "../github/dispatch";
+import { githubRequest } from "../github/client";
 
 export interface BuildTurnRow {
   turn_id: string;
@@ -135,4 +136,126 @@ export async function successfulTurnCount(env: Env, teamId: string): Promise<num
     `SELECT COUNT(*) AS n FROM build_turns WHERE team_id = ? AND conclusion = 'success'`
   ).bind(teamId).first<{ n: number }>();
   return row?.n ?? 0;
+}
+
+export interface BuildEvidence {
+  turnsDispatched: number;
+  turnsSucceeded: number;
+  turnsFailed: number;
+  commits: number;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+  sourceFiles: number;
+  hasTestSuite: boolean;
+  /** True when the only thing the agent ever committed was its own turn log. */
+  logOnly: boolean;
+}
+
+/** Files that exist because the scaffold or the workflow put them there, not because an agent built anything. */
+const NON_PRODUCT_PATHS = [
+  "opencode-turn.log",
+  "opencode-turn.err.log",
+  "README.md",
+  ".github/workflows/team-build-turn.yml",
+  "docker/Dockerfile.arena-team-base",
+  "docker/opencode.json",
+  "scripts/workers_ai_shim.js",
+];
+
+const TEST_FILE_PATTERN = /(^|\/)(test|tests|__tests__|spec)\//i;
+const TEST_NAME_PATTERN = /\.(test|spec)\.[jt]sx?$/i;
+
+/**
+ * N-4 (docs/ARENA_BACKLOG.md): real, measured signal about what a team's
+ * build actually produced, for the code-quality judge.
+ *
+ * handleJudgeTeam already passed CI success/fail counts — better grounding
+ * than most systems bother with — but Reed scores "Code Quality" on
+ * impression beyond that. Diff size, file counts and whether a test suite
+ * exists are free, already available, and turn a fully subjective dimension
+ * into a partly-measured one.
+ *
+ * Bounded to two GitHub calls regardless of how many turns a team took: list
+ * the commits, then diff the first against the last in a single `compare`.
+ * This runs inside judging, which is already the most subrequest-heavy task
+ * in the queue (executor.ts's batch-limit comment), so it cannot be
+ * per-commit.
+ *
+ * `logOnly` exists because of P0-0a: a turn that writes nothing but
+ * `opencode-turn.log` still produces a commit and a green CI run, which is
+ * exactly the false-success shape that made the closed beta look healthy
+ * while both repos held zero product code. A judge told "3 successful build
+ * turns" and nothing else would repeat that mistake.
+ */
+export async function collectBuildEvidence(env: Env, teamId: string, repoFullName: string): Promise<BuildEvidence> {
+  const counts = await env.DB.prepare(
+    `SELECT COUNT(*) AS dispatched,
+            SUM(CASE WHEN conclusion = 'success' THEN 1 ELSE 0 END) AS succeeded,
+            SUM(CASE WHEN conclusion = 'failure' THEN 1 ELSE 0 END) AS failed
+       FROM build_turns WHERE team_id = ?`
+  ).bind(teamId).first<{ dispatched: number; succeeded: number | null; failed: number | null }>();
+
+  const evidence: BuildEvidence = {
+    turnsDispatched: counts?.dispatched ?? 0,
+    turnsSucceeded: counts?.succeeded ?? 0,
+    turnsFailed: counts?.failed ?? 0,
+    commits: 0,
+    filesChanged: 0,
+    additions: 0,
+    deletions: 0,
+    sourceFiles: 0,
+    hasTestSuite: false,
+    logOnly: false,
+  };
+
+  try {
+    const commits = await githubRequest(env, "GET", `/repos/${repoFullName}/commits?per_page=100`);
+    if (!Array.isArray(commits) || commits.length === 0) return evidence;
+    evidence.commits = commits.length;
+
+    // commits[0] is newest; the scaffold commit is oldest. Comparing oldest
+    // against newest yields everything the agents added on top of the
+    // scaffold in one request.
+    const base = commits[commits.length - 1]?.sha;
+    const head = commits[0]?.sha;
+    if (!base || !head || base === head) return evidence;
+
+    const diff = await githubRequest(env, "GET", `/repos/${repoFullName}/compare/${base}...${head}`);
+    const files: Array<{ filename: string; additions?: number; deletions?: number }> = diff?.files ?? [];
+
+    evidence.filesChanged = files.length;
+    evidence.additions = files.reduce((n, f) => n + (f.additions ?? 0), 0);
+    evidence.deletions = files.reduce((n, f) => n + (f.deletions ?? 0), 0);
+
+    const productFiles = files.filter((f) => !NON_PRODUCT_PATHS.includes(f.filename));
+    evidence.sourceFiles = productFiles.length;
+    evidence.hasTestSuite = productFiles.some(
+      (f) => TEST_FILE_PATTERN.test(f.filename) || TEST_NAME_PATTERN.test(f.filename)
+    );
+    evidence.logOnly = files.length > 0 && productFiles.length === 0;
+  } catch {
+    // Judging must not fail because the repo is unreachable or the token is
+    // rate-limited — the caller falls back to the CI-counts-only summary it
+    // used before this existed.
+    return evidence;
+  }
+
+  return evidence;
+}
+
+/** One line a judge prompt can consume, from the evidence above. */
+export function describeBuildEvidence(e: BuildEvidence): string {
+  const lines = [
+    `Build turns: ${e.turnsDispatched} dispatched, ${e.turnsSucceeded} succeeded, ${e.turnsFailed} failed.`,
+    `Commits: ${e.commits}. Files changed vs. scaffold: ${e.filesChanged} (+${e.additions}/-${e.deletions}).`,
+    `Product source files (excluding scaffold and turn logs): ${e.sourceFiles}.`,
+    `Automated test suite present: ${e.hasTestSuite ? "yes" : "no"}.`,
+  ];
+  if (e.logOnly) {
+    lines.push(
+      "WARNING: every committed file is scaffold or the agent's own turn log — no product code was written despite the runs above."
+    );
+  }
+  return lines.join("\n");
 }

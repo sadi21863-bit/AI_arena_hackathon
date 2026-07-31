@@ -42,7 +42,7 @@
  */
 
 import type { Env } from "../env";
-import { rememberMemory } from "./memory";
+import { rememberMemory, queryArchive, type RecalledMemory } from "./memory";
 
 const PER_EVENT_BUDGETS: Record<"ideathon" | "hackathon", number> = {
   ideathon: 20, // real usage today is ~4-5/agent; this is ceiling, not target
@@ -115,7 +115,49 @@ export interface DeepResearchInput {
 export interface DeepResearchOutput {
   results: ResearchResult[];
   answer?: string;
+  /** Prior-event Arena history relevant to this query — see archivePriors. */
+  priors?: RecalledMemory[];
   budgetExceeded?: "per_event" | "monthly";
+}
+
+/** How many past-Arena items to surface alongside the live web results. */
+const ARCHIVE_PRIOR_LIMIT = 3;
+
+/**
+ * N-2 (docs/ARENA_BACKLOG.md): the Vectorize archive holds every past idea,
+ * critique, judge rationale and tribunal synthesis, and Deep Research never
+ * looked at any of it — agents researched the open web and their own memories
+ * while the Arena's own accumulated history sat unread. For Gale ("Failure
+ * Forensic — analyzes dead startups") the archive is a graveyard of ~30 dead
+ * ideas per event with judge rationales explaining exactly why each lost.
+ *
+ * Two filters make this a feedback loop rather than an echo chamber:
+ *
+ *   - The current event is excluded. The point is history; pulling in ideas
+ *     being written right now would just amplify whatever this event already
+ *     converged on, which is the duplicate-idea failure (NEW-2) wearing a
+ *     different hat.
+ *   - `type: "research"` is excluded. Research summaries are themselves
+ *     written back into the same index by deepResearch below, so recycling
+ *     them would compound each event's digest into the next one's. Only
+ *     genuine agent output (ideas, critiques, reflections) feeds back.
+ *
+ * Vectorize's filter syntax is equality-only, so both exclusions are applied
+ * in JS over a wider fetch rather than pushed into the query.
+ */
+async function archivePriors(env: Env, query: string, currentEventId: string): Promise<RecalledMemory[]> {
+  try {
+    const matches = await queryArchive(env, query, undefined, ARCHIVE_PRIOR_LIMIT * 4);
+    return matches
+      .filter((m) => m.eventId !== currentEventId)
+      .filter((m) => m.type !== "research")
+      .slice(0, ARCHIVE_PRIOR_LIMIT);
+  } catch {
+    // Never fail a research call because the history lookup broke — same
+    // "a bonus running dry degrades, it doesn't fail the turn" principle the
+    // budget ceilings above already follow.
+    return [];
+  }
 }
 
 export async function deepResearch(env: Env, input: DeepResearchInput): Promise<DeepResearchOutput> {
@@ -135,12 +177,24 @@ export async function deepResearch(env: Env, input: DeepResearchInput): Promise<
   const { results, answer } = await searchTavily(apiKey, input.query, input.maxResults ?? 5);
   await recordCall(env, input.eventId, input.agentId, phase, input.query);
 
+  // N-2: past Arena history on the same question, alongside the live web.
+  // Not counted against the Tavily budgets above — it costs one embedding,
+  // not a search credit.
+  const priors = await archivePriors(env, input.query, input.eventId);
+  const priorsText = priors.length
+    ? [
+        "",
+        "What the Arena already learned about this (previous events):",
+        ...priors.map((p) => `- [${p.type}] ${p.text.slice(0, 300)}`),
+      ].join("\n")
+    : "";
+
   const summaryText = [
     `Lens: ${input.lens}`,
     `Query: ${input.query}`,
     answer ? `Summary: ${answer}` : null,
     ...results.map((r) => `- ${r.title} (${r.url}): ${r.snippet}`),
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("\n") + priorsText;
 
   await rememberMemory(env, {
     id: `research_${crypto.randomUUID()}`,
@@ -150,5 +204,5 @@ export async function deepResearch(env: Env, input: DeepResearchInput): Promise<
     text: summaryText.slice(0, 4000), // stay well under embedding model's input limits
   });
 
-  return { results, answer };
+  return { results, answer, priors };
 }
