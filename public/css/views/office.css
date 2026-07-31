@@ -195,6 +195,62 @@
   border: 1px solid color-mix(in srgb, var(--arena-danger, #b3402f) 45%, transparent);
 }
 
+/* --- P5: the judges' bench -------------------------------------------
+   Seats, not characters. Judges are a separate roster with no sprite, and
+   borrowing an agent's would imply they are one. */
+.v-office__judges { position: absolute; inset: 0; pointer-events: none; }
+.v-office__judge {
+  position: absolute; transform: translate(-50%, -50%);
+  width: 64px; text-align: center; cursor: pointer; pointer-events: auto;
+  z-index: 300;
+}
+.v-office__judge-seat {
+  width: 34px; height: 34px; margin: 0 auto 3px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--arena-bg-sunken); border: 1.5px solid var(--arena-line-strong);
+  color: var(--arena-ink-faint); transition: background 0.2s ease, border-color 0.2s ease;
+}
+.v-office__judge-initial { font-family: var(--arena-font-display); font-size: 0.9rem; }
+.v-office__judge.is-working .v-office__judge-seat {
+  border-color: var(--arena-clay); color: var(--arena-clay-deep);
+}
+.v-office__judge.is-done .v-office__judge-seat {
+  background: color-mix(in srgb, var(--arena-ok, #3f7d52) 18%, var(--arena-bg-sunken));
+  border-color: var(--arena-ok, #3f7d52); color: var(--arena-ok, #3f7d52);
+}
+/* A judge that used a model other than the one pinned for the event. This is
+   the P0-2 failure made visible — it must not be a subtle treatment. */
+.v-office__judge.is-deviant .v-office__judge-seat {
+  border-color: var(--arena-danger, #b3402f); border-style: dashed;
+  color: var(--arena-danger, #b3402f);
+}
+.v-office__judge.is-selected .v-office__judge-seat {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--arena-clay) 55%, transparent);
+}
+.v-office__judge-name {
+  font-family: var(--arena-font-mono); font-size: 0.6rem; color: var(--arena-ink);
+  white-space: nowrap;
+}
+.v-office__judge-bar {
+  margin: 3px auto 0; width: 34px; height: 3px; border-radius: 2px;
+  background: var(--arena-line); overflow: hidden;
+}
+.v-office__judge-bar span { display: block; height: 100%; background: var(--arena-clay); }
+.v-office__judge.is-done .v-office__judge-bar span { background: var(--arena-ok, #3f7d52); }
+
+.v-office__inspector-quote {
+  margin-top: 12px; padding: 10px 12px; border-left: 2px solid var(--arena-line-strong);
+  font-family: var(--arena-font-mono); font-size: 0.74rem; line-height: 1.55;
+  color: var(--arena-ink-soft); font-style: italic;
+}
+
+@media (max-width: 760px) {
+  .v-office__judge { width: 46px; }
+  .v-office__judge-seat { width: 26px; height: 26px; }
+  .v-office__judge-bar { width: 26px; }
+  .v-office__judge-name { font-size: 0.54rem; }
+}
+
 /* --- Set identity: which room this phase is --- */
 .v-office__set { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 2px 8px; }
 .v-office__set-name {

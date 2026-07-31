@@ -18,6 +18,7 @@ import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, creat
 import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
+import { JUDGES } from "./judges/personas";
 import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
@@ -660,6 +661,91 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
            FROM build_turns WHERE event_id = ? ORDER BY turn_number ASC LIMIT 200`
       ).bind(buildTurnsMatch[1]).all();
       return Response.json(turns.results);
+    }
+
+    // P5 (docs/OFFICE_INVESTIGATION_2026-07-31.md G5): the seven judges decide
+    // which ideas advance and which team wins, and nothing anywhere exposed
+    // them — not the roster, not their progress, not which model actually
+    // answered. The Office could render a Judging Hall but had no occupants
+    // to put in it.
+    //
+    // Everything the hall needs in one call: who the judges are, what each is
+    // weighted at FOR THIS PHASE, how far through the field each one is, and
+    // the model that actually produced their scores against the one pinned
+    // for the event. That last comparison is the point — P0-2 exists because
+    // a mid-event provider swap silently mixed model families into a single
+    // weighted ranking, and this makes that visible rather than archaeology.
+    const judgingMatch = url.pathname.match(/^\/events\/([^/]+)\/judging$/);
+    if (judgingMatch && request.method === "GET") {
+      const eventId = judgingMatch[1];
+      const event = await env.DB.prepare(
+        `SELECT type, status, judging_provider, judging_model FROM archive_events WHERE id = ?`
+      ).bind(eventId).first<{ type: string; status: string; judging_provider: string | null; judging_model: string | null }>();
+      if (!event) return Response.json({ error: "not_found" }, { status: 404 });
+
+      const phase = event.type === "hackathon" ? "hackathon" : "ideathon";
+
+      const [scores, calibration, targets] = await Promise.all([
+        env.DB.prepare(
+          `SELECT judge_name, criterion, weight, target_id, score, rationale, provider, model_id
+             FROM judge_scores WHERE event_id = ? AND phase = ?`
+        ).bind(eventId, phase).all<{
+          judge_name: string; criterion: string; weight: number; target_id: string;
+          score: number; rationale: string | null; provider: string | null; model_id: string | null;
+        }>(),
+        env.DB.prepare(`SELECT correlation, passed FROM calibration_runs WHERE event_id = ?`)
+          .bind(eventId).first<{ correlation: number; passed: number }>(),
+        // What the judges are being asked to score. An ideathon judges the
+        // ideas that reached architecture_complete (they read 'judged' once
+        // done, so both states count); a hackathon judges its teams.
+        phase === "hackathon"
+          ? env.DB.prepare(`SELECT COUNT(*) AS n FROM hackathon_teams WHERE event_id = ?`).bind(eventId).first<{ n: number }>()
+          : env.DB.prepare(
+              `SELECT COUNT(*) AS n FROM archive_ideas WHERE event_id = ? AND status IN ('architecture_complete','judged')`
+            ).bind(eventId).first<{ n: number }>(),
+      ]);
+
+      const expected = targets?.n ?? 0;
+      const byJudge = new Map<string, typeof scores.results>();
+      for (const row of scores.results) {
+        const list = byJudge.get(row.judge_name) ?? [];
+        list.push(row);
+        byJudge.set(row.judge_name, list);
+      }
+
+      const judges = JUDGES.map((j) => {
+        const rows = byJudge.get(j.name) ?? [];
+        const scored = new Set(rows.map((r) => r.target_id)).size;
+        const models = [...new Set(rows.map((r) => `${r.provider ?? "?"}:${r.model_id ?? "?"}`))];
+        const latest = rows[rows.length - 1];
+        return {
+          name: j.name,
+          criterion: j.criterion,
+          weight: phase === "hackathon" ? j.hackathonWeight : j.ideathonWeight,
+          scored,
+          expected,
+          // Rows predating the P0-2 migration have no provider/model at all —
+          // reported as unknown rather than silently counted as agreeing with
+          // the pin, since "we don't know" and "it matched" are different.
+          models,
+          // True only when this judge demonstrably used something other than
+          // the model pinned for the event. Unknowns are excluded on purpose.
+          modelDeviates:
+            !!event.judging_model &&
+            models.some((m) => m !== "?:?" && !m.endsWith(`:${event.judging_model}`)),
+          averageScore: rows.length ? +(rows.reduce((s, r) => s + r.score, 0) / rows.length).toFixed(2) : null,
+          latestRationale: latest?.rationale ? String(latest.rationale).slice(0, 400) : null,
+        };
+      });
+
+      return Response.json({
+        phase,
+        status: event.status,
+        pinned: { provider: event.judging_provider, model: event.judging_model },
+        calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null,
+        expected,
+        judges,
+      });
     }
 
     const judgeScoresMatch = url.pathname.match(/^\/events\/([^/]+)\/judge-scores$/);

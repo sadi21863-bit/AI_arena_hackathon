@@ -282,6 +282,9 @@ export async function mount(el, params) {
   let built = false;
   /* agent_id -> { idea, critique, reflection }, the work itself (P3). */
   let artifacts = {};
+  /* P5: the seven judges — roster, progress and which model actually answered. */
+  let judging = null;
+  let selectedJudge = null;
   /* agent_id -> roster row, populated for hackathons only. */
   let rosterByAgent = {};
   /* team_id -> latest build turn, for the CI badge on each bench. */
@@ -425,6 +428,58 @@ export async function mount(el, params) {
   }
 
   /**
+   * P5: the seven judges, seated at the bench.
+   *
+   * Rendered as seats rather than characters on purpose — judges are a
+   * separate roster with no agent_id and no sprite, and borrowing an agent's
+   * sprite would imply they are one. A seat also carries what actually
+   * matters about a judge (criterion, weight, progress) in a way a 64px
+   * character cannot.
+   *
+   * Laid out across the bench zone in percentage space, so this inherits the
+   * room's responsive width for free.
+   */
+  function drawJudges() {
+    const layer = el.querySelector("#of-judges");
+    if (!layer) return;
+    const bench = ZONE_BY_ID.judging;
+    if (!bench || !judging || !Array.isArray(judging.judges)) {
+      layer.replaceChildren();   // no bench in this set, or no judging data yet
+      return;
+    }
+
+    const list = judging.judges;
+    const span = 74;                                  // % of room width the bench occupies
+    const step = list.length > 1 ? span / (list.length - 1) : 0;
+    const startX = bench.x - span / 2;
+
+    render(layer, html`${list.map((j, i) => {
+      const done = j.expected > 0 && j.scored >= j.expected;
+      const working = !done && j.scored > 0;
+      const pct = j.expected > 0 ? Math.round((j.scored / j.expected) * 100) : 0;
+      return html`
+        <div class="v-office__judge ${done ? "is-done" : working ? "is-working" : ""} ${j.modelDeviates ? "is-deviant" : ""} ${selectedJudge === j.name ? "is-selected" : ""}"
+             id="of-judge-${j.name}" tabindex="0" role="button"
+             style="left:${(startX + i * step).toFixed(2)}%;top:${bench.y}%"
+             title="${j.name} — ${j.criterion} · weight ${Math.round(j.weight * 100)}% · ${j.scored}/${j.expected} scored${j.modelDeviates ? " · MODEL DEVIATES FROM THE PIN" : ""}">
+          <div class="v-office__judge-seat"><span class="v-office__judge-initial">${j.name.slice(0, 1)}</span></div>
+          <div class="v-office__judge-name">${j.name}</div>
+          <div class="v-office__judge-bar"><span style="width:${pct}%"></span></div>
+        </div>`;
+    })}`);
+
+    list.forEach((j) => {
+      const node = layer.querySelector(`#of-judge-${CSS.escape(j.name)}`);
+      if (!node) return;
+      const pick = () => { selectedJudge = j.name; selectedId = null; drawJudges(); drawInspector(); };
+      node.addEventListener("click", pick);
+      node.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+      });
+    });
+  }
+
+  /**
    * Keep every bubble inside the walls.
    *
    * Same reason the sprite clamp in draw() exists, and the same failure mode
@@ -461,6 +516,31 @@ export async function mount(el, params) {
   }
 
   function drawInspector() {
+    // P5: a selected judge takes the panel. Judges and agents are mutually
+    // exclusive selections — picking one clears the other — because the panel
+    // describes a single subject and a judge is not an agent.
+    const j = selectedJudge && judging?.judges?.find((x) => x.name === selectedJudge);
+    if (j) {
+      const pinned = judging.pinned || {};
+      render(inspectorEl, html`
+        <div class="v-office__inspector-name">Judge ${j.name}</div>
+        <div class="v-office__inspector-lens">${j.criterion} · ${Math.round(j.weight * 100)}% of the ${judging.phase} score</div>
+        ${j.modelDeviates ? html`
+          <div class="v-office__inspector-alert v-office__inspector-alert--stop">
+            <b>This judge did not use the model pinned for the event.</b>
+            Pinned <code>${pinned.model || "—"}</code>, but scores came from <code>${j.models.join(", ")}</code>.
+            Mixing model families inside one weighted ranking is the failure P0-2 exists to prevent.
+          </div>` : ""}
+        <div class="v-office__inspector-rows">
+          <div>Progress: <b>${j.scored} / ${j.expected} scored</b></div>
+          <div>Average score: <b>${j.averageScore ?? "—"}</b></div>
+          <div>Model: <b>${j.models.length ? j.models.join(", ") : "—"}</b></div>
+        </div>
+        ${j.latestRationale ? html`
+          <div class="v-office__inspector-quote">“${j.latestRationale}”</div>` : ""}`);
+      return;
+    }
+
     const a = selectedId && latest[selectedId];
     if (!a) {
       render(inspectorEl, html`<div class="v-office__inspector-empty">Click a character to see what they're working on.</div>`);
@@ -496,6 +576,8 @@ export async function mount(el, params) {
 
   function select(id) {
     selectedId = id;
+    selectedJudge = null;      // one subject in the panel at a time
+    drawJudges();
     Object.keys(nodes).forEach((k) => nodes[k].el.classList.toggle("is-selected", k === id));
     drawInspector();
   }
@@ -510,6 +592,7 @@ export async function mount(el, params) {
           <div class="v-office__zone" id="of-zone-${z.id}" data-team-id="${z.teamId || ""}" style="left:${z.x}%;top:${z.y + 9}%">
             ${z.label}${z.teamId ? html`<span class="v-office__zone-turn"></span>` : ""}
           </div>`)}
+        <div class="v-office__judges" id="of-judges"></div>
         ${agents.filter((a) => CAST[a.agent_id]).map((a) => html`
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
             <div class="v-office__bubble" hidden></div>
@@ -703,6 +786,7 @@ export async function mount(el, params) {
       <div class="v-office__legend-item"><span class="v-office__legend-count">${(perZone[z.id] || []).length}</span>${z.label}</div>`)}`);
 
     clampBubbles();
+    drawJudges();
     drawInspector();
   }
 
@@ -741,7 +825,11 @@ export async function mount(el, params) {
     ${live ? "Live" : "Most recent · finished"} · ${typeLabel(event.type)} · ${phaseLabel(event)} · ${shortId(event.id, 20)}`);
 
   const isHackathon = event.type === "hackathon";
-  const [activity, teams, roster, turns, arts, chronicle] = await Promise.all([
+  // Judging data is only fetched for the phases that have any — it is three
+  // queries server-side, and asking for it during deep_research would be a
+  // round trip for a guaranteed-empty answer.
+  const isJudgingPhase = event.status === "ready_for_judging" || event.status === "judged";
+  const [activity, teams, roster, turns, arts, chronicle, judgingData] = await Promise.all([
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/teams`, { optional: true }) : Promise.resolve([]),
     isHackathon ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve([]),
@@ -751,9 +839,11 @@ export async function mount(el, params) {
     // caption simply don't render.
     fetchJson(`/events/${encodeURIComponent(event.id)}/agent-artifacts`, { optional: true }),
     fetchJson(`/events/${encodeURIComponent(event.id)}/chronicle`, { optional: true }),
+    isJudgingPhase ? fetchJson(`/events/${encodeURIComponent(event.id)}/judging`, { optional: true }) : Promise.resolve(null),
   ]);
   if (disposed) return () => {};
   if (arts) artifacts = arts;
+  if (judgingData) judging = judgingData;
 
   // P3: the Chronicler's line for the most recent phase, as a caption under
   // the room. Set as textContent — this is model-generated prose reaching the
@@ -830,6 +920,23 @@ export async function mount(el, params) {
     <span class="v-office__set-name">${SET.name}</span>
     <span class="v-office__set-blurb">${SET.blurb}</span>`);
 
+  // P5: the judging contract, stated where the judging happens. The pinned
+  // model matters because a mid-event swap mixes model families into one
+  // weighted ranking (P0-2), and a failed calibration matters because judging
+  // proceeds anyway by design (P2-7) — both are decisions a reader of the
+  // result should be able to see, not infer.
+  if (judging) {
+    const cal = judging.calibration;
+    const deviants = judging.judges.filter((j) => j.modelDeviates).map((j) => j.name);
+    render(noteEl, html`<div class="arena-note ${deviants.length || (cal && !cal.passed) ? "arena-note--warn" : ""}"><span>⚖️</span><span>
+      <b>Judging — ${judging.judges.filter((j) => j.expected > 0 && j.scored >= j.expected).length}/${judging.judges.length} judges finished</b>
+      across ${judging.expected} ${judging.phase === "hackathon" ? "team(s)" : "idea(s)"}.
+      Pinned model: <code>${judging.pinned.model || "not pinned"}</code>${judging.pinned.provider ? html` (${judging.pinned.provider})` : ""}.
+      ${cal ? html` Calibration correlation ${Number(cal.correlation).toFixed(2)} — ${cal.passed ? "passed" : "FAILED, scores are low-confidence"}.` : " No calibration recorded."}
+      ${deviants.length ? html` <b>${deviants.join(", ")} did not use the pinned model.</b>` : ""}
+    </span></div>`);
+  }
+
   if (hasRoster) {
     // P2: the room now shows the build, so this explains what is being shown
     // rather than apologising for showing nothing.
@@ -856,14 +963,19 @@ export async function mount(el, params) {
     // Turn state is refetched alongside activity: during a hackathon it is the
     // only thing that actually changes between ticks, so polling activity
     // alone would leave the CI badge and the turn ring permanently stale.
-    const [next, nextTurns, nextRoster] = await Promise.all([
+    const [next, nextTurns, nextRoster, nextJudging] = await Promise.all([
       fetchJson(`/events/${encodeURIComponent(event.id)}/agent-activity`, { optional: true }),
       hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/build-turns`, { optional: true }) : Promise.resolve(null),
       hasRoster ? fetchJson(`/events/${encodeURIComponent(event.id)}/roster`, { optional: true }) : Promise.resolve(null),
+      // Scores landing one at a time IS the interesting motion during judging,
+      // and no agent has a queue row then — polling activity alone would leave
+      // the bench frozen through the whole phase.
+      isJudgingPhase ? fetchJson(`/events/${encodeURIComponent(event.id)}/judging`, { optional: true }) : Promise.resolve(null),
     ]);
     if (disposed || !next) return;
     if (nextRoster && nextRoster.length) rosterByAgent = Object.fromEntries(nextRoster.map((m) => [m.agent_id, m]));
     if (nextTurns) applyTurnState(nextTurns, nextRoster || Object.values(rosterByAgent));
+    if (nextJudging) judging = nextJudging;
     draw(next);
   });
 
