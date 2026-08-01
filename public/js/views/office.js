@@ -288,6 +288,28 @@ export async function mount(el, params) {
   /* P4: agent_id -> the pair it is part of, for the Merge Tables. */
   let collabByAgent = {};
   let collabPairs = [];
+  /* P6: agent_id -> index into the set's loitering spots, for idle roaming. */
+  let roamSpot = {};
+  let roamTimer = 0;
+
+  /* Motion for its own sake is exactly what this setting asks us not to do,
+     so roaming and the pet are skipped entirely rather than merely shortened.
+     Everything else in the room still works — this removes drift, not data. */
+  const prefersReducedMotion =
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /**
+   * P6: where an idle agent can loiter.
+   *
+   * Derived from the SET's own furniture rather than a separate table, so a
+   * new set gets sensible loitering for free and can never point somewhere
+   * it has no props. Agents stand slightly below a piece so they read as
+   * being AT it rather than inside it.
+   */
+  function loiterSpots() {
+    const landmarks = (SET.props || []).filter((p) => ["couch", "cooler", "plant", "shelf", "rug"].includes(p.cls));
+    return landmarks.map((p) => ({ x: p.x, y: Math.min(92, p.y + 7) }));
+  }
   /* agent_id -> roster row, populated for hackathons only. */
   let rosterByAgent = {};
   /* team_id -> latest build turn, for the CI badge on each bench. */
@@ -622,6 +644,7 @@ export async function mount(el, params) {
             ${z.label}${z.teamId ? html`<span class="v-office__zone-turn"></span>` : ""}
           </div>`)}
         <div class="v-office__judges" id="of-judges"></div>
+        <div class="v-office__pet" id="of-pet" hidden aria-hidden="true"></div>
         ${agents.filter((a) => CAST[a.agent_id]).map((a) => html`
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
             <div class="v-office__bubble" hidden></div>
@@ -658,9 +681,11 @@ export async function mount(el, params) {
    *   have the whole cast stroll across the room every time the window is
    *   dragged.
    */
-  function draw(agents, { animate = true } = {}) {
+  function draw(agents, { animate = true, reshuffleRoam = false } = {}) {
     const first = !built;
     if (first) build(agents);
+    // Before positions are computed — placement reads roamSpot.
+    assignRoamSpots(agents, { reshuffleOne: reshuffleRoam });
     agents.forEach((a) => { latest[a.agent_id] = a; });
 
     // The room can genuinely be gone by now. mount() awaits several fetches,
@@ -741,8 +766,18 @@ export async function mount(el, params) {
         if (!node) return;
         const r = Math.floor(i / perRow), c = i % perRow;
         const inRow = Math.min(perRow, group.length - r * perRow);
-        const x = clamp(zone.x + (c - (inRow - 1) / 2) * colPitch, padX, 100 - padX);
-        const y = clamp(zone.y + r * rowPitch - (rowCount - 1) * (rowPitch / 2), padTop, 100 - padBottom);
+        let x = clamp(zone.x + (c - (inRow - 1) / 2) * colPitch, padX, 100 - padX);
+        let y = clamp(zone.y + r * rowPitch - (rowCount - 1) * (rowPitch / 2), padTop, 100 - padBottom);
+
+        // P6: a genuinely idle agent loiters by the furniture instead of
+        // standing in a parade-ground row. A quiet room should read as calm;
+        // twelve characters in rigid formation reads as frozen, which is the
+        // wrong signal given how much of a real cycle is legitimately quiet.
+        const spot = roamSpot[a.agent_id];
+        if (zoneId === "break" && spot) {
+          x = clamp(spot.x, padX, 100 - padX);
+          y = clamp(spot.y, padTop, 100 - padBottom);
+        }
 
         place(node, x, y, animate && !first);
 
@@ -816,7 +851,87 @@ export async function mount(el, params) {
 
     clampBubbles();
     drawJudges();
+    drawPet(agents);
     drawInspector();
+  }
+
+  /**
+   * Who is free to wander. Deliberately narrow:
+   *
+   *  - an agent with a real task is at that task, not loitering;
+   *  - an ABANDONED agent must not drift. It is greyed out because the
+   *    scheduler gave up on it, and a character that strolls around looks
+   *    content — which would quietly undo the whole point of P1;
+   *  - a struggling agent is mid-retry, and a wandering warning badge reads
+   *    as careless.
+   */
+  function canRoam(agent) {
+    return !taskInfo(agent.task_type) && !agent.abandoned && !(agent.failed_attempts > 0);
+  }
+
+  /** Give each idle agent a loitering spot, keeping them off each other. */
+  function assignRoamSpots(agents, { reshuffleOne = false } = {}) {
+    if (prefersReducedMotion) { roamSpot = {}; return; }
+    const spots = loiterSpots();
+    if (!spots.length) { roamSpot = {}; return; }
+
+    const idle = agents.filter((a) => canRoam(a) && zoneFor(a) === "break");
+    const idleIds = new Set(idle.map((a) => a.agent_id));
+    // Anyone who stopped being idle gives their spot back.
+    for (const id of Object.keys(roamSpot)) if (!idleIds.has(id)) delete roamSpot[id];
+
+    const taken = new Set(Object.values(roamSpot).map((s) => s.index));
+    const free = () => spots.map((_, i) => i).filter((i) => !taken.has(i));
+
+    if (reshuffleOne && idle.length) {
+      // Move exactly one agent per tick. Moving several at once looks like a
+      // scene change rather than someone getting up.
+      const mover = idle[Math.floor(Math.random() * idle.length)];
+      const options = free();
+      if (options.length) {
+        const prev = roamSpot[mover.agent_id];
+        if (prev) taken.delete(prev.index);
+        const pick = options[Math.floor(Math.random() * options.length)];
+        roamSpot[mover.agent_id] = { ...spots[pick], index: pick };
+        taken.add(pick);
+      }
+    }
+
+    for (const a of idle) {
+      if (roamSpot[a.agent_id]) continue;
+      const options = free();
+      if (!options.length) break;   // more idle agents than furniture — the rest keep the grid
+      const pick = options[Math.floor(Math.random() * options.length)];
+      roamSpot[a.agent_id] = { ...spots[pick], index: pick };
+      taken.add(pick);
+    }
+  }
+
+  /**
+   * P6: the office pet. Naps beside whoever has been idle longest, which is a
+   * cheap way to make "nothing is happening" look intentional.
+   *
+   * Drawn in CSS like the furniture — the 3D pet packs in the asset dump would
+   * need the Blender render pipeline to match the characters' style, and a
+   * mismatched sprite would look worse than a shape.
+   */
+  function drawPet(agents) {
+    const pet = el.querySelector("#of-pet");
+    if (!pet) return;
+    if (prefersReducedMotion) { pet.hidden = true; return; }
+
+    const idle = agents.filter((a) => canRoam(a) && nodes[a.agent_id]);
+    if (!idle.length) { pet.hidden = true; return; }
+
+    // Oldest updated_at = idle longest. Missing timestamps sort first, which
+    // is right: an agent with no activity at all is the most idle of all.
+    const host = idle.slice().sort((a, b) => String(a.updated_at || "").localeCompare(String(b.updated_at || "")))[0];
+    const node = nodes[host.agent_id];
+    pet.hidden = false;
+    pet.style.left = `${clamp(node.x + 3.5, 2, 96)}%`;
+    pet.style.top = `${node.y}%`;
+    pet.style.zIndex = String(10 + Math.round(node.y * 2) + 1);
+    pet.title = `Napping next to ${host.name}, who has been idle longest`;
   }
 
   // Layout depends on the room's pixel size, which changes on resize with no
@@ -842,6 +957,27 @@ export async function mount(el, params) {
     }, 120);
   };
   window.addEventListener("resize", onResize);
+
+  /**
+   * P6: nudge one idle agent to a different spot every so often.
+   *
+   * 14s, and only one agent at a time, because the point is ambient life
+   * rather than activity — a room where several characters relocate at once
+   * reads as something happening, and something happening is exactly the
+   * signal the rest of this view works hard to report honestly. Skipped
+   * entirely under reduced motion, and cleared in teardown like every other
+   * timer this file owns.
+   */
+  const ROAM_INTERVAL_MS = 14_000;
+  function scheduleRoam() {
+    if (prefersReducedMotion) return;
+    roamTimer = setTimeout(() => {
+      if (disposed) return;
+      const known = Object.values(latest);
+      if (built && known.length) draw(known, { reshuffleRoam: true });
+      scheduleRoam();
+    }, ROAM_INTERVAL_MS);
+  }
 
   if (!event) {
     render(stage, html`<div class="arena-state">No events yet — nothing has run.</div>`);
@@ -1017,6 +1153,7 @@ export async function mount(el, params) {
   }
 
   draw(activity);
+  scheduleRoam();
 
   // Re-draw off the shared store tick rather than a private timer.
   const off = store.events.subscribe(async () => {
@@ -1054,6 +1191,7 @@ export async function mount(el, params) {
     // outlives its view is the same leak in a different shape.
     window.removeEventListener("resize", onResize);
     clearTimeout(resizeTimer);
+    clearTimeout(roamTimer);
     Object.values(nodes).forEach(stopWalk);
   };
 }

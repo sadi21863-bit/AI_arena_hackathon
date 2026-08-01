@@ -195,6 +195,30 @@
   border: 1px solid color-mix(in srgb, var(--arena-danger, #b3402f) 45%, transparent);
 }
 
+/* --- P6: the office pet ------------------------------------------------
+   Drawn, not a sprite. The 3D pet packs in the asset dump would need the
+   Blender render pipeline to match the characters' pre-rendered style, and a
+   mismatched sprite would look worse than an honest shape — the same reason
+   the furniture is CSS. A loaf-shaped cat, asleep. */
+.v-office__pet {
+  position: absolute; width: 22px; height: 13px;
+  transform: translate(-50%, -20%);
+  background: var(--arena-ink-faint);
+  border-radius: 11px 11px 8px 8px;
+  opacity: 0.75; pointer-events: none;
+}
+.v-office__pet::before {            /* head */
+  content: ""; position: absolute; left: -5px; top: 1px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--arena-ink-faint);
+}
+.v-office__pet::after {             /* tail, curled round */
+  content: ""; position: absolute; right: -6px; bottom: 1px;
+  width: 10px; height: 6px;
+  border: 2px solid var(--arena-ink-faint); border-left: none;
+  border-radius: 0 8px 8px 0;
+}
+
 /* --- P5: the judges' bench -------------------------------------------
    Seats, not characters. Judges are a separate roster with no sprite, and
    borrowing an agent's would imply they are one. */
