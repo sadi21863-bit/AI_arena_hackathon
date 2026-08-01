@@ -1,5 +1,22 @@
 # Agent Office — gap investigation & improvement proposals
 
+> **STATUS 2026-08-01 — all six proposals are built and deployed.** P1 (failure
+> visible), P2 (hackathon room), P3 (speech bubbles), P4 (Merge Tables), P5
+> (judges' bench), P6 (idle roaming + pet), plus the per-phase environments
+> from `OFFICE_ENVIRONMENTS_PROPOSAL.md` and the character-scaling fix. The
+> "Recommendation" section below is the original ranking, kept as written.
+>
+> Two gaps identified here are **still open**, both deliberately deferred in
+> §4/P7 rather than missed:
+> - **G6 — one task per agent hides parallelism.** `/agent-activity` still
+>   returns a single representative row per agent.
+> - **G7 — snapshot only, no history.** The room shows now; Replay remains a
+>   separate view over `archive_interactions`. Journal-backed replay is the
+>   right fix and is a data-model change, not a view change.
+>
+> Nothing in the Office has yet been seen against a live autonomous cycle —
+> every verification so far used seeded fixtures.
+
 Investigation only. Nothing here is built; the point is to decide what's worth
 building. Current implementation: `public/js/views/office.js` (330 lines),
 `public/css/views/office.css` (181), fed by `GET /events/:id/agent-activity`.
