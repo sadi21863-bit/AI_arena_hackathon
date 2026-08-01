@@ -49,6 +49,11 @@ function utf8ToBase64(text: string): string {
   return btoa(bin);
 }
 
+/** Mirror of utf8ToBase64, for comparing a team's copy against the canonical text. */
+function base64ToUtf8(b64: string): string {
+  return new TextDecoder().decode(base64ToBytes(b64));
+}
+
 function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -114,6 +119,93 @@ async function putFile(env: Env, owner: string, repo: string, path: string, cont
   });
 }
 
+/**
+ * The harness: files a team repo needs in order to RUN a build turn, as
+ * opposed to anything the agents themselves write. Kept as one list so
+ * scaffolding and re-syncing can never disagree about what a team is
+ * supposed to have.
+ *
+ * README.md is deliberately NOT here — it carries the team's idea brief and
+ * is per-team content, not harness.
+ */
+const HARNESS_FILES = [
+  ".github/workflows/team-build-turn.yml",
+  "docker/Dockerfile.arena-team-base",
+  "docker/opencode.json",
+  "scripts/workers_ai_shim.js",
+] as const;
+
+/**
+ * Bring a team repo's harness back in line with the main repo.
+ *
+ * Found live 2026-08-01: `createTeamRepo` copies these files once, at repo
+ * creation, and never again — so a team formed on the 29th was still running
+ * the 29th's workflow on the 1st. That team's copy had no `run-name`, which
+ * is what `reconcileBuildTurns` matches a run to a turn by; without it every
+ * turn fell back to positional matching and conclusions were mis-assigned
+ * (turns reported `success` against runs that were cancelled). It also
+ * predated the P0-0a shim, so that fix had never once executed against a real
+ * turn despite being shipped and verified.
+ *
+ * Every fix to the build harness was landing in the main repo and reaching
+ * nobody.
+ *
+ * **On fairness:** every team converges on the same canonical harness, each
+ * immediately before its own next turn — so in principle one team can hold a
+ * newer harness than its opponent for the gap between their dispatches
+ * (minutes, in practice one tick). That is acceptable because the harness is
+ * the scoreboard and the plumbing, not the contest: it decides whether a turn
+ * RUNS and whether its result is recorded correctly, not how good the code is.
+ * Teams are judged on what they write, and this touches none of it —
+ * HARNESS_FILES is an allowlist for exactly that reason, so a bug here can
+ * overwrite the harness but never a team's work.
+ *
+ * Leaving teams frozen instead is the worse trade: a team stuck on a harness
+ * that mis-records its own results is not being judged fairly either.
+ *
+ * Content-compared before writing, so a repo already in sync costs one GET
+ * per file and no commit — which matters because this runs before each
+ * dispatch.
+ */
+export async function syncTeamHarness(env: Env, repoFullName: string): Promise<string[]> {
+  const [owner, repo] = repoFullName.split("/");
+  if (!owner || !repo) return [];
+  const updated: string[] = [];
+
+  for (const path of HARNESS_FILES) {
+    let canonical: string;
+    try {
+      canonical = await fetchMainRepoFile(path);
+    } catch {
+      continue; // main repo unreachable for this file — leave the team's copy alone
+    }
+
+    let existing: { content?: string; sha?: string } | null = null;
+    try {
+      existing = await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${path}`);
+    } catch (err) {
+      if (!(err instanceof GitHubApiError) || err.status !== 404) continue;
+      existing = null; // absent — the shim is exactly this case on older repos
+    }
+
+    if (existing?.content) {
+      // GitHub returns base64 with newlines; compare decoded text so trivial
+      // encoding differences don't cause a pointless commit every dispatch.
+      const current = base64ToUtf8(String(existing.content).replace(/\n/g, ""));
+      if (current === canonical) continue;
+    }
+
+    await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/${path}`, {
+      message: `Sync build harness: ${path}`,
+      content: utf8ToBase64(canonical),
+      ...(existing?.sha ? { sha: existing.sha } : {}),
+    });
+    updated.push(path);
+  }
+
+  return updated;
+}
+
 async function fetchMainRepoFile(path: string): Promise<string> {
   const res = await fetch(`https://raw.githubusercontent.com/${MAIN_REPO}/master/${path}`);
   if (!res.ok) throw new Error(`Failed to fetch scaffold file ${path} from ${MAIN_REPO}: ${res.status}`);
@@ -171,32 +263,25 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     }
   }
 
-  const [workflow, dockerfile, opencodeConfig, aiShim] = await Promise.all([
-    fetchMainRepoFile(".github/workflows/team-build-turn.yml"),
-    fetchMainRepoFile("docker/Dockerfile.arena-team-base"),
-    fetchMainRepoFile("docker/opencode.json"),
-    // The build-turn workflow starts this on the runner and points OpenCode
-    // at it instead of at Cloudflare directly (P0-0a — see the shim's own
-    // header). A team repo without it would fail every turn at the "Start
-    // Workers AI shim" step, so it has to be scaffolded alongside the three
-    // files that were already here.
-    fetchMainRepoFile("scripts/workers_ai_shim.js"),
-  ]);
+  // Driven off HARNESS_FILES rather than a second hand-written list, so
+  // scaffolding and syncTeamHarness can never disagree about what a team
+  // needs — a file added to one and forgotten in the other is exactly how a
+  // team ends up running a harness nobody intended.
+  const harness = await Promise.all(HARNESS_FILES.map((p) => fetchMainRepoFile(p)));
 
   const readme = `# ${idea.title}\n\nTeam ${teamName} — spec §3.2 hackathon build.\n\n**One-liner:** ${idea.oneLiner}\n\n**Problem:** ${idea.problem}\n\n**Solution:** ${idea.solution}\n\n**Build scope:** ${idea.buildScope}\n\nBuilt entirely by an AI coding agent across discrete GitHub Actions build turns (spec §8) — no human-written code.\n`;
 
   // Sequential, not Promise.all: the repo has zero commits at this point,
   // so the first successful PUT is what creates the initial commit/default
-  // branch ref. Firing all 4 in parallel races them against that same
+  // branch ref. Firing all of them in parallel races them against that same
   // ref-creation and GitHub 409s ("reference already exists") on whichever
   // loses (found live, 2026-07-21, second team_formation run after the
   // auto_init fix above). Once the first PUT lands the branch exists, so
   // the rest are ordinary sequential commits — no race left to have.
   await putFile(env, owner, repoName, "README.md", readme, "Scaffold: idea brief");
-  await putFile(env, owner, repoName, ".github/workflows/team-build-turn.yml", workflow, "Scaffold: build-turn workflow");
-  await putFile(env, owner, repoName, "docker/Dockerfile.arena-team-base", dockerfile, "Scaffold: container image");
-  await putFile(env, owner, repoName, "docker/opencode.json", opencodeConfig, "Scaffold: OpenCode provider config");
-  await putFile(env, owner, repoName, "scripts/workers_ai_shim.js", aiShim, "Scaffold: Workers AI compatibility shim");
+  for (let i = 0; i < HARNESS_FILES.length; i++) {
+    await putFile(env, owner, repoName, HARNESS_FILES[i], harness[i], `Scaffold: ${HARNESS_FILES[i]}`);
+  }
 
   await Promise.all([
     setRepoSecret(env, owner, repoName, "CF_ACCOUNT_ID", env.CF_ACCOUNT_ID),

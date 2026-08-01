@@ -13,7 +13,7 @@ import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
 import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
-import { createTeamRepo } from "../github/repos";
+import { createTeamRepo, syncTeamHarness } from "../github/repos";
 import { dispatchBuildTurn } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
 import { pairwiseRunoff, RUNOFF_MARGIN, type RunoffVerdict } from "../judges/runoff";
@@ -462,6 +462,21 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
 
   const idea = await env.DB.prepare(`SELECT title, build_scope FROM archive_ideas WHERE id = ?`)
     .bind(team.idea_id).first<{ title: string; build_scope: string }>();
+
+  // Bring the harness up to date before running a turn with it. Team repos
+  // were scaffolded once at creation and never refreshed, so a team formed
+  // days earlier was still running that day's workflow — missing `run-name`
+  // (which is how reconcileBuildTurns matches a run to a turn, so conclusions
+  // were mis-assigned) and missing the P0-0a shim entirely. Every harness fix
+  // was landing in the main repo and reaching nobody. Failing to sync must not
+  // block the turn: an out-of-date harness still runs, and skipping the build
+  // entirely would be the worse outcome.
+  try {
+    const synced = await syncTeamHarness(env, team.repo_url);
+    if (synced.length) console.log(`harness synced for ${team.repo_url}: ${synced.join(", ")}`);
+  } catch (err) {
+    console.log(`harness sync failed for ${team.repo_url} (dispatching anyway): ${err instanceof Error ? err.message : err}`);
+  }
 
   // countPayloadFieldMatches, not `payload LIKE '%"teamId":"..."%'` — D1
   // throws "LIKE or GLOB pattern too complex" on any pattern containing a
