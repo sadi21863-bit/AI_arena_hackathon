@@ -367,6 +367,7 @@ async function ensurePostBuildWork(env: Env, event: EventRow): Promise<Hackathon
   if (event.status === "complete") return "complete";
 
   if (event.status !== "judged" && event.status !== "tribunal") {
+    await inheritJudgingPin(env, event);
     return ensureHackathonJudging(env, event.id);
   }
 
@@ -375,6 +376,42 @@ async function ensurePostBuildWork(env: Env, event: EventRow): Promise<Hackathon
   }
 
   return ensureTribunalCrossExamAndSynthesis(env, event);
+}
+
+/**
+ * Carry the parent ideathon's pinned judging model onto the hackathon.
+ *
+ * P0-2 pins a judging model so a mid-event provider swap cannot mix model
+ * families into one weighted ranking. That pin is written by runCalibration —
+ * and runCalibration is only ever called from ensureIdeathonJudging, so a
+ * hackathon has never had one. Found live 2026-08-01 on the first real
+ * autonomous judging run: `judging_provider` was null on the hackathon, so
+ * scoreTarget passed `pinned_provider: undefined` and every judge was free to
+ * land on whatever tier the router picked. That run happened to stay on one
+ * Groq model throughout, so nothing was corrupted — the guard was simply
+ * absent for the phase that decides the winner.
+ *
+ * Inheriting rather than re-calibrating is deliberate. The parent ideathon
+ * calibrated days earlier and pinned a model; the hackathon is the second half
+ * of that same cycle, and P0-2's intent is one judge contract per cycle. A
+ * fresh calibration would cost 21 LLM calls to re-derive an answer that
+ * already exists, and could legitimately land on a DIFFERENT model — which is
+ * the exact inconsistency the pin exists to prevent.
+ *
+ * No-ops when the hackathon already has a pin, or when the parent has none.
+ */
+async function inheritJudgingPin(env: Env, event: EventRow): Promise<void> {
+  if (!event.parent_event_id) return;
+  const self = await env.DB.prepare(`SELECT judging_provider FROM archive_events WHERE id = ?`)
+    .bind(event.id).first<{ judging_provider: string | null }>();
+  if (self?.judging_provider) return;
+
+  const parent = await env.DB.prepare(`SELECT judging_provider, judging_model FROM archive_events WHERE id = ?`)
+    .bind(event.parent_event_id).first<{ judging_provider: string | null; judging_model: string | null }>();
+  if (!parent?.judging_provider) return;
+
+  await env.DB.prepare(`UPDATE archive_events SET judging_provider = ?, judging_model = ? WHERE id = ?`)
+    .bind(parent.judging_provider, parent.judging_model, event.id).run();
 }
 
 async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
