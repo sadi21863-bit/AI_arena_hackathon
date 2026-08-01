@@ -19,6 +19,7 @@ import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
 import { JUDGES } from "./judges/personas";
+import { syncTeamHarness } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
@@ -906,6 +907,31 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
          FROM build_turns WHERE event_id = ? ORDER BY turn_number`
       ).bind(reconcileMatch[1]).all();
       return Response.json({ updated, turns: rows.results });
+    }
+
+    // Bring an event's team repos back in line with the main repo's build
+    // harness, without waiting for a dispatch to do it.
+    //
+    // The sync itself rides on dispatch, which is right for normal operation —
+    // but a hackathon that has stopped dispatching (capped out, or past the
+    // building phase) would never pick up a harness fix, and a repo whose
+    // workflow mis-records its own results is worth correcting even when no
+    // more turns will run. Same auth class as the other /admin/events routes.
+    const syncHarnessMatch = url.pathname.match(/^\/admin\/events\/([^/]+)\/sync-harness$/);
+    if (syncHarnessMatch && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      const teams = await env.DB.prepare(`SELECT id, team_name, repo_url FROM hackathon_teams WHERE event_id = ?`)
+        .bind(syncHarnessMatch[1]).all<{ id: string; team_name: string; repo_url: string }>();
+
+      const results = [];
+      for (const team of teams.results) {
+        try {
+          results.push({ team: team.team_name, repo: team.repo_url, updated: await syncTeamHarness(env, team.repo_url) });
+        } catch (err) {
+          results.push({ team: team.team_name, repo: team.repo_url, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return Response.json({ teams: results });
     }
 
     // Manual trigger for ensureArenaCadence (scheduler.ts) -- lets the
