@@ -142,6 +142,7 @@ export interface BuildEvidence {
   turnsDispatched: number;
   turnsSucceeded: number;
   turnsFailed: number;
+  turnsCancelled: number;
   commits: number;
   filesChanged: number;
   additions: number;
@@ -189,17 +190,26 @@ const TEST_NAME_PATTERN = /\.(test|spec)\.[jt]sx?$/i;
  * turns" and nothing else would repeat that mistake.
  */
 export async function collectBuildEvidence(env: Env, teamId: string, repoFullName: string): Promise<BuildEvidence> {
+  // `cancelled` is counted explicitly, not folded into `failed` and not left
+  // out. GitHub cancels a queued run when the concurrency group is already
+  // occupied, which is a different fact from a turn that ran and failed — but
+  // omitting it is worse than either: this event has 344 cancelled turns, and
+  // reporting "347 dispatched, 3 succeeded, 0 failed" would leave the judge to
+  // assume 344 are still pending. Found by pre-flighting the evidence before
+  // the first live judging run.
   const counts = await env.DB.prepare(
     `SELECT COUNT(*) AS dispatched,
             SUM(CASE WHEN conclusion = 'success' THEN 1 ELSE 0 END) AS succeeded,
-            SUM(CASE WHEN conclusion = 'failure' THEN 1 ELSE 0 END) AS failed
+            SUM(CASE WHEN conclusion = 'failure' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN conclusion = 'cancelled' THEN 1 ELSE 0 END) AS cancelled
        FROM build_turns WHERE team_id = ?`
-  ).bind(teamId).first<{ dispatched: number; succeeded: number | null; failed: number | null }>();
+  ).bind(teamId).first<{ dispatched: number; succeeded: number | null; failed: number | null; cancelled: number | null }>();
 
   const evidence: BuildEvidence = {
     turnsDispatched: counts?.dispatched ?? 0,
     turnsSucceeded: counts?.succeeded ?? 0,
     turnsFailed: counts?.failed ?? 0,
+    turnsCancelled: counts?.cancelled ?? 0,
     commits: 0,
     filesChanged: 0,
     additions: 0,
@@ -247,7 +257,15 @@ export async function collectBuildEvidence(env: Env, teamId: string, repoFullNam
 /** One line a judge prompt can consume, from the evidence above. */
 export function describeBuildEvidence(e: BuildEvidence): string {
   const lines = [
-    `Build turns: ${e.turnsDispatched} dispatched, ${e.turnsSucceeded} succeeded, ${e.turnsFailed} failed.`,
+    `Build turns: ${e.turnsDispatched} dispatched, ${e.turnsSucceeded} succeeded, ${e.turnsFailed} failed` +
+      (e.turnsCancelled ? `, ${e.turnsCancelled} cancelled before running` : "") + ".",
+    // Said plainly, because the raw counts invite the wrong inference: a team
+    // with 3 successes out of 347 looks catastrophic, when in fact only a
+    // handful of turns ever got to run and the rest were cancelled by a
+    // scheduling fault on our side, not by anything the team did.
+    ...(e.turnsCancelled > e.turnsSucceeded
+      ? ["NOTE: most turns were cancelled before executing (a dispatch fault, not the team's doing) — judge the work that exists, not the turn count."]
+      : []),
     `Commits: ${e.commits}. Files changed vs. scaffold: ${e.filesChanged} (+${e.additions}/-${e.deletions}).`,
     `Product source files (excluding scaffold and turn logs): ${e.sourceFiles}.`,
     `Automated test suite present: ${e.hasTestSuite ? "yes" : "no"}.`,
