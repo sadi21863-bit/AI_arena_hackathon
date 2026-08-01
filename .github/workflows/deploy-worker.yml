@@ -29,6 +29,10 @@ on:
       - "wrangler.toml"
       - "package.json"
       - "package-lock.json"
+      # The workflow exercises itself. Without this a fix to the deploy step
+      # only takes effect on the next unrelated src change, which is how this
+      # one nearly shipped untested for a second time.
+      - ".github/workflows/deploy-worker.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -53,7 +57,43 @@ jobs:
         run: npx tsc --noEmit -p .
 
       - name: Deploy Worker
-        run: npx wrangler deploy
+        # Failure is echoed back as a `::error::` annotation, not just written
+        # to the log. GitHub's job logs need an authenticated token to read,
+        # while annotations are readable from the public API — so a failing
+        # deploy on a public repo was reporting nothing more useful than
+        # "Process completed with exit code 1" to anyone without repo auth.
+        # This workflow failed seven times in a row before the actual wrangler
+        # error could be seen at all.
+        #
+        # Long hex strings are redacted before annotating. wrangler does not
+        # print the API token, but an error can carry account or resource ids,
+        # and an annotation on a public repo is public.
+        run: |
+          set +e
+          out=$(npx wrangler deploy 2>&1)
+          code=$?
+          echo "$out"
+          if [ $code -ne 0 ]; then
+            safe=$(printf '%s' "$out" | tail -n 25 | sed -E 's/[0-9a-f]{32,}/[redacted]/g' | tr '\n' ' ')
+            echo "::error::wrangler deploy failed (exit $code): $safe"
+          fi
+          exit $code
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+
+      - name: Report token scope on failure
+        # Only on failure, and only the permission NAMES — `whoami` prints the
+        # token's scopes, which is exactly what distinguishes the remaining
+        # candidates (Account Settings: Read, Workers Observability: Edit)
+        # from a genuine deploy fault.
+        if: failure()
+        run: |
+          set +e
+          who=$(npx wrangler whoami 2>&1)
+          echo "$who"
+          scopes=$(printf '%s' "$who" | grep -iE '^\s*-|scope|permission' | sed -E 's/[0-9a-f]{32,}/[redacted]/g' | tr '\n' ' ')
+          echo "::error::token scopes seen by wrangler: ${scopes:-（none reported）}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
