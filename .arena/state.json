@@ -1,6 +1,6 @@
 {
   "_comment": "Source of truth for the build loop. CLAUDE.md reads this at the start of every session. Don't hand-edit gate results \u2014 they're written by scripts/check_*_gate.py so they reflect what was actually measured, not what someone hoped for.",
-  "current_gate": "week7_closed_beta",
+  "current_gate": "post_beta_hardening",
   "gates": {
     "inference_pool": {
       "status": "pass",
@@ -139,6 +139,34 @@
           "Tribunal's 30-min retry backoff (Week 5 precedent) was ported to judging as-is, but that number was calibrated for genuine multi-hour daily-quota exhaustion (Tribunal's failure mode) -- judge_idea/judge_team failures are usually a single transient blip, not the whole event blocked for hours. Confirmed live: with the backoff shortened to 2 minutes, hackathon judging's one remaining failed judge (6/7 succeeded via the allSettled fix) cleared and completed within ~2 minutes instead of the 30 the old value would have required. The real cron's own 5-min cadence means anything under 5 min doesn't change production retry behavior anyway -- it only needed to outlast aggressive manual test-tick cadence, not the real failure's recovery time"
         ],
         "admin_test_tooling_added": "PATCH /admin/events/:id/start-date (bearer-token gated, same auth class as other /admin/events routes) -- reusable for any future compressed-schedule verification, not single-use scaffolding"
+      }
+    },
+    "post_beta_hardening": {
+      "status": "in_progress",
+      "checked_at": "2026-08-01T07:10:00.000000+00:00",
+      "details": {
+        "why_this_gate_exists": "docs/ARENA_BACKLOG.md's own suggestion -- add a new gate rather than reopen week7_closed_beta, so the roadmap's completed history stays intact. current_gate had read week7_closed_beta since 2026-07-27 while Part 1, Part 2, the Office rebuild and the autonomous cadence all landed, which misdirects every session that reads this file first.",
+        "landed": {
+          "part_1": "All of ARENA_BACKLOG.md P0-P3 addressed. P1-5 (GitHub PAT scope) and package.json's version deliberately excluded per explicit user instruction -- do not re-raise either.",
+          "part_2": "N-2 archive-fed research, N-3 pairwise runoff, N-4 grounded build judging, N-5 cross-event Elo, N-7 Chronicler. N-6 (Cloudflare Workflows) declined with reasoning in docs/PART2_DECISIONS_2026-07-31.md -- do not re-propose without new justification.",
+          "p0_0a": "Root cause was NOT the sandbox (the earlier diagnosis was wrong). It is a non-string tool_call.id from Workers AI rejected by the Vercel AI SDK. Fixed by scripts/workers_ai_shim.js.",
+          "stall_watchdog": "MAX_ITEM_ATTEMPTS + checkForStalledEvents -- one permanently-failing item can no longer pin an event below terminal status and silently halt all future cadence.",
+          "observatory": "Agent Office rebuilt: failure/abandonment visible, hackathon team benches, artifact bubbles, Merge Tables, judges' bench, idle roaming, and eight per-phase environments. See docs/OFFICE_INVESTIGATION_2026-07-31.md.",
+          "schema": "15 migrations tracked by scripts/apply_schema.js; production baselined and current."
+        },
+        "real_bugs_found_and_fixed_via_live_production_data": [
+          "MAX_BUILD_TURNS_PER_DAY never once fired -- it counted with queuedPayloadValues, which returns a Set, so every team's dispatches-today was permanently 1 against a ceiling of 6. The live hackathon dispatched 226 turns on 2026-07-31 and 122 more by 06:25 on 08-01. Every health signal read green throughout: cron ticking, zero queue failures, no errors, watchdog seeing progress. Only the cancelled conclusions on the GitHub side gave it away.",
+          "createTeamRepo froze each team's build harness at repo-creation time, so every harness fix since reached nobody. The running teams' workflow predated run-name (which reconcileBuildTurns matches runs to turns by, hence mis-attributed conclusions) and predated the P0-0a shim entirely. Fixed by syncTeamHarness, driven off a HARNESS_FILES allowlist that can never touch a team's own code.",
+          "apply_schema.js read a batch summary as query results (wrangler d1 execute --file does not return rows), so every sentinel check answered 'present'. --baseline would have recorded all 15 migrations as applied, including 4 that were missing, then reported nothing to do."
+        ],
+        "not_yet_verified_live": "Nothing in Part 2, the P0-0a shim, or the rebuilt Office has run against a live autonomous cycle -- every verification to date used seeded fixtures. The hackathon in flight (event_8088ef16) reaches ready_for_judging on 2026-08-01 and is the first real exercise of the judging path; the ideathon that auto-starts after it is the first fully autonomous cycle.",
+        "open_and_deliberately_deferred": {
+          "G6": "GET /events/:id/agent-activity returns one representative queue row per agent, so real parallelism is invisible in the Office.",
+          "G7": "The Office is a snapshot; Replay is a separate view. Journal-backed replay (AI Town's model) is the right fix and is a data-model change, not a view change.",
+          "cold_storage_rollover": "spec 15.1 -- D1 is ~2MB against an 80%-of-5GB trigger, still untestable.",
+          "deploy_worker_workflow": ".github/workflows/deploy-worker.yml exists but fails: CF_API_TOKEN lacks Workers Scripts: Edit. Until the token is widened, backend commits still need a manual `npx wrangler deploy`.",
+          "build_turns_correction": "db/corrections/build_turns_event_8088ef16_2026-08-01.sql is reviewed and ready but NOT applied -- the production write is blocked by the sandbox classifier and needs a human to run it. Rationale in docs/BUILD_TURN_CORRECTION_2026-08-01.md."
+        }
       }
     }
   }
