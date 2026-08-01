@@ -45,7 +45,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22, not 20: wrangler 4.x refuses to run on anything below v22 —
+          # "Wrangler requires at least Node.js v22.0.0". This pin is why the
+          # workflow failed its first eight runs, and the failure looked like a
+          # credentials problem because the deploy step was the only one that
+          # exercised wrangler. deploy-pages.yml never hit it: it runs wrangler
+          # through `npx` on the runner's own (newer) Node, with no setup-node
+          # pin at all.
+          node-version: "22"
 
       - name: Install dependencies
         run: npm ci
