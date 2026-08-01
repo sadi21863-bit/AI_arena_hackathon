@@ -311,10 +311,24 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn'
          AND date(created_at) = ? AND status != 'failed'`
     ).bind(event.id, today).all<{ payload: string | null }>();
-    const dispatchedTodayCount = new Map<string, number>();
-    for (const id of queuedPayloadValues(todaysDispatches.results, "teamId")) {
-      dispatchedTodayCount.set(id, (dispatchedTodayCount.get(id) ?? 0) + 1);
-    }
+    // payloadFieldCounts, NOT queuedPayloadValues. Found live 2026-08-01 in
+    // production: queuedPayloadValues returns a SET, so iterating it yielded
+    // each teamId exactly once and every team's "dispatches today" was
+    // permanently 1. The ceiling could never be reached and the cap above has
+    // never once fired.
+    //
+    // What that cost: the real hackathon dispatched 101+ turns per team in a
+    // single day — one every 5 minutes, for ~14 hours — against a ceiling of
+    // 6. Everything past turn ~22 came back `cancelled`, because
+    // team-build-turn.yml's concurrency group only lets one run per team
+    // proceed and GitHub cancels the superseded ones. So the guard whose
+    // stated purpose was "a fast-failing turn can't spin the GitHub Actions
+    // quota" was inert while precisely that happened.
+    //
+    // payload-utils.ts's own comment on countPayloadFieldMatches spells the
+    // trap out — "a Set would collapse repeats, losing the count" — which is
+    // exactly the mistake made here.
+    const dispatchedTodayCount = payloadFieldCounts(todaysDispatches.results, "teamId");
 
     // Anything already queued but not yet executed — don't stack a second.
     const pending = await env.DB.prepare(
