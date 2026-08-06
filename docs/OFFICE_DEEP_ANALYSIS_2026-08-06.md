@@ -3,9 +3,8 @@
 > **STATUS 2026-08-06 — analysis complete, no code written.** Branch:
 > `office-deep-analysis` (created off `395a7b2`). Combines code reading
 > (`office.js`, backend endpoints, replay, store, observatory shell),
-> live D1 measurements, and research (AI Town, OTel GenAI observability,
-> Kaggle Kaggriculture). Companion docs: `OFFICE_ASSET_CATALOG_2026-08-06.md`
-> (chimera sprites) and `KAGGRICULTURE_STUDY_2026-08-06.md`.
+> live D1 measurements, and research (AI Town, OTel GenAI observability).
+> Companion doc: `OFFICE_ASSET_CATALOG_2026-08-06.md` (chimera sprites).
 
 ## 1. What the Office is today
 
