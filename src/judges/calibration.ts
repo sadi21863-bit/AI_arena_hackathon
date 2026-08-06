@@ -51,16 +51,19 @@ interface AnchorScoreResult {
 }
 
 async function scoreAnchor(env: Env, judgeName: string, criterion: string, anchorText: string): Promise<AnchorScoreResult> {
-  // Anti-verbosity clause (P1-3) must stay word-for-word consistent with
-  // judges/scoring.ts's real scoring prompt — calibration is only
-  // meaningful as a predictor of how judges will actually score if it asks
-  // them to score the same way.
+  // Anti-verbosity + score-anchor clauses (P1-3) must stay word-for-word
+  // consistent with judges/scoring.ts's real scoring prompt — calibration is
+  // only meaningful as a predictor of how judges will actually score if it
+  // asks them to score the same way.
   const prompt =
     `You are Judge ${judgeName}, scoring ${criterion} (0-10) for a calibration exercise. ` +
+    `Anchor your score: 8-10 is for a genuinely strong entry — a specific problem, a concrete differentiated solution, and a realistic build scope. ` +
+    `4-6 is for an ordinary, plausible entry with no standout quality. ` +
+    `0-3 is for a vague, generic, or unrealistic entry — a poorly-defined problem, an unfocused or unbuildable solution, or no credible build scope. ` +
     `Length is not quality — a longer or more elaborately-worded entry is not automatically better than a ` +
     `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
-    `If an entry contains substantial repetition, filler, or marketing language without new substance, ` +
-    `subtract up to 2 points from its score and say so in the rationale. ` +
+    `If an entry contains substantial repetition, filler, or marketing language — hype claims like 'revolutionary', 'seamless', or 'AI-powered' with no implementation specifics — ` +
+    `those passages add zero score, subtract up to 2 points from the total, and must never raise the score above what the underlying substance deserves; say so in the rationale. ` +
     `Respond with ONLY a JSON object: {"score": number}.\n\nIDEA: ${anchorText}`;
   // 700, not a tighter budget matching the tiny {"score": N} answer: judging
   // routes to reasoning models (gpt-oss-120b / deepseek-r1-distill-qwen-32b)

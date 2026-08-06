@@ -49,10 +49,13 @@ const MAX_RETRIES = 3;
 function scoringPrompt(judgeName, criterion, entry) {
   return (
     `You are Judge ${judgeName}, scoring ${criterion} (0-10) for a competition entry. ` +
+    `Anchor your score: 8-10 is for a genuinely strong entry — a specific problem, a concrete differentiated solution, and a realistic build scope. ` +
+    `4-6 is for an ordinary, plausible entry with no standout quality. ` +
+    `0-3 is for a vague, generic, or unrealistic entry — a poorly-defined problem, an unfocused or unbuildable solution, or no credible build scope. ` +
     `Length is not quality — a longer or more elaborately-worded entry is not automatically better than a ` +
     `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
-    `If an entry contains substantial repetition, filler, or marketing language without new substance, ` +
-    `subtract up to 2 points from its score and say so in the rationale. ` +
+    `If an entry contains substantial repetition, filler, or marketing language — hype claims like 'revolutionary', 'seamless', or 'AI-powered' with no implementation specifics — ` +
+    `those passages add zero score, subtract up to 2 points from the total, and must never raise the score above what the underlying substance deserves; say so in the rationale. ` +
     `Respond with ONLY a JSON object: {"score": number, "rationale": string (2-3 sentences)}.\n\n${entry}`
   );
 }
