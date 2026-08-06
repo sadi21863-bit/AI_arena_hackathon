@@ -1063,8 +1063,9 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
 // it needs to outlast legitimate slow recovery (a Workers AI daily quota
 // exhaustion can take most of a day to clear) rather than fire fast. Getting
 // this wrong in the aggressive direction — abandoning an event that would
-// have recovered on its own — is worse than a slow safety net, since
-// abandonment has no undo.
+// have recovered on its own — is worse than a slow safety net; the day-gated
+// false-positive shape has an automated undo now (reconcileAbandonedEvents
+// below), but a genuine abandonment should still be rare.
 const STALL_ABANDON_HOURS = 25;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -1126,5 +1127,63 @@ export async function checkForStalledEvents(env: Env): Promise<void> {
     await env.DB.prepare(
       `UPDATE archive_events SET abandoned_at = datetime('now'), abandoned_reason = ? WHERE id = ?`
     ).bind(`No progress for over ${STALL_ABANDON_HOURS}h — stuck at status '${event.status}'`, event.id).run();
+  }
+}
+
+// Self-healing cap: an event may be revived this many times after a false
+// abandonment before revival stops. A genuinely dead event (phase handler
+// throwing before the queue is ever touched) looks identical to a healthy
+// waiting one from the queue's perspective — empty of unfinished work — so
+// revival can't be unlimited, or a zombie would be resurrected forever and
+// keep blocking arena cadence (ensureArenaCadence's stillRunning check).
+const MAX_EVENT_REVIVALS = 3;
+
+/**
+ * The automated undo for checkForStalledEvents' one false-positive shape: a
+ * day-gated phase (DAY_GATED_PHASE_STARTS_AT_DAY) whose work all completed,
+ * leaving the event in a legitimate calendar wait. Production incident
+ * 2026-08-02 — deep_research finished 26 minutes after event start, ideation
+ * wasn't due until day 2, and the (then last_progress_at-anchored) watchdog
+ * abandoned the healthy event at +25h. Revival is strictly guarded so it only
+ * undoes provably-wrong abandonments:
+ *   1. Status must be day-gated — continuous phases (building,
+ *      ready_for_judging) are trusted, their abandonment means the work
+ *      itself is stuck.
+ *   2. The event's queue must hold no pending/in_progress items — live work
+ *      means a real stall.
+ *   3. revival_count < MAX_EVENT_REVIVALS (schema_week8c_self_heal.sql).
+ * If the calendar has drifted past the event's current phase (it sat
+ * abandoned for days, so its day-offset schedule is stale), start_date resets
+ * and it runs a full phase cycle again; otherwise the existing schedule is
+ * preserved. Called once per cron tick from index.ts's scheduled() BEFORE the
+ * per-event drive loop, so a revived event is worked in the same tick.
+ */
+export async function reconcileAbandonedEvents(env: Env): Promise<void> {
+  const abandoned = await env.DB.prepare(
+    `SELECT id, status, start_date, revival_count FROM archive_events
+     WHERE abandoned_at IS NOT NULL AND revival_count < ?
+       AND ((type = 'ideathon' AND status != 'judged') OR (type = 'hackathon' AND status != 'complete'))`
+  ).bind(MAX_EVENT_REVIVALS).all<{ id: string; status: string; start_date: string; revival_count: number }>();
+
+  for (const event of abandoned.results) {
+    if (DAY_GATED_PHASE_STARTS_AT_DAY[event.status] === undefined) continue;
+
+    const unfinished = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM event_queue WHERE event_id = ? AND status IN ('pending', 'in_progress')`
+    ).bind(event.id).first<{ n: number }>();
+    if ((unfinished?.n ?? 0) > 0) continue;
+
+    const expected =
+      event.status === "team_formation"
+        ? hackathonPhaseForDay(daysElapsed(event.start_date))
+        : phaseForDay(daysElapsed(event.start_date));
+    const calendarDrifted = expected !== event.status;
+
+    await env.DB.prepare(
+      `UPDATE archive_events SET abandoned_at = NULL, abandoned_reason = NULL,
+         last_progress_at = datetime('now'), last_revived_at = datetime('now'),
+         revival_count = revival_count + 1
+         ${calendarDrifted ? `, start_date = datetime('now')` : ``} WHERE id = ?`
+    ).bind(event.id).run();
   }
 }
