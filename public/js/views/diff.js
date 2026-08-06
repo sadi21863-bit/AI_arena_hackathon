@@ -130,10 +130,16 @@ export async function mount(el, params) {
     return () => { disposed = true; };
   }
 
+  // escapeHtml: true — the diff text is commit CONTENT from a third party
+  // (GitHub) and lands in the page via innerHTML; without explicit escaping,
+  // a committed line like <img src=x onerror=...> would execute in this
+  // view. Diff2Html's default has varied across versions — set it, don't
+  // rely on it.
   body.innerHTML = window.Diff2Html.html(text, {
     drawFileList: true,
     matching: "lines",
     outputFormat: "line-by-line",
+    escapeHtml: true,
   });
 
   return () => { disposed = true; };

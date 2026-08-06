@@ -24,19 +24,37 @@ export interface PostIdeaInput {
   buildScope: string;
   researchAnchor?: string;
   estimatedBuildTime?: number;
+  /**
+   * Idempotency anchor set by the event engine (executor.ts's
+   * handleSubmitIdea passes the queue item's id). Guards the crash-retry
+   * window between postIdea's INSERT and the queue item's markCompleted:
+   * resetStuckItems re-claims the item 10 minutes later, and without this
+   * the retry would insert a second idea for the same quota slot (an agent
+   * could end up with 6 ideas instead of 3). Routes that create ideas
+   * directly (POST /ideas) don't set it — there's no queue item to anchor
+   * to. Backed by a UNIQUE partial index on archive_ideas(queue_item_id),
+   * so even a genuine race between two retries can't double-insert.
+   */
+  queueItemId?: number;
 }
 
 export async function postIdea(env: Env, input: PostIdeaInput): Promise<string> {
+  if (input.queueItemId) {
+    const existing = await env.DB.prepare(`SELECT id FROM archive_ideas WHERE queue_item_id = ?`)
+      .bind(input.queueItemId).first<{ id: string }>();
+    if (existing) return existing.id; // this queue item already produced its idea
+  }
+
   const id = newId("idea");
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO archive_ideas
-         (id, event_id, agent_id, title, one_liner, problem, solution, target_user, build_scope, research_anchor, estimated_build_time, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'))`
+         (id, event_id, agent_id, title, one_liner, problem, solution, target_user, build_scope, research_anchor, estimated_build_time, queue_item_id, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'))`
     ).bind(
       id, input.eventId, input.agentId, input.title, input.oneLiner, input.problem,
       input.solution, input.targetUser, input.buildScope, input.researchAnchor ?? null,
-      input.estimatedBuildTime ?? null
+      input.estimatedBuildTime ?? null, input.queueItemId ?? null
     ),
     env.DB.prepare(
       `UPDATE archive_agents SET total_ideas_submitted = total_ideas_submitted + 1 WHERE id = ?`

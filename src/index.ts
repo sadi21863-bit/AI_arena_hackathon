@@ -7,7 +7,7 @@
  * weeks' scope per the roadmap (§17).
  */
 
-import { routeInference, DAILY_CAPS, type TaskType } from "./router";
+import { routeInference, DAILY_CAPS, unitsUsedToday, type TaskType } from "./router";
 import type { Env } from "./env";
 import { requireAgentToken, requireAdminToken } from "./auth";
 import { listAgents, getAgent, isAgentId, AGENTS } from "./agents/personas";
@@ -50,6 +50,47 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+// Per-IP fixed-window rate limiter for the public endpoints that SPEND real
+// budget: POST /archive/query and GET /agents/:id?recall= each make a Workers
+// AI embedding call, charged to the same daily Neurons pool the event engine
+// depends on (DAILY_CAPS["workers_ai"], shared with judging/Tribunal — see
+// the gap analysis: nothing stopped a scripted loop from exhausting the
+// day's pool and stalling Workers-AI-only event work). In-memory is fine
+// here: the limiter only needs to throttle within a Worker instance's
+// lifetime, and an eviction just resets a window, never blocks a user.
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_PER_MIN = 30;
+const rateBuckets = new Map<string, { count: number; windowStart: number }>();
+
+function rateLimited(request: Request, maxPerWindow = RATE_LIMIT_MAX_PER_MIN): boolean {
+  const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+  const now = Date.now();
+  const bucket = rateBuckets.get(ip);
+  if (!bucket || now - bucket.windowStart >= RATE_LIMIT_WINDOW_MS) {
+    rateBuckets.set(ip, { count: 1, windowStart: now });
+    if (rateBuckets.size > 5000) {
+      // Opportunistic prune — bounded Map, not a leak; only matters under
+      // sustained heavy traffic, which is exactly when it'd be called.
+      for (const [k, b] of rateBuckets) {
+        if (now - b.windowStart >= RATE_LIMIT_WINDOW_MS) rateBuckets.delete(k);
+      }
+    }
+    return false;
+  }
+  bucket.count++;
+  return bucket.count > maxPerWindow;
+}
+
+/**
+ * Workers AI has ONE shared daily Neurons pool (router.ts's
+ * DAILY_CAPS["workers_ai"]) that both the event engine and the public
+ * embed-costing routes draw from. Public callers get a fast 503 when the
+ * pool is exhausted instead of making the event's own work fail the embed.
+ */
+async function embedBudgetAvailable(env: Env): Promise<boolean> {
+  return (await unitsUsedToday(env, "workers_ai")) < DAILY_CAPS["workers_ai"];
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -223,10 +264,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
       // spec §10: GET /agents/{id} is "Agent profile + memory" — ?recall=
       // is optional since embedding a query costs an AI call every request.
+      // ?recall= is public (spec §10 lists the agent routes unauthenticated)
+      // but it spends Workers AI Neurons from the shared daily pool, so it
+      // is rate-limited per IP and fails soft when the pool is exhausted
+      // (returns the profile without memory rather than spending the event
+      // engine's budget on an external query).
       const recallQuery = url.searchParams.get("recall");
-      const memory = recallQuery ? await recallMemory(env, agentMatch[1], recallQuery) : undefined;
+      const memory = recallQuery
+        ? rateLimited(request) || !(await embedBudgetAvailable(env))
+          ? undefined
+          : await recallMemory(env, agentMatch[1], recallQuery.slice(0, 500))
+        : undefined;
+      const memoryUnavailable = !!recallQuery && memory === undefined;
 
-      return Response.json({ ...agent, memory });
+      return Response.json({ ...agent, memory, memoryUnavailable });
     }
 
     // Observatory Headroom Dashboard (spec §11: "live provider usage
@@ -313,9 +364,21 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // into (Week 2 agent memory, Week 5 tribunal reflections), just without
     // recallMemory's mandatory agent_id scoping.
     if (url.pathname === "/archive/query" && request.method === "POST") {
+      // Public, but each call embeds the query into Vectorize — Workers AI
+      // Neurons charged to the same daily pool the event engine uses. Rate
+      // limited per IP, and hard-fails when the pool is already exhausted so
+      // an external script can't spend the event's budget for the day.
+      if (rateLimited(request)) return Response.json({ error: "rate_limited" }, { status: 429 });
+      if (!(await embedBudgetAvailable(env))) {
+        return Response.json({ error: "workers_ai_daily_cap_exhausted" }, { status: 503 });
+      }
       const body = await request.json<{ query: string; topK?: number; eventId?: string; agentId?: string; type?: MemoryType }>();
       if (!body.query) return Response.json({ error: "query is required" }, { status: 400 });
-      const results = await queryArchive(env, body.query, { agentId: body.agentId, eventId: body.eventId, type: body.type }, body.topK ?? 10);
+      // Length caps: embedding is token-costed, and there's no legitimate
+      // use for a multi-KB query string or a topK that doubles as a scrape.
+      if (body.query.length > 2000) return Response.json({ error: "query too long" }, { status: 400 });
+      const topK = Math.min(body.topK ?? 10, 50);
+      const results = await queryArchive(env, body.query, { agentId: body.agentId, eventId: body.eventId, type: body.type }, topK);
       return Response.json(results);
     }
 

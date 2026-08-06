@@ -14,13 +14,12 @@ import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToColl
 import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
 import { createTeamRepo, syncTeamHarness } from "../github/repos";
-import { dispatchBuildTurn } from "../github/dispatch";
 import { scoreTarget } from "../judges/scoring";
 import { pairwiseRunoff, RUNOFF_MARGIN, type RunoffVerdict } from "../judges/runoff";
 import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
 import { requirePayloadField } from "./payload-utils";
-import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence } from "./build-turns";
+import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence, dispatchTurnIfNeeded } from "./build-turns";
 import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
 
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
@@ -94,6 +93,11 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const ideaId = await postIdea(env, {
     agentId: agent.id, eventId: item.event_id, title: idea.title, oneLiner: idea.one_liner,
     problem: idea.problem, solution: idea.solution, targetUser: idea.target_user, buildScope: idea.build_scope,
+    // Idempotency anchor: if this queue item was already partially processed
+    // (Worker died between postIdea and markCompleted, then resetStuckItems
+    // re-claimed it 10 minutes later), postIdea sees the queue_item_id and
+    // returns the existing idea instead of inserting a duplicate.
+    queueItemId: item.id,
   });
 
   // Spec §4: "critique 3 ideas not their own" — queued per-idea rather than
@@ -221,6 +225,14 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
 
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
+
+  // Crash-retry guard: if a previous attempt already ran the UPDATE below
+  // (status -> 'architecture_complete') and only died before markCompleted,
+  // the retry must not rewrite the build plan — judging may already have
+  // scored this idea (judge_idea reads build_scope), and rewriting it then
+  // would silently change what was scored. A retry before the UPDATE landed
+  // still sees 'submitted' and re-runs normally.
+  if (idea.status === "architecture_complete" || idea.status === "judged") return;
 
   const text = await callAgent(env, agent, "architecture",
     `Produce a build plan for this idea (spec §3.1 — Day 4-5 Architecture: tech stack, 3 components, top 2 risks, fallback scope), under 200 words:\n` +
@@ -435,7 +447,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
     const opener = await nextBuildAuthor(env, team.id);
     if (opener) await recordTurnTaken(env, team.id, opener.agent_id);
 
-    await dispatchBuildTurn(env, {
+    await dispatchTurnIfNeeded(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
       // Imperative lead + architecture demoted to trailing reference, not the
       // prompt's bulk — found live (2026-07-28, see docs/INVESTIGATION_2026-07-28.md
@@ -499,7 +511,12 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const author = await nextBuildAuthor(env, teamId);
   if (author) await recordTurnTaken(env, teamId, author.agent_id);
 
-  await dispatchBuildTurn(env, {
+  // dispatchTurnIfNeeded, not a bare dispatch: a crash-retry of this item
+  // (or a dispatch that timed out after GitHub accepted it) would otherwise
+  // fire a SECOND workflow run with the same turn_id — duplicated inference
+  // spend and conflicting commits. The run's existence is verified against
+  // the Actions API first (see build-turns.ts).
+  await dispatchTurnIfNeeded(env, {
     repoFullName: team.repo_url, team: team.team_name,
     turnId,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt

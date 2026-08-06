@@ -40,11 +40,13 @@ CREATE TABLE archive_ideas (
     build_scope TEXT,
     research_anchor TEXT,
     estimated_build_time INTEGER,
+    queue_item_id INTEGER,          -- idempotency anchor: the event_queue row that produced this idea (NULL for POST /ideas)
     status TEXT,
     ideathon_score REAL,
     created_at DATETIME,
     revised_at DATETIME
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ideas_queue_item ON archive_ideas(queue_item_id) WHERE queue_item_id IS NOT NULL;
 
 CREATE TABLE archive_interactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -16,7 +16,7 @@
  */
 
 import type { Env } from "../env";
-import { listBuildTurnRuns } from "../github/dispatch";
+import { listBuildTurnRuns, dispatchBuildTurn } from "../github/dispatch";
 import { githubRequest } from "../github/client";
 
 export interface BuildTurnRow {
@@ -32,14 +32,54 @@ export interface BuildTurnRow {
   completed_at: string | null;
 }
 
+/**
+ * Records the intent to run a turn before dispatching it (INSERT OR IGNORE —
+ * a crash-retry of the same queue item must not double-record).
+ *
+ * Returns whether a NEW row was inserted. False means this turn was already
+ * recorded by an earlier attempt — the caller must then verify whether the
+ * run actually exists before re-dispatching (dispatchTurnIfNeeded), or skip
+ * the dispatch entirely if it does.
+ */
 export async function recordBuildTurn(
   env: Env,
   input: { turnId: string; eventId: string; teamId: string; turnNumber: number }
-): Promise<void> {
-  await env.DB.prepare(
+): Promise<boolean> {
+  const result = await env.DB.prepare(
     `INSERT OR IGNORE INTO build_turns (turn_id, event_id, team_id, turn_number, status)
      VALUES (?, ?, ?, ?, 'dispatched')`
   ).bind(input.turnId, input.eventId, input.teamId, input.turnNumber).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+/**
+ * Dispatch a build turn, but never twice.
+ *
+ * A queue-item retry (crash after a successful dispatch, or a dispatch that
+ * timed out after GitHub accepted it) must not fire a second workflow run for
+ * the same turn_id — that burned real inference spend and pushed conflicting
+ * commits (found live, see the 2026-08-01 correction doc). Verifying against
+ * the Actions API is reliable on retries: a run GitHub accepted appears in
+ * the repo's run list within seconds, and a retry only ever happens >= 5-10
+ * minutes later (markFailed/resetStuckItems timing).
+ *
+ * If the listing itself fails (rate limit, 5xx) the dispatch is attempted
+ * anyway — a turn that never runs (which the 2-hour staleness sweep in
+ * reconcileBuildTurns then marks failed, skipping the team) is worse than a
+ * rare duplicate run.
+ */
+export async function dispatchTurnIfNeeded(
+  env: Env,
+  input: { repoFullName: string; team: "alpha" | "beta"; turnId: string; taskPrompt: string }
+): Promise<boolean> {
+  try {
+    const runs = await listBuildTurnRuns(env, input.repoFullName, 20);
+    if (runs.some((r) => r.name.includes(input.turnId))) return false; // run already exists — skip
+  } catch {
+    // fall through to dispatch below
+  }
+  await dispatchBuildTurn(env, input);
+  return true;
 }
 
 /**
@@ -50,10 +90,14 @@ export async function recordBuildTurn(
  * cron tick and the token's rate limit is shared with team_formation.
  */
 export async function reconcileBuildTurns(env: Env, eventId: string): Promise<number> {
+  // 'failed' turns are excluded, not just 'completed': the staleness sweep
+  // below marks a turn 'failed' when its run never materialized within 2
+  // hours, and letting it keep claiming runs would let it positionally
+  // steal a LATER turn's run (turns iterate oldest-first).
   const open = await env.DB.prepare(
     `SELECT t.turn_id, t.team_id, t.turn_number, ht.repo_url
      FROM build_turns t JOIN hackathon_teams ht ON ht.id = t.team_id
-     WHERE t.event_id = ? AND t.status != 'completed'
+     WHERE t.event_id = ? AND t.status NOT IN ('completed', 'failed', 'cancelled')
      ORDER BY t.turn_number ASC`
   ).bind(eventId).all<{ turn_id: string; team_id: string; turn_number: number; repo_url: string }>();
 
@@ -114,6 +158,20 @@ export async function reconcileBuildTurns(env: Env, eventId: string): Promise<nu
     }
   }
 
+  // Wedged-turn sweep: a turn stuck at 'dispatched' with no run ever
+  // appearing — the dispatch 422'd silently, GitHub never created the run,
+  // or listBuildTurnRuns failed on every tick (rate limit, repo breakage) —
+  // keeps teamHasOpenTurn true forever, and since building gates new
+  // dispatches on the previous turn completing, the team is wedged for the
+  // rest of the event. 2 hours is generous: real turns ran in minutes.
+  // 'queued'/'in_progress' runs are deliberately NOT swept — those have a
+  // real run on GitHub's side and may still complete.
+  const swept = await env.DB.prepare(
+    `UPDATE build_turns SET status = 'failed', completed_at = datetime('now')
+     WHERE event_id = ? AND status = 'dispatched' AND dispatched_at <= datetime('now', '-2 hours')`
+  ).bind(eventId).run();
+  updated += swept.meta.changes ?? 0;
+
   return updated;
 }
 
@@ -122,10 +180,16 @@ export async function reconcileBuildTurns(env: Env, eventId: string): Promise<nu
  *
  * This is what lets building advance on real completion instead of waiting
  * for the next calendar day.
+ *
+ * 'failed'/'cancelled' turns are NOT open: a turn the staleness sweep marked
+ * failed (run never materialized) or that GitHub cancelled before running
+ * must not block the team's next dispatch — that was the wedge that froze a
+ * team for the whole building phase (the 2-hour sweep only helps if this
+ * check lets the team move on).
  */
 export async function teamHasOpenTurn(env: Env, teamId: string): Promise<boolean> {
   const row = await env.DB.prepare(
-    `SELECT 1 FROM build_turns WHERE team_id = ? AND status != 'completed' LIMIT 1`
+    `SELECT 1 FROM build_turns WHERE team_id = ? AND status NOT IN ('completed', 'failed', 'cancelled') LIMIT 1`
   ).bind(teamId).first();
   return row !== null;
 }

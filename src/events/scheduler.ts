@@ -124,6 +124,21 @@ function daysElapsed(startDate: string): number {
  * queued or done before adding more, so a missed cron tick doesn't stall
  * the event and a double-fired tick doesn't duplicate work.
  */
+/**
+ * N-7: queue a narration of the phase that just ENDED.
+ *
+ * The outgoing phase is the one with a finished story; narrating the incoming
+ * one would be describing something that has not happened yet.
+ *
+ * Queued rather than called inline so a slow or failing summarize call cannot
+ * delay the transition it describes. Safe to call more than once: the handler
+ * checks event_chronicle's UNIQUE(event_id, phase) before writing.
+ */
+async function chronicleTransition(env: Env, eventId: string, endedPhase: string): Promise<void> {
+  if (!endedPhase) return;
+  await enqueue(env, { eventId, taskType: "chronicle", payload: { phase: endedPhase }, priority: 8 });
+}
+
 export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<Phase | HackathonPhase> {
   if (event.type === "hackathon") return ensureHackathonWorkQueued(env, event);
 
@@ -133,12 +148,7 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
 
   if (phase !== event.status) {
     await env.DB.prepare(`UPDATE archive_events SET status = ? WHERE id = ?`).bind(phase, event.id).run();
-    // N-7: narrate the phase that just ENDED (event.status), not the one
-    // starting — the outgoing phase is the one with a completed story to
-    // tell. Queued rather than called inline so a slow or failing summarize
-    // call can't delay the transition it describes; the queue's existing
-    // retry/backoff covers it like any other work.
-    await enqueue(env, { eventId: event.id, taskType: "chronicle", payload: { phase: event.status }, priority: 8 });
+    await chronicleTransition(env, event.id, event.status);
   }
 
   if (phase === "ready_for_judging") {
@@ -273,6 +283,11 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
 
   if (phase !== event.status) {
     await env.DB.prepare(`UPDATE archive_events SET status = ? WHERE id = ?`).bind(phase, event.id).run();
+    // N-7 reached ideathons only: ensurePhaseWorkQueued returns to
+    // ensureHackathonWorkQueued on its first line, so every chronicle enqueue
+    // downstream of that was unreachable for a hackathon. The half of the
+    // cycle with teams, a build and a winner was the half never narrated.
+    await chronicleTransition(env, event.id, event.status);
   }
 
   if (phase === "team_formation") {
@@ -337,9 +352,17 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     ).bind(event.id).all<{ payload: string | null }>();
     const alreadyQueued = queuedPayloadValues(pending.results, "teamId");
 
+    // Generic stall cap (MAX_ITEM_ATTEMPTS): a dispatch that keeps failing
+    // (persistent GitHub 5xx / rate limit) would otherwise re-enqueue every
+    // tick forever. At the cap the team's turns stop being dispatched; its
+    // next turn can still come from reconcile/evidence once the failure
+    // clears, but the queue stops accumulating identical failures.
+    const dispatchFailures = await failedAttemptCounts(env, event.id, "dispatch_build_turn", "teamId");
+
     for (const team of teams.results) {
       if (alreadyQueued.has(team.id)) continue;
       if ((dispatchedTodayCount.get(team.id) ?? 0) >= MAX_BUILD_TURNS_PER_DAY) continue;
+      if ((dispatchFailures.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
       // Still working — let it finish rather than dispatching over the top.
       if (await teamHasOpenTurn(env, team.id)) continue;
 
@@ -415,9 +438,23 @@ async function inheritJudgingPin(env: Env, event: EventRow): Promise<void> {
 }
 
 async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
-  const notYetJudged = await env.DB.prepare(
-    `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? AND status != 'judged'`
-  ).bind(eventId).all<{ id: string; idea_id: string }>();
+  // Eligibility gate: a team whose turns never actually RAN cannot win,
+  // however well its idea scored. executed_turns counts turns whose CI run
+  // reached a real conclusion ('success' OR 'failure' — 'cancelled' runs
+  // never executed, and a turn stuck at 'dispatched' with no run is a
+  // dispatch fault, not team work). Zero executed turns means the team
+  // produced nothing verifiable: every turn cancelled before running (the
+  // 344-cancelled-turns shape), or wedged by a dispatch failure. Such a team
+  // is finalized as judged with NULL scores — never scored, never in the
+  // winner query (final_score IS NOT NULL below). A run that concludes
+  // AFTER this finalization can't retroactively change eligibility; the
+  // reconcile sweep (build-turns.ts) still records the truth for evidence.
+  const teamsToJudge = await env.DB.prepare(
+    `SELECT ht.id, ht.idea_id,
+       (SELECT COUNT(*) FROM build_turns bt
+         WHERE bt.team_id = ht.id AND bt.conclusion IN ('success','failure')) AS executed_turns
+     FROM hackathon_teams ht WHERE ht.event_id = ? AND ht.status != 'judged'`
+  ).bind(eventId).all<{ id: string; idea_id: string; executed_turns: number }>();
 
   // Stall watchdog (MAX_ITEM_ATTEMPTS) — same reasoning as
   // ensureIdeathonJudging above: a team whose judging has failed this many
@@ -429,7 +466,13 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   // obtained, not the blend.
   const judgeFailureCounts = await failedAttemptCounts(env, eventId, "judge_team", "teamId");
   const unjudged: { id: string; idea_id: string }[] = [];
-  for (const team of notYetJudged.results) {
+  for (const team of teamsToJudge.results) {
+    if (team.executed_turns === 0) {
+      // Ineligible: never scored, never judged, cannot win (final_score
+      // stays NULL, and the winner query below requires a non-null score).
+      await env.DB.prepare(`UPDATE hackathon_teams SET status = 'judged' WHERE id = ?`).bind(team.id).run();
+      continue;
+    }
     if ((judgeFailureCounts.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
       const hackathonScore = await finalizeWithPartialScores(env, { targetType: "team", targetId: team.id, phase: "hackathon" });
       const idea = await env.DB.prepare(`SELECT ideathon_score FROM archive_ideas WHERE id = ?`).bind(team.idea_id).first<{ ideathon_score: number | null }>();
@@ -442,8 +485,12 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   }
 
   if (unjudged.length === 0) {
+    // final_score IS NOT NULL: an ineligible team (finalized above with null
+    // scores) must never be picked as winner. If NO team was eligible at
+    // all, the winner stays null — an honest "this cycle produced no
+    // buildable outcome" rather than crowning a team that never built.
     const winner = await env.DB.prepare(
-      `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? ORDER BY final_score DESC LIMIT 1`
+      `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? AND final_score IS NOT NULL ORDER BY final_score DESC LIMIT 1`
     ).bind(eventId).first<{ id: string; idea_id: string }>();
     await env.DB.prepare(
       `UPDATE archive_events SET status = 'judged', winner_team_id = ?, winning_idea_id = ? WHERE id = ?`
@@ -453,7 +500,14 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
     // against replay by its own marker (agents/ratings.ts), which matters
     // because this branch is reachable on any later tick — everything else
     // here is safely idempotent, Elo is not.
-    await applyEventRatings(env, eventId);
+    // Also skipped when there's no winner at all: rating two zero-score
+    // sides against each other would manufacture a draw from a non-event.
+    if (winner?.id) {
+      await applyEventRatings(env, eventId);
+    }
+    // The winner being decided is the single most narratable moment in a
+    // cycle, and it was going unrecorded.
+    await chronicleTransition(env, eventId, "ready_for_judging");
     return "judged";
   }
 
@@ -531,6 +585,7 @@ async function ensureTribunalCrossExamAndSynthesis(env: Env, event: EventRow): P
   if (!synthDone) return "tribunal";
 
   await env.DB.prepare(`UPDATE archive_events SET status = 'complete' WHERE id = ?`).bind(event.id).run();
+  await chronicleTransition(env, event.id, "tribunal");
   return "complete";
 }
 
@@ -622,9 +677,35 @@ async function nonFailedCountForAgent(env: Env, eventId: string, agentId: string
   return row?.n ?? 0;
 }
 
+/**
+ * All-time failed count of a task_type for one agent in this event.
+ *
+ * The generic stall cap: judging and Tribunal already have their own
+ * MAX_ITEM_ATTEMPTS handling (failedAttemptCounts / shouldEnqueueForAgent),
+ * but research/submit_idea/architecture re-queue a fresh item on every tick
+ * after a failure (the queueX functions below only look at non-failed
+ * counts), so a persistently-failing item — one agent's research hitting a
+ * hard Tavily outage, an LLM that keeps returning malformed idea JSON —
+ * retried forever, once per 5-minute tick, with no cap. Same pathology the
+ * backlog diagnosed for judging, unguarded on every other phase. At
+ * MAX_ITEM_ATTEMPTS the agent's slot is treated as abandoned for the
+ * phase; the phase itself still completes when its day-boundary rolls over.
+ */
+async function failedCountForAgent(env: Env, eventId: string, agentId: string, taskType: string): Promise<number> {
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed'`
+  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
 async function queueDeepResearch(env: Env, eventId: string): Promise<void> {
   for (const agent of AGENTS) {
     if ((await nonFailedCountForAgent(env, eventId, agent.id, "research")) > 0) continue;
+    // Generic stall cap (MAX_ITEM_ATTEMPTS): a research item that keeps
+    // failing — a hard Tavily outage, a persisted 5xx — must not re-enqueue
+    // every tick forever. At the cap the agent goes without research this
+    // phase rather than the queue accumulating failures without bound.
+    if ((await failedCountForAgent(env, eventId, agent.id, "research")) >= MAX_ITEM_ATTEMPTS) continue;
     await enqueue(env, {
       eventId, agentId: agent.id, taskType: "research",
       payload: { lens: agent.lens },
@@ -642,6 +723,11 @@ async function queueIdeationAndCritique(env: Env, eventId: string): Promise<void
   // whose 2nd submit_idea attempt failed should get a replacement queued
   // for just that slot, not be silently capped at whatever succeeded.
   for (const agent of AGENTS) {
+    // Same generic stall cap as queueDeepResearch: a submit_idea item whose
+    // LLM call keeps failing (persistent quota, malformed JSON) retried
+    // once per tick forever otherwise — at the cap the agent simply ends
+    // the phase with the ideas it has.
+    if ((await failedCountForAgent(env, eventId, agent.id, "submit_idea")) >= MAX_ITEM_ATTEMPTS) continue;
     const existing = await nonFailedCountForAgent(env, eventId, agent.id, "submit_idea");
     for (let i = existing; i < 3; i++) {
       await enqueue(env, {
@@ -699,7 +785,23 @@ async function queueCollaboration(env: Env, eventId: string): Promise<void> {
     ...queuedPayloadValues(existingProposals.results, "ideaB"),
   ]);
 
-  const eligible = ideas.results.filter((i) => !alreadyCovered.has(i.id));
+  // Generic stall cap (MAX_ITEM_ATTEMPTS): a pair whose proposal keeps
+  // failing (one side's LLM call persistently down, malformed decision
+  // JSON) would otherwise be re-proposed on every tick of the 1-day
+  // collaboration phase — ~288 identical failed rows. Failed counts are
+  // merged across both fields since a pair is re-proposed when EITHER side
+  // is eligible again.
+  const [proposalFailA, proposalFailB] = await Promise.all([
+    failedAttemptCounts(env, eventId, "propose_collaboration", "ideaA"),
+    failedAttemptCounts(env, eventId, "propose_collaboration", "ideaB"),
+  ]);
+  const proposalFailures = new Map<string, number>();
+  for (const [id, n] of proposalFailA) proposalFailures.set(id, n);
+  for (const [id, n] of proposalFailB) proposalFailures.set(id, (proposalFailures.get(id) ?? 0) + n);
+
+  const eligible = ideas.results
+    .filter((i) => !alreadyCovered.has(i.id))
+    .filter((i) => (proposalFailures.get(i.id) ?? 0) < MAX_ITEM_ATTEMPTS);
   if (eligible.length < 2) return;
   const agentOf = new Map(eligible.map((i) => [i.id, i.agent_id]));
 
@@ -761,8 +863,18 @@ async function queueArchitecture(env: Env, eventId: string): Promise<void> {
   ).bind(eventId).all<{ payload: string | null }>();
   const alreadyQueued = queuedPayloadValues(existingArchItems.results, "ideaId");
 
+  // Generic stall cap (MAX_ITEM_ATTEMPTS): an architecture call that keeps
+  // failing must not be re-enqueued every tick for the whole phase. At the
+  // cap the idea stays at 'submitted' — it simply doesn't advance to
+  // architecture_complete, so it also doesn't get judged (judging only
+  // looks at architecture_complete ideas). That's the honest outcome for
+  // an idea the system couldn't build a plan for, rather than an endless
+  // failure queue.
+  const archFailures = await failedAttemptCounts(env, eventId, "architecture", "ideaId");
+
   for (const idea of top.results) {
     if (alreadyQueued.has(idea.id)) continue;
+    if ((archFailures.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
     await enqueue(env, {
       eventId, agentId: idea.agent_id, taskType: "architecture",
       payload: { ideaId: idea.id },

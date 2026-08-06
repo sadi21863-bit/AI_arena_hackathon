@@ -78,7 +78,10 @@ function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function unitsUsedToday(env: Env, provider: string, modelId?: string): Promise<number> {
+// Exported so index.ts's public embed-costing routes (/archive/query,
+// /agents/:id?recall=) can fail fast against the same shared cap instead of
+// spending the event engine's Neurons budget on unauthenticated queries.
+export async function unitsUsedToday(env: Env, provider: string, modelId?: string): Promise<number> {
   const row = await env.DB.prepare(
     `SELECT COALESCE(SUM(units_used), 0) as used FROM provider_usage_log
      WHERE day = ? AND provider = ? AND (? IS NULL OR model_id = ?)`
