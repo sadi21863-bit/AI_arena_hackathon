@@ -27,6 +27,8 @@ async function scoreOne(
     `You are Judge ${judge.name}, scoring ${judge.criterion} (0-10) for a competition entry. ` +
     `Length is not quality — a longer or more elaborately-worded entry is not automatically better than a ` +
     `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
+    `If an entry contains substantial repetition, filler, or marketing language without new substance, ` +
+    `subtract up to 2 points from its score and say so in the rationale. ` +
     `Respond with ONLY a JSON object: {"score": number, "rationale": string (2-3 sentences)}.\n\n${prompt}`;
 
   // 700, matching calibration.ts's fix and executor.ts callAgent's proven

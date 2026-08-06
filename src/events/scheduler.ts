@@ -174,7 +174,15 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
       await queueCollaboration(env, event.id);
       break;
     case "architecture":
-      await queueArchitecture(env, event.id);
+      // Revision round first: every top-8 idea gets one post-critique
+      // revision pass before any architecture item is queued. Gate, not
+      // parallel step — architecture reads the idea's problem/solution and
+      // writes build_scope from it, so if architecture ran while revisions
+      // were still outstanding, the build plans (and therefore the judged
+      // content, spec §13) would be written against unrevised ideas.
+      if (await ensureRevisionRound(env, event.id)) {
+        await queueArchitecture(env, event.id);
+      }
       break;
   }
   return phase;
@@ -838,6 +846,67 @@ async function queueCollaboration(env: Env, eventId: string): Promise<void> {
   }
 }
 
+/**
+ * Revision round (ARENA_BACKLOG "bounded revision round"): before any
+ * architecture item is queued, the top 8 ideas by critique count (one wider
+ * than the top-6 architecture cut so every architecture candidate is
+ * covered) each get exactly one post-critique revision pass by their own
+ * author. Gate — architecture runs only once every qualifying idea has a
+ * completed revise_idea item or has exhausted MAX_ITEM_ATTEMPTS (same
+ * stall-watchdog shape as judging/Tribunal), so the gate can never pin an
+ * event forever.
+ *
+ * Idempotency: a revise_idea item with status != 'failed' already covering
+ * the ideaId means it's queued/in-progress/completed — nothing more to add.
+ * Status-only-completed ideas are excluded (only one revision per idea;
+ * ideas that made it into the round and got revised stay revised even if
+ * their critique count would later rank them lower).
+ */
+async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> {
+  // Same ranking query shape as queueArchitecture (critique count, spec
+  // §3.1's "top ideas by interaction signal" proxy), widened to 8 and
+  // requiring at least one critique — an idea nobody critiqued has nothing
+  // to revise against.
+  const top = await env.DB.prepare(
+    `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
+     FROM archive_ideas i LEFT JOIN archive_interactions x
+       ON x.target_id = i.id AND x.type = 'critique'
+     WHERE i.event_id = ? AND i.status != 'merged'
+     GROUP BY i.id
+     HAVING critique_count >= 1
+     ORDER BY critique_count DESC
+     LIMIT 8`
+  ).bind(eventId).all<{ id: string; agent_id: string; critique_count: number }>();
+
+  if (top.results.length === 0) return true; // nothing to revise — gate open
+
+  const existingItems = await env.DB.prepare(
+    `SELECT payload, status FROM event_queue WHERE event_id = ? AND task_type = 'revise_idea'`
+  ).bind(eventId).all<{ payload: string | null; status: string }>();
+  const completed = queuedPayloadValues(existingItems.results.filter((r) => r.status === "completed"), "ideaId");
+  const covered = queuedPayloadValues(existingItems.results, "ideaId");
+
+  // Stall watchdog: an idea whose revisions have failed MAX_ITEM_ATTEMPTS
+  // times stops blocking the round (same rationale as ensureIdeathonJudging)
+  // — the idea proceeds to architecture unrevised rather than stalling the
+  // whole event on a revise call that will never succeed.
+  const reviseFailures = await failedAttemptCounts(env, eventId, "revise_idea", "ideaId");
+
+  let roundOpen = true;
+  for (const idea of top.results) {
+    if (completed.has(idea.id)) continue;
+    if ((reviseFailures.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
+    roundOpen = false;
+    if (covered.has(idea.id)) continue; // already queued/in-progress — wait for it
+    await enqueue(env, {
+      eventId, agentId: idea.agent_id, taskType: "revise_idea",
+      payload: { ideaId: idea.id },
+      priority: 5,
+    });
+  }
+  return roundOpen;
+}
+
 async function queueArchitecture(env: Env, eventId: string): Promise<void> {
   // "Top 6 ideas" (spec §3.1) — ranked by critique count as a proxy signal.
   // This one stays a proxy even after Week 5: architecture happens Day 3-4,
@@ -997,6 +1066,23 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
 // have recovered on its own — is worse than a slow safety net, since
 // abandonment has no undo.
 const STALL_ABANDON_HOURS = 25;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Day-gated phases (phaseForDay at line 93, hackathonPhaseForDay at line
+// 101) drive work on a day-offset calendar, so an event that finishes a
+// phase's work early legitimately goes quiet until the NEXT phase's start
+// day — that wait is not a stall, but it can exceed STALL_ABANDON_HOURS.
+// Value = day (from start_date) at which the next phase begins; phases not
+// listed here (building, ready_for_judging) are driven continuously and
+// stay anchored to last_progress_at. Keep in sync with the two phaseForDay
+// functions if their boundaries ever move.
+const DAY_GATED_PHASE_STARTS_AT_DAY: Record<string, number> = {
+  deep_research: 2, // ideation_critique starts day 2
+  ideation_critique: 3, // collaboration starts day 3
+  collaboration: 4, // architecture starts day 4
+  architecture: 6, // ready_for_judging starts day 6
+  team_formation: 1, // building starts day 1
+};
 
 /**
  * Marks an event abandoned once it's gone STALL_ABANDON_HOURS with zero real
@@ -1010,14 +1096,30 @@ const STALL_ABANDON_HOURS = 25;
  */
 export async function checkForStalledEvents(env: Env): Promise<void> {
   const active = await env.DB.prepare(
-    `SELECT id, status, created_at, last_progress_at FROM archive_events
+    `SELECT id, status, created_at, start_date, last_progress_at FROM archive_events
      WHERE abandoned_at IS NULL
        AND ((type = 'ideathon' AND status != 'judged') OR (type = 'hackathon' AND status != 'complete'))`
-  ).all<{ id: string; status: string; created_at: string; last_progress_at: string | null }>();
+  ).all<{ id: string; status: string; created_at: string; start_date: string; last_progress_at: string | null }>();
+
+  // Production incident (2026-08-02): a healthy ideathon whose deep_research
+  // finished 26 minutes after start (all 12 agents done 08-01 14:21) was
+  // abandoned at 08-02 15:25 — last_progress + exactly 25h — while the
+  // calendar's ideation_critique phase wasn't due until day 2 (08-03 13:55).
+  // The watchdog punished the event for finishing its phase work fast. For
+  // day-gated phases the staleness clock must start at the phase boundary,
+  // not the last success; a genuinely wedged phase still trips it once the
+  // boundary passes (the phase transition would have happened then), so the
+  // backstop survives the fix.
+  const toDate = (s: string) => new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
 
   for (const event of active.results) {
-    const reference = event.last_progress_at ?? event.created_at;
-    const staleSince = new Date(reference.includes("T") ? reference : reference.replace(" ", "T") + "Z");
+    let reference = event.last_progress_at ?? event.created_at;
+    const nextPhaseDay = DAY_GATED_PHASE_STARTS_AT_DAY[event.status];
+    if (nextPhaseDay !== undefined && event.start_date) {
+      const boundary = new Date(toDate(event.start_date).getTime() + nextPhaseDay * DAY_MS);
+      reference = new Date(Math.max(toDate(reference).getTime(), boundary.getTime())).toISOString();
+    }
+    const staleSince = toDate(reference);
     const hoursStale = (Date.now() - staleSince.getTime()) / (60 * 60 * 1000);
     if (hoursStale < STALL_ABANDON_HOURS) continue;
 

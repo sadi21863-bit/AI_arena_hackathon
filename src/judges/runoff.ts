@@ -77,7 +77,9 @@ async function compareOnce(
   const prompt =
     `Two competition entries scored within noise of each other on independent judging. ` +
     `Decide which is the stronger entry to build, on substance alone. ` +
-    `Length is not quality — do not favour the more elaborately-worded entry. ` +
+    `Length is not quality — do not favour the more elaborately-worded entry; if an entry contains ` +
+    `substantial repetition, filler, or marketing language without new substance, treat that as a ` +
+    `negative signal. ` +
     `Position is not quality — do not favour whichever is listed first.\n\n` +
     `${describe(first, "A")}\n\n${describe(second, "B")}\n\n` +
     `Respond with ONLY a JSON object: {"winner": "A" | "B", "reason": string (1-2 sentences)}.`;

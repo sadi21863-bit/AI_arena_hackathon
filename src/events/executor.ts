@@ -11,7 +11,7 @@ import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
-import { recallMemory, getVectorsByIds, cosineSimilarity } from "../agents/memory";
+import { recallMemory, queryArchive, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
 import { createTeamRepo, syncTeamHarness } from "../github/repos";
 import { scoreTarget } from "../judges/scoring";
@@ -80,9 +80,26 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
       `\nYour new idea must target a genuinely different problem and user than every idea above — not a rename, feature variant, or rephrasing of one of them.`
     : "";
 
+  // Recycle sweep (ARENA_BACKLOG "prior-idea recycle"): the archive holds
+  // every idea this agent has ever submitted, across events, embedded in
+  // Vectorize. Before the LLM writes a fresh idea, surface the agent's OWN
+  // past-event ideas and explicitly allow upgrading one instead of starting
+  // from zero — this is the "non-selected ideas are remembered and can be
+  // re-entered as improvements" loop. Scoped to the agent's own ideas
+  // (queryArchive filter agentId + type 'idea'); research.ts already
+  // surfaces archive-wide priors into research summaries, so this is the
+  // submission-time complement, not a duplicate.
+  const pastIdeas = await queryArchive(env, `${agent.lens} past product ideas worth upgrading`, {
+    agentId: agent.id, type: "idea",
+  }, 3);
+  const pastIdeasText = pastIdeas.length
+    ? `\n\nYour past idea(s) from earlier events (you may submit a genuinely IMPROVED upgrade of one of these instead of a new idea — same core problem, but fix at least one weakness the original had and say it is an upgrade in the one_liner):\n` +
+      pastIdeas.map((p) => `- ${p.text.slice(0, 240)}`).join("\n")
+    : "";
+
   const text = await callAgent(env, agent, "design",
-    `Recent research from your own lens:\n${context}${priorIdeasText}\n\n` +
-    `Submit ONE product idea grounded in that research. Respond with ONLY a JSON object: ` +
+    `Recent research from your own lens:\n${context}${priorIdeasText}${pastIdeasText}\n\n` +
+    `Submit ONE product idea grounded in that research — a new idea, or a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
     `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
     `build_scope should be a short buildable-in-days scope, not a vague vision.`
   );
@@ -161,6 +178,66 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
   }
 
   await critiqueIdea(env, { agentId: agent.id, eventId: item.event_id, ideaId, ...critique });
+}
+
+interface RevisedIdeaJson { one_liner: string; problem: string; solution: string; target_user: string; build_scope: string }
+
+/**
+ * Revision round — the post-critique improvement pass for the top ideas
+ * (spec §4 "revise"). The idea's own author reworks it against the
+ * critiques it actually received, so architecture (which reads
+ * problem/solution and writes build_scope) and judging (§13, which scores
+ * the revised content) see the improved version. scheduler.ts gates
+ * architecture on this completing — see ensureRevisionRound.
+ *
+ * Critique content is stored as JSON {strength, weakness, suggestion}
+ * (interactions.ts's critiqueIdea); each critic gets one line in the
+ * prompt so the revision is grounded in real feedback rather than the
+ * author's imagination of it.
+ */
+async function handleReviseIdea(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
+  const ideaId = requirePayloadField(item.payload, "ideaId", "revise_idea");
+
+  const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
+  if (!idea) throw new Error(`Idea not found: ${ideaId}`);
+
+  // Crash-retry guard (same shape as handleArchitecture): if a prior attempt
+  // already revised this idea (status -> 'revised') and only died before
+  // markCompleted, the retry must not overwrite the revision with a second
+  // LLM pass — judging/architecture may already have consumed the first one.
+  if (idea.status === "revised" || idea.status === "architecture_complete" || idea.status === "judged") return;
+
+  const critiques = await env.DB.prepare(
+    `SELECT content FROM archive_interactions WHERE target_id = ? AND type = 'critique' ORDER BY timestamp ASC`
+  ).bind(ideaId).all<{ content: string }>();
+  const critiqueLines = critiques.results
+    .map((c) => {
+      try {
+        const parsed = JSON.parse(c.content);
+        return `- ${parsed.strength ?? ""} / ${parsed.weakness ?? ""} / ${parsed.suggestion ?? ""}`;
+      } catch {
+        return `- ${c.content.slice(0, 300)}`;
+      }
+    })
+    .join("\n");
+
+  const text = await callAgent(env, agent, "validate",
+    `Revise your idea in response to the critiques it received. Address the weaknesses and suggestions with substance — improve the idea, do not pad it.\n\n` +
+    `Current idea:\nTitle: ${idea.title}\nOne-liner: ${idea.one_liner}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\nTarget user: ${idea.target_user}\n\n` +
+    `Critiques received:\n${critiqueLines || "(none)"}\n\n` +
+    `Respond with ONLY a JSON object: {"one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
+    `Keep the same core idea — this is a revision, not a new submission.`
+  );
+
+  const revised = extractJson<RevisedIdeaJson>(text);
+  if (!revised?.problem || !revised.solution) throw new Error(`Malformed revision JSON from ${agent.id}: ${text.slice(0, 200)}`);
+
+  await reviseIdea(env, {
+    ideaId, agentId: agent.id, eventId: item.event_id,
+    oneLiner: revised.one_liner, problem: revised.problem, solution: revised.solution,
+    targetUser: revised.target_user, buildScope: revised.build_scope,
+  });
+  await env.DB.prepare(`UPDATE archive_ideas SET status = 'revised' WHERE id = ?`).bind(ideaId).run();
 }
 
 interface CollaborationDecisionJson { accept: boolean; reason: string }
@@ -455,8 +532,19 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       // essay makes the model continue that essay as prose instead of
       // writing files, even though a direct tool-calling test against the
       // same model/endpoint confirmed tool use itself works fine.
+      // Plan -> implement -> self-verify shape (2026-08-06, repo audit): the
+      // pre-audit "write files now" prompt produced one breadth-first blob per
+      // turn with zero tests across both teams. This repo is seeded with
+      // AGENTS.md (standing conventions) + BACKLOG.md (the task queue the
+      // scheduler and every turn work from) — the prompt drives the agent
+      // through the plan, then the work, then its own verification, and
+      // requires the turn to touch the test suite.
       taskPrompt: (opener ? turnAttribution(opener) : "") +
-        `Write code now. Create the initial project files for "${idea.title}" in this repository using your file-writing tools — do not just describe a plan, actually create real files.\n\n` +
+        `This is the team's first build turn for "${idea.title}". The repository was scaffolded with AGENTS.md and BACKLOG.md — read both first, then work from the backlog. If VERIFICATION_FAILURE.log or VERIFICATION_NOTE.log exists at the repo root, read them first — they record what the previous turn's verification found and must be addressed.\n\n` +
+        `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
+        `2. IMPLEMENT: write real project files with your file-writing tools. Build the core of what the idea promises — the primary flow working beats breadth.\n` +
+        `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. If no test suite exists yet, add at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
+        `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`,
     });
@@ -520,9 +608,14 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
     repoFullName: team.repo_url, team: team.team_name,
     turnId,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
-    // above — see docs/INVESTIGATION_2026-07-28.md NEW-1.
+    // above — see docs/INVESTIGATION_2026-07-28.md NEW-1. Plan -> implement
+    // -> self-verify + backlog-driven, same shape as turn 1 (2026-08-06).
     taskPrompt: (author ? turnAttribution(author) : "") +
-      `Continue building "${idea?.title}". Review the existing code already committed in this repo, then write more code — add or modify files using your tools, do not just describe what should happen next.\n\n` +
+      `Continue building "${idea?.title}". Review the existing code already committed in this repo and read BACKLOG.md — the task queue every turn works from. If VERIFICATION_FAILURE.log or VERIFICATION_NOTE.log exists at the repo root, read them first — they record what the previous turn's verification found and must be addressed.\n\n` +
+      `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
+      `2. IMPLEMENT: write or modify real files with your tools. Prefer completing the primary flow over starting new breadth.\n` +
+      `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. Add or extend at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
+      `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
       `Reference architecture notes (guidance only):\n${idea?.build_scope}`,
   });
 }
@@ -621,6 +714,7 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
         case "submit_idea": await handleSubmitIdea(env, item, agent!); break;
         case "critique": await handleCritique(env, item, agent!); break;
         case "propose_collaboration": await handleProposeCollaboration(env, item); break;
+        case "revise_idea": await handleReviseIdea(env, item, agent!); break;
         case "architecture": await handleArchitecture(env, item, agent!); break;
         case "team_formation": await handleTeamFormation(env, item); break;
         case "dispatch_build_turn": await handleDispatchBuildTurn(env, item); break;

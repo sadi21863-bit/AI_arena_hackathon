@@ -3,12 +3,15 @@
  * §3.2 Day 1 ("Team formation, repo init"). Runs entirely via GitHub's REST
  * API (no git binary available inside a Worker):
  *   1. Create the repo (public, for GitHub Actions' free unlimited minutes)
- *   2. Push the same 3 files every team needs via the Contents API — the
- *      generic build-turn workflow, the container Dockerfile, and the
- *      OpenCode/Workers AI provider config, read live from this management
- *      repo's own master branch so team repos never drift out of sync with
- *      it — plus a README naming the idea being built, so the coding
- *      agent's first turn has real context.
+ *   2. Push the harness every team needs via the Contents API — the generic
+ *      build-turn workflow, the container Dockerfile, the OpenCode/Workers
+ *      AI provider config, and the Workers AI shim, read live from this
+ *      management repo's own master branch so team repos never drift out of
+ *      sync with it — plus a README naming the idea being built and a
+ *      one-time product scaffold (AGENTS.md, BACKLOG.md, .gitignore,
+ *      .env.example, product CI, also read live from this repo), so the
+ *      coding agent's first turn starts from a real structure instead of
+ *      building an empty repo breadth-first.
  *   3. Set CF_ACCOUNT_ID/CF_API_TOKEN as repo secrets (GROQ_API_KEY isn't
  *      needed — the build-turn's coding agent runs on Workers AI, see
  *      docker/opencode.json's rationale).
@@ -133,6 +136,30 @@ const HARNESS_FILES = [
   "docker/Dockerfile.arena-team-base",
   "docker/opencode.json",
   "scripts/workers_ai_shim.js",
+] as const;
+
+/**
+ * The ONE-TIME product scaffold, as opposed to the harness: files a team
+ * repo is seeded with at creation so the coding agent builds INTO a real
+ * structure from turn 1 — agent conventions (AGENTS.md), a working task
+ * list (BACKLOG.md), repo hygiene (.gitignore, .env.example), and the
+ * product's own stack-detecting CI (.github/workflows/ci.yml). Rooted at
+ * the repo audit's finding (2026-08-01): teams started from an empty repo
+ * and never produced tests, CI, or a backlog, and a Python idea landed in
+ * a node-only sandbox.
+ *
+ * Deliberately separate from HARNESS_FILES: that list is re-synced before
+ * every turn for fairness (syncTeamHarness) and must never overwrite
+ * agent-written content — BACKLOG.md in particular is the agent's working
+ * document. These are seeded once, at creation, and then belong to the
+ * team.
+ */
+const SCAFFOLD_FILES = [
+  "AGENTS.md",
+  "BACKLOG.md",
+  ".gitignore",
+  ".env.example",
+  ".github/workflows/ci.yml",
 ] as const;
 
 /**
@@ -281,6 +308,20 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   await putFile(env, owner, repoName, "README.md", readme, "Scaffold: idea brief");
   for (let i = 0; i < HARNESS_FILES.length; i++) {
     await putFile(env, owner, repoName, HARNESS_FILES[i], harness[i], `Scaffold: ${HARNESS_FILES[i]}`);
+  }
+
+  // One-time product scaffold, seeded after the harness so agents build
+  // into a real structure from turn 1 (see SCAFFOLD_FILES). Loaded over
+  // HTTP like the harness files (fetchMainRepoFile), not read from disk:
+  // this runs inside a Cloudflare Worker, which has no local filesystem and
+  // no node:fs at runtime, and live-fetching from this repo's master branch
+  // is the one loading path this file already uses — so the templates and
+  // the code that seeds them can't drift. putFile() skips paths that
+  // already exist, so a retried team_formation attempt stays idempotent
+  // without touching agent edits.
+  for (let i = 0; i < SCAFFOLD_FILES.length; i++) {
+    const path = SCAFFOLD_FILES[i];
+    await putFile(env, owner, repoName, path, await fetchMainRepoFile(`repo-scaffold/${path}`), `Scaffold: ${path}`);
   }
 
   await Promise.all([

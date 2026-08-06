@@ -101,11 +101,14 @@ jobs:
         # container traffic, they're not something a process inside the
         # container can opt out of.
         #
-        # Only registry.npmjs.org is allowed now (whatever the coding agent's
-        # own build needs to npm install). api.cloudflare.com was removed when
-        # the Workers AI shim landed below: the container no longer talks to
-        # Cloudflare at all, it talks to the shim on the runner, so leaving
-        # Cloudflare allowlisted would only widen egress for no reason.
+        # Only package registries are allowed now: registry.npmjs.org for
+        # whatever the coding agent's own build needs to npm install, plus
+        # pypi.org/files.pythonhosted.org for the Phase B dependency-install
+        # step, so Python-stack team repos can pip install. api.cloudflare.com
+        # was removed when the Workers AI shim landed below: the container no
+        # longer talks to Cloudflare at all, it talks to the shim on the
+        # runner, so leaving Cloudflare allowlisted would only widen egress
+        # for no reason.
         # github.com/api.github.com are deliberately NOT allowlisted — the
         # "Commit progress" step below does git push from the RUNNER, outside
         # any container, so nothing inside Phase A's container legitimately
@@ -117,7 +120,7 @@ jobs:
           http_port 3128
           acl allowed_ssl_ports port 443
           acl CONNECT method CONNECT
-          acl allowed_domains dstdomain .registry.npmjs.org
+          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org
           http_access allow CONNECT allowed_domains allowed_ssl_ports
           http_access allow allowed_domains
           http_access deny all
@@ -273,23 +276,236 @@ jobs:
           echo "Files changed this turn:"
           echo "$CHANGED"
 
+      - name: Phase B — install dependencies (network-scoped to package registries)
+        # The verification step below runs --network=none, so dependencies
+        # must already exist in the workspace before it starts. Installed here
+        # in a container with the SAME scoped egress as Phase A (Squid proxy +
+        # DOCKER-USER DROP rules; only npmjs.org + PyPI are allowlisted):
+        # npm -> node_modules/, pip -> ./.pydeps (the image rootfs is
+        # --read-only, so pip cannot write system site-packages — PYTHONPATH
+        # points the verification step at .pydeps instead). node_modules/ and
+        # .pydeps/ are .gitignore'd so vendored deps never land in the team
+        # repo.
+        #
+        # set +e + explicit exit-code capture + exit 0: a broken install must
+        # not skip the "Commit progress" step below — the turn's work is
+        # preserved regardless, and the failure is surfaced by the verification
+        # step (via INSTALL_EXIT_CODE) and the final "Report verification
+        # failure" step, so the turn records as 'failure' (executed, judged),
+        # never as lost work.
+        id: install
+        run: |
+          set +e
+          docker run --rm \
+            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
+            --read-only \
+            --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
+            --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
+            --add-host=host.docker.internal:host-gateway \
+            -e HTTP_PROXY=http://host.docker.internal:3128 \
+            -e HTTPS_PROXY=http://host.docker.internal:3128 \
+            -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
+            -e HOME=/tmp \
+            -v "${{ github.workspace }}:/workspace:rw" \
+            -w /workspace \
+            arena-team-base:latest \
+            sh -c 'set +e
+            FAILED=0
+            if [ -f package.json ]; then
+              echo "--- dependency install: npm ---"
+              if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                echo "lockfile found -> npm ci"
+                npm ci --no-audit --no-fund || FAILED=1
+              else
+                echo "no lockfile -> npm install"
+                npm install --no-audit --no-fund || FAILED=1
+              fi
+            elif [ -f requirements.txt ]; then
+              echo "--- dependency install: pip (requirements.txt) ---"
+              python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps -r requirements.txt || FAILED=1
+            elif [ -f pyproject.toml ]; then
+              echo "--- dependency install: pip (pyproject.toml) ---"
+              python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps . > /tmp/pip-project.log 2>&1
+              code=$?
+              if [ $code -ne 0 ] && grep -q "does not appear to be a Python project" /tmp/pip-project.log; then
+                echo "::warning::pyproject.toml is not a Python package (no build-system) — nothing to install from it"
+              elif [ $code -ne 0 ]; then
+                cat /tmp/pip-project.log
+                FAILED=1
+              fi
+            else
+              echo "no package.json, requirements.txt or pyproject.toml — no dependencies to install"
+            fi
+            touch .gitignore
+            grep -qF "node_modules/" .gitignore || echo "node_modules/" >> .gitignore
+            grep -qF "/.pydeps/" .gitignore || echo "/.pydeps/" >> .gitignore
+            echo "install phase FAILED=$FAILED"
+            exit $FAILED'
+          code=$?
+          echo "install container exited $code (0 = deps present, 1 = install failed)"
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
       - name: Phase B — locked-down verification (network=none)
         # This step runs fully --network=none — it runs AFTER the agent's
-        # network-needing work is done, testing/building the code that was
-        # just written, with zero network access during execution. Defense in
-        # depth against the generated code itself trying to exfiltrate
-        # anything, independent of
-        # whether the agent that wrote it was trustworthy.
+        # network-needing work AND after the install step above (the only step
+        # that touches package registries), building and testing the code that
+        # was just written with zero network access during execution. Defense
+        # in depth against the generated code itself trying to exfiltrate
+        # anything, independent of whether the agent that wrote it was
+        # trustworthy.
+        #
+        # Language-aware gate (2026-08-06, replaces the old `npm test
+        # --if-present` line): the old gate passed any repo whose package.json
+        # lacked a test script, so a backend that did not even compile (tsc
+        # errors) sailed through — the 2026-07-29..08-01 event saw 0 of 5
+        # turns across 2 teams ever run tests. Now: a node repo gets `npx tsc
+        # --noEmit` when tsconfig.json exists and `npm test` when a test
+        # script exists; a Python repo gets `python3 -m compileall` and pytest
+        # when installed. Any failed check fails the turn.
+        #
+        # set +e + exit 0 here: a failed check must NOT skip the "Commit
+        # progress" step below — the agent's work and the
+        # VERIFICATION_FAILURE.log written here are committed and pushed
+        # first, and the final "Report verification failure" step flips the
+        # run's conclusion to 'failure'. reconcileBuildTurns reads that as
+        # executed-and-failed (status 'completed', conclusion 'failure') —
+        # counted, judged, and the team moves on; never 'cancelled', which
+        # would misread the outcome and wedge the team.
+        id: verify
         run: |
+          set +e
           docker run --rm \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
             --network=none --read-only \
             --tmpfs /tmp:noexec,nosuid,size=200m,mode=1777 \
             --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
+            -e HOME=/tmp \
+            -e PYTHONPATH=/workspace/.pydeps \
+            -e PYTHONPYCACHEPREFIX=/tmp/pycache \
+            -e TURN_ID="${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}" \
+            -e INSTALL_EXIT_CODE="${{ steps.install.outputs.exit_code }}" \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'test -f package.json && npm test --if-present || echo "no test suite yet, skipping"'
+            sh -c 'set +e
+            VERIFY_FAILED=0
+            ERRLOG=/tmp/verify-errors.log
+            REPORT=/workspace/VERIFICATION_FAILURE.log
+            NOTE=/workspace/VERIFICATION_NOTE.log
+            rm -f "$ERRLOG" "$REPORT" "$NOTE"
+            fail() {
+              echo "::error::$1"
+              echo "$1" >> "$ERRLOG"
+              VERIFY_FAILED=1
+            }
+            # Warnings get committed too, as VERIFICATION_NOTE.log: "no tests
+            # ran" is not a hard fail (turn 1 legitimately starts without a
+            # suite), but it IS a standing requirement the next turn must
+            # address — the turn prompt tells the agent to read this file.
+            # git add -A in the Commit progress step picks it up automatically.
+            note() {
+              echo "::warning::$1"
+              echo "turn $TURN_ID: $1" >> "$NOTE"
+            }
+            echo "--- language-aware verification (network=none) ---"
+            echo "turn: $TURN_ID"
+            if [ "$INSTALL_EXIT_CODE" != "0" ]; then
+              fail "dependency install failed (install phase exit code $INSTALL_EXIT_CODE) — see the Phase B install step log; build checks skipped"
+            elif [ -f package.json ]; then
+              echo "[node] package.json present"
+              if [ ! -d node_modules ]; then
+                fail "node_modules missing after the install phase — dependencies were not installed"
+              else
+                if [ -f tsconfig.json ]; then
+                  echo "[node] tsconfig.json present -> npx tsc --noEmit"
+                  out=$(npx --no-install tsc --noEmit 2>&1)
+                  code=$?
+                  echo "$out"
+                  if [ $code -ne 0 ]; then
+                    echo "$out" >> "$ERRLOG"
+                    fail "TypeScript type-check failed (npx tsc --noEmit) — if typescript is not in devDependencies, add it with: npm install --save-dev typescript"
+                  else
+                    echo "[node] type-check passed"
+                  fi
+                else
+                  echo "[node] no tsconfig.json — type-check skipped"
+                fi
+                if node -e "const p=require(\"./package.json\");process.exit(p.scripts&&p.scripts.test?0:1)"; then
+                  echo "[node] test script present -> npm test"
+                  out=$(npm test 2>&1)
+                  code=$?
+                  echo "$out"
+                  if [ $code -ne 0 ]; then
+                    echo "$out" >> "$ERRLOG"
+                    fail "npm test failed (exit $code)"
+                  else
+                    echo "[node] tests passed"
+                  fi
+                else
+                  note "package.json has no test script — no tests ran this turn. The turn prompt requires every turn to add or extend at least one test; the next turn must create a test suite and a test script."
+                fi
+              fi
+            elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+              echo "[python] Python manifest present"
+              out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
+              code=$?
+              echo "$out"
+              if [ $code -ne 0 ]; then
+                echo "$out" >> "$ERRLOG"
+                fail "python3 -m compileall found syntax errors (exit $code)"
+              else
+                echo "[python] byte-compile passed"
+              fi
+              if python3 -m pytest --version >/dev/null 2>&1; then
+                echo "[python] pytest installed -> python3 -m pytest -q"
+                out=$(python3 -m pytest -q -p no:cacheprovider 2>&1)
+                code=$?
+                echo "$out"
+                if [ $code -eq 0 ]; then
+                  echo "[python] tests passed"
+                elif [ $code -eq 5 ]; then
+                  note "pytest collected no tests — the turn prompt requires every turn to add or extend at least one test; the next turn must add real tests."
+                else
+                  echo "$out" >> "$ERRLOG"
+                  fail "pytest failed (exit $code)"
+                fi
+              else
+                note "pytest not installed — only byte-compile ran (add pytest to requirements.txt to get a test gate; the turn prompt requires every turn to add or extend at least one test)."
+              fi
+            elif find . -name "*.py" -not -path "./.pydeps/*" -not -path "./.git/*" 2>/dev/null | grep -q .; then
+              echo "[python] .py files present but no requirements.txt/pyproject.toml — byte-compiling anyway"
+              out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
+              code=$?
+              echo "$out"
+              if [ $code -ne 0 ]; then
+                echo "$out" >> "$ERRLOG"
+                fail "python3 -m compileall found syntax errors (exit $code)"
+              else
+                echo "[python] byte-compile passed"
+              fi
+            else
+              echo "no package.json, requirements.txt, pyproject.toml or Python files — nothing to build or test yet"
+            fi
+            if [ $VERIFY_FAILED -ne 0 ]; then
+              {
+                echo "=== Build verification FAILED — turn $TURN_ID ==="
+                echo "Reported $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                echo "This file is committed by the commit step so the next"
+                echo "turn can see what broke. Fix the checks below, then rebuild."
+                echo ""
+                cat "$ERRLOG"
+              } > "$REPORT"
+              exit 1
+            fi
+            echo "--- verification passed ---"
+            exit 0'
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "verify_failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "verification container exited $code (0 = checks passed, 1 = checks failed — reported at the end so this turn's work is still committed)"
+          exit 0
 
       - name: Commit progress
         run: |
@@ -312,7 +528,8 @@ jobs:
           retention-days: 30
 
       - name: Report agent crash (after the work was preserved)
-        # Runs last on purpose. If opencode crashed but still produced files,
+        # Runs last on purpose (only the verification-failure report below
+        # runs after it). If opencode crashed but still produced files,
         # everything above has already verified, committed and pushed that
         # work — the next turn continues from it instead of redoing it. The
         # turn is still reported as failed, because it did fail: honest CI
@@ -320,6 +537,20 @@ jobs:
         if: steps.agent.outputs.exit_code != '0'
         run: |
           echo "::error::opencode exited ${{ steps.agent.outputs.exit_code }}. Any files it produced before crashing were committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
+          exit 1
+
+      - name: Report verification failure (after the work was preserved)
+        # Runs last on purpose, same shape as "Report agent crash" above: the
+        # verification step exits 0 so "Commit progress" has already committed
+        # and pushed the agent's work along with VERIFICATION_FAILURE.log —
+        # which is what the NEXT turn's agent reads to see what broke. This
+        # step is what flips the run's conclusion to 'failure':
+        # reconcileBuildTurns records status='completed' + conclusion='failure',
+        # which counts as executed (the judge sees it, the team advances) —
+        # never 'cancelled', which would misread the outcome.
+        if: steps.verify.outputs.verify_failed == 'true'
+        run: |
+          echo "::error::Build verification FAILED this turn — see the Phase B verification step log above and the committed VERIFICATION_FAILURE.log. The agent's work was committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
           exit 1
 # Re-pushed 2026-07-23 to trigger GitHub Actions workflow_dispatch re-indexing
 # (recurring GitHub quirk, same fix as before — dispatches 422 with

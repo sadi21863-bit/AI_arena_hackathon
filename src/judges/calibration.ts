@@ -59,6 +59,8 @@ async function scoreAnchor(env: Env, judgeName: string, criterion: string, ancho
     `You are Judge ${judgeName}, scoring ${criterion} (0-10) for a calibration exercise. ` +
     `Length is not quality — a longer or more elaborately-worded entry is not automatically better than a ` +
     `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
+    `If an entry contains substantial repetition, filler, or marketing language without new substance, ` +
+    `subtract up to 2 points from its score and say so in the rationale. ` +
     `Respond with ONLY a JSON object: {"score": number}.\n\nIDEA: ${anchorText}`;
   // 700, not a tighter budget matching the tiny {"score": N} answer: judging
   // routes to reasoning models (gpt-oss-120b / deepseek-r1-distill-qwen-32b)

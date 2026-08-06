@@ -193,11 +193,13 @@ export async function respondToCollaboration(
 
 export async function reviseIdea(
   env: Env,
-  params: { ideaId: string; agentId: string; eventId: string; problem?: string; solution?: string; buildScope?: string }
+  params: { ideaId: string; agentId: string; eventId: string; oneLiner?: string; problem?: string; solution?: string; targetUser?: string; buildScope?: string }
 ): Promise<void> {
   const sets: string[] = [];
   const values: unknown[] = [];
-  for (const [col, val] of Object.entries({ problem: params.problem, solution: params.solution, build_scope: params.buildScope })) {
+  for (const [col, val] of Object.entries({
+    one_liner: params.oneLiner, problem: params.problem, solution: params.solution, target_user: params.targetUser, build_scope: params.buildScope,
+  })) {
     if (val !== undefined) {
       sets.push(`${col} = ?`);
       values.push(val);
