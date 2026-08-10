@@ -42,19 +42,37 @@ function inject(src, integrity) {
   });
 }
 
+/**
+ * Fallback that reloads a script's bytes through fetch() and executes them
+ * from a Blob URL. Measured on the deployed site the classic <script> path
+ * can fire 'error' (and reject) even when the very same URL served a healthy
+ * 200 and the identical re-fetch executes fine — an engine/cache quirk this
+ * path sidesteps entirely: the bytes that fetch() returns are the bytes that
+ * run, no HTTP cache entry or transform in between. Same-origin file, so the
+ * integrity guarantee is inherited from the fetch; a Blob URL cannot carry
+ * an SRI attribute, which is why this is the fallback, not the primary path.
+ */
+async function injectViaFetch(url, integrity) {
+  if (integrity) throw new Error(`cannot apply SRI to a Blob URL: ${url}`);
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`failed to fetch ${url} → ${res.status}`);
+  const text = await res.text();
+  const blobUrl = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
+  try {
+    await inject(blobUrl);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
 export function loadScript(src, integrity) {
   if (scripts.has(src)) return scripts.get(src);
   const p = inject(src, integrity).catch((err) => {
     // A rejection must not poison the map: the same page can lose one network
-    // request without losing all later mounts. Retry once with a cache-busting
-    // query — measured behaviour: the first fetch of a large vendored file
-    // fires 'error' early in the page lifetime even though the response is a
-    // healthy 200 and the identical re-fetch loads 10/10. The query side-steps
-    // whatever cached entry the first attempt left behind. SRI still applies
-    // to the first attempt; the retry is the fallback, not the norm.
+    // request without losing all later mounts, so drop the entry and reload
+    // the script through fetch()+Blob URL — the deterministic path.
     scripts.delete(src);
-    const bust = src + (src.includes("?") ? "&" : "?") + "r=" + Date.now();
-    return inject(bust, integrity);
+    return injectViaFetch(src, integrity);
   });
   scripts.set(src, p);
   return p;
