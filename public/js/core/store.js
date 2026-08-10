@@ -41,7 +41,11 @@ export function loadAgents() {
       .then((list) => {
         agentsById = new Map((list || []).map((a) => [a.id, a]));
         return list || [];
-      });
+      })
+      // One failed fetch must not permanently break every view that awaits
+      // agents (graph, office, replay): drop the promise so the next call
+      // retries, and let the caller's error path handle this attempt.
+      .catch((err) => { agentsPromise = null; return Promise.reject(err); });
   }
   return agentsPromise;
 }

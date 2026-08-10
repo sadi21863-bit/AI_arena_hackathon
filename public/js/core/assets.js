@@ -42,5 +42,9 @@ export function loadScript(src, integrity) {
     document.head.appendChild(s);
   });
   scripts.set(src, p);
+  // A rejection must not poison the map: the same page can lose one network
+  // request without losing all later mounts. Drop the entry so the next
+  // loadScript call genuinely retries instead of replaying a stale failure.
+  p.catch(() => { if (scripts.get(src) === p) scripts.delete(src); });
   return p;
 }

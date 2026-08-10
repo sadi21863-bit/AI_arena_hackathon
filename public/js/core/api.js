@@ -66,10 +66,20 @@ export function fetchJson(path, opts = {}) {
     }
   }
 
+  // No request gets to stall a view forever: a hung fetch would otherwise
+  // leave "Loading the graph…" (or worse, half-mounted state) on screen
+  // with no error path anywhere. 25s covers cold Worker starts and cron
+  // queue wakes; anything slower than that is a failure worth surfacing.
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeout = controller
+    ? setTimeout(() => controller.abort(), 25_000)
+    : null;
+
   const promise = fetch(full, {
     method,
     headers: body ? { "Content-Type": "application/json", ...headers } : headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: controller ? controller.signal : undefined,
   })
     .then((res) => {
       if (!res.ok) {
@@ -86,7 +96,8 @@ export function fetchJson(path, opts = {}) {
       if (cacheable) cache.delete(key);
       if (optional) return null;
       throw err;
-    });
+    })
+    .finally(() => { if (timeout) clearTimeout(timeout); });
 
   if (cacheable) cache.set(key, { at: 0, value: undefined, promise });
   return promise;

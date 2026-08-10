@@ -48,6 +48,9 @@ const EDGE_LABELS = {
 
 const WIDTH_MAX = 8;
 
+const MAX_GRAPH_RETRIES = 3;
+let graphRetries = 0;
+
 /* Per (source, type, target) aggregation so volume is encoding, not noise. */
 function aggregate(raw) {
   const map = new Map();
@@ -130,11 +133,25 @@ export async function mount(el, params) {
     if (disposed) return;
 
     if (!data || !d3) {
-      render(bodyEl, html`<div class="arena-state arena-state--error">Couldn't load the graph${d3 ? "" : " library"}.</div>`);
-      if (isInitial) return;
-      remountStrip(eventId);
+      // Say WHICH dependency failed — "library" means the vendored d3 script
+      // tag errored, anything else means the graph payload didn't arrive.
+      // Retry with backoff: loadScript no longer caches its rejections, so a
+      // transient failure heals instead of bricking the view for the session.
+      render(bodyEl, html`<div class="arena-state arena-state--error">
+        Couldn't load the graph ${d3 ? "data" : "library"} — retrying automatically.
+      </div>`);
+      if (isInitial && graphRetries < MAX_GRAPH_RETRIES) {
+        const backoff = 3000 * Math.pow(2, graphRetries++);
+        setTimeout(() => { if (!disposed) refetch(eventId); }, backoff);
+      } else if (isInitial && !disposed) {
+        render(bodyEl, html`<div class="arena-state arena-state--error">
+          Couldn't load the graph ${d3 ? "data" : "library"}. Reload the page to try again.
+        </div>`);
+      }
+      if (!isInitial) remountStrip(eventId);
       return;
     }
+    graphRetries = 0;
 
     const nodes = (data.nodes || []).map((n) => ({ id: n.id, name: n.name }));
     const edges = aggregate(data.edges || []);
