@@ -66,14 +66,28 @@ async function injectViaFetch(url, integrity) {
 }
 
 export function loadScript(src, integrity) {
-  if (scripts.has(src)) return scripts.get(src);
-  const p = inject(src, integrity).catch((err) => {
-    // A rejection must not poison the map: the same page can lose one network
-    // request without losing all later mounts, so drop the entry and reload
-    // the script through fetch()+Blob URL — the deterministic path.
-    scripts.delete(src);
-    return injectViaFetch(src, integrity);
+  if (!scripts.has(src)) {
+    const p = inject(src, integrity).catch((err) => {
+      // A rejection must not poison the map: the same page can lose one network
+      // request without losing all later mounts, so drop the entry and reload
+      // the script through fetch()+Blob URL — the deterministic path.
+      scripts.delete(src);
+      return injectViaFetch(src, integrity);
+    });
+    scripts.set(src, p);
+  }
+  return scripts.get(src).then(() => {
+    // Classic script tags can't `export` — the library lands on `window` with
+    // whatever name its IIFE chose. Views destructure the promise's value
+    // straight from Promise.all, so the loaded object must be THAT value, not
+    // undefined: inject() resolves on 'load', and by then the script body has
+    // run synchronously, so the global is guaranteed present.
+    const g = GLOBAL_BY_SRC[src];
+    return g ? globalThis[g] : undefined;
   });
-  scripts.set(src, p);
-  return p;
 }
+
+const GLOBAL_BY_SRC = {
+  "/vendor/d3-7.9.0.min.js": "d3",
+  "/vendor/diff2html-3.4.51.min.js": "Diff2Html",
+};
