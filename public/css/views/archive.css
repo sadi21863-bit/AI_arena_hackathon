@@ -117,3 +117,42 @@
   border-top: 1px solid var(--arena-line);
   padding-top: 14px;
 }
+
+/* Phase blocks — the hackathons a root ideathon spawned live inside its card. */
+
+.v-archive__phase-label {
+  font-family: var(--arena-font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--arena-ink-faint);
+  margin: 18px 0 8px;
+}
+
+.v-archive__phase {
+  border: 1px solid var(--arena-line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin: 10px 0 0;
+  background: color-mix(in srgb, var(--arena-bg) 92%, transparent);
+}
+
+.v-archive__phase-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.v-archive__phase-head h3 {
+  font-family: var(--arena-font-display);
+  font-size: 1.05rem;
+  margin: 0;
+  color: var(--arena-ink);
+}
+
+.v-archive__phase .v-archive__meta { margin: 4px 0 10px; }
+.v-archive__phase .v-archive__stats { margin: 10px 0; padding-top: 10px; }
+.v-archive__phase .v-archive__links { padding-top: 10px; }
