@@ -31,9 +31,8 @@ export function loadCss(href) {
   return p;
 }
 
-export function loadScript(src, integrity) {
-  if (scripts.has(src)) return scripts.get(src);
-  const p = new Promise((resolve, reject) => {
+function inject(src, integrity) {
+  return new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src;
     if (integrity) { s.integrity = integrity; s.crossOrigin = "anonymous"; }
@@ -41,10 +40,22 @@ export function loadScript(src, integrity) {
     s.onerror = () => reject(new Error(`failed to load ${src}`));
     document.head.appendChild(s);
   });
+}
+
+export function loadScript(src, integrity) {
+  if (scripts.has(src)) return scripts.get(src);
+  const p = inject(src, integrity).catch((err) => {
+    // A rejection must not poison the map: the same page can lose one network
+    // request without losing all later mounts. Retry once with a cache-busting
+    // query — measured behaviour: the first fetch of a large vendored file
+    // fires 'error' early in the page lifetime even though the response is a
+    // healthy 200 and the identical re-fetch loads 10/10. The query side-steps
+    // whatever cached entry the first attempt left behind. SRI still applies
+    // to the first attempt; the retry is the fallback, not the norm.
+    scripts.delete(src);
+    const bust = src + (src.includes("?") ? "&" : "?") + "r=" + Date.now();
+    return inject(bust, integrity);
+  });
   scripts.set(src, p);
-  // A rejection must not poison the map: the same page can lose one network
-  // request without losing all later mounts. Drop the entry so the next
-  // loadScript call genuinely retries instead of replaying a stale failure.
-  p.catch(() => { if (scripts.get(src) === p) scripts.delete(src); });
   return p;
 }
