@@ -205,7 +205,13 @@ function onClick(e) {
   if (!url.pathname.startsWith(BASE)) return;
 
   e.preventDefault();
-  if (MODE === "hash") { location.hash = url.hash.replace(/^#/, "") || "/live"; return; }
+  if (MODE === "hash") {
+    // A real-path href (/observatory/archive) has no hash, so derive the
+    // route from the path; a hash-form href (#/ideas/xyz) wins as-is.
+    const derived = url.hash.replace(/^#/, "") || url.pathname.slice(BASE.length).replace(/\/+$/, "") || "/live";
+    location.hash = derived;
+    return;
+  }
   if (url.pathname + url.search === location.pathname + location.search) return;
   history.pushState({}, "", url.pathname + url.search + url.hash);
   resolve();
