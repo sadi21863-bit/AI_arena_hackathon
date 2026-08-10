@@ -189,14 +189,16 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
 }
 
 /**
- * Spec §13: judges evaluate all architecture_complete ideas; top 2 advance
- * (handleTeamFormation in executor.ts reads ideathon_score once this hits
- * 'judged'). Calibration (spec §13/§16: "before every event... if
- * inter-judge correlation falls below 0.6...") runs once per event, before
- * any real judging, inline rather than via the queue — it's a fixed,
- * bounded 21-call batch (7 judges x 3 anchors, parallelized in
- * calibration.ts) unlike the open-ended per-idea/per-agent work everything
- * else here queues.
+ * Spec §13: judges evaluate ideas and the top 2 advance by ideathon_score
+ * (handleTeamFormation in executor.ts reads it once this hits 'judged').
+ * Judging covers every eligible idea of the event when Groq is pinned and
+ * the finalist-only architecture_complete set otherwise — see the gate
+ * comment inline for the token-budget reasoning. Calibration (spec §13/§16:
+ * "before every event... if inter-judge correlation falls below 0.6...")
+ * runs once per event, before any real judging, inline rather than via the
+ * queue — it's a fixed, bounded 21-call batch (7 judges x 3 anchors,
+ * parallelized in calibration.ts) unlike the open-ended per-idea/per-agent
+ * work everything else here queues.
  */
 async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
   const calibration = await env.DB.prepare(`SELECT passed FROM calibration_runs WHERE event_id = ?`).bind(eventId).first<{ passed: number }>();
@@ -214,8 +216,33 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   // event over a single low-n (3 anchors) correlation dip, which is a worse
   // failure mode than proceeding with a flagged low-confidence judging pass.
 
-  const architectureComplete = await env.DB.prepare(
-    `SELECT id FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
+  // Score-every-idea gate: judging every submitted idea (not just the
+  // architecture_complete top 6) costs 6x the judge traffic — 36 ideas x 7
+  // judges = 252 calls instead of 42. That fits comfortably inside Groq's
+  // request-based daily cap (gpt-oss-120b: 1,000/day; ~25% for one ideathon's
+  // judging pass), but NOT inside Workers AI's measured neuron budget: the
+  // llama-3.3-70b fallback costs ~0.1 neurons/token (94-token exchange = 9.99
+  // neurons, verified 2026-07-21), so 252 calls x ~1.5k tokens ≈ 25-30k
+  // neurons against the measured 9,500/day app cap — three-plus days of
+  // judging, a duration ready_for_judging was never designed to survive (the
+  // stall watchdog abandons non-day-gated progress stalls), and the exact
+  // retry-storm shape that burned quota in Week 7's closed beta. So: score
+  // all ideas ONLY when calibration pinned Groq (calibration_runs/runCalibra-
+  // tion always runs on the tick BEFORE this branch re-runs, so judging_prov-
+  // ider is already set by the time we read it here); Workers AI-pinned events
+  // keep the finalist-only pass and surface the pin visibly for a human call.
+  const event = await env.DB.prepare(`SELECT judging_provider FROM archive_events WHERE id = ?`)
+    .bind(eventId).first<{ judging_provider: string | null }>();
+  const scoreAllIdeas = event?.judging_provider === "groq";
+
+  // 'merged' excluded either way: an idea absorbed by a collaboration (the
+  // non-primary side) doesn't compete as a separate scored entity — its
+  // content is already carried forward inside the primary via co_agent_id,
+  // same semantics as queueArchitecture/queueCollaboration above.
+  const toJudge = await env.DB.prepare(
+    scoreAllIdeas
+      ? `SELECT id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'judged'`
+      : `SELECT id FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
   ).bind(eventId).all<{ id: string }>();
 
   // Stall watchdog (MAX_ITEM_ATTEMPTS, see constant above): an idea whose
@@ -226,7 +253,7 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   // finalized-and-then-immediately-re-enqueued nor left stuck forever.
   const judgeFailureCounts = await failedAttemptCounts(env, eventId, "judge_idea", "ideaId");
   const unjudged: { id: string }[] = [];
-  for (const idea of architectureComplete.results) {
+  for (const idea of toJudge.results) {
     if ((judgeFailureCounts.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
       const score = await finalizeWithPartialScores(env, { targetType: "idea", targetId: idea.id, phase: "ideathon" });
       await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(score, idea.id).run();

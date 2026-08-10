@@ -23,6 +23,7 @@ import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isLive, typeLabel, phaseLabel } from "../core/model.js";
 import { shortId } from "../core/fmt.js";
+import { mountArenaStrip } from "../core/arena-strip.js";
 
 /* Row order must match scripts/generate_office_sprites.js. */
 const ROW = { idle: 0, walk_down: 1, walk_left: 2, walk_right: 3, walk_up: 4 };
@@ -397,6 +398,7 @@ export async function mount(el, params) {
       <span id="of-meta"></span>
       <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
     </div>
+    <div id="of-strip"></div>
     <div id="of-note"></div>
     <div class="v-office__set" id="of-set"></div>
     <div id="of-stage"><div class="arena-skel arena-skel--block" style="min-height:440px"></div></div>
@@ -412,6 +414,9 @@ export async function mount(el, params) {
   const noteEl = el.querySelector("#of-note");
   const legendEl = el.querySelector("#of-legend");
   const inspectorEl = el.querySelector("#of-inspector");
+  const teardownStrip = el.querySelector("#of-strip")
+    ? mountArenaStrip(el.querySelector("#of-strip"), { eventId: event.id })
+    : null;
 
   function setFrame(node, row, col) {
     node.spriteEl.style.backgroundPosition =
@@ -1186,6 +1191,7 @@ export async function mount(el, params) {
   return () => {
     disposed = true;
     off();
+    if (teardownStrip) teardownStrip();
     // The whole point of the teardown contract: 12 characters x 2 timers,
     // plus the resize listener and any frame it has pending — a listener that
     // outlives its view is the same leak in a different shape.

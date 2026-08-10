@@ -620,16 +620,24 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   });
 }
 
-/** Ideathon judging — spec §13: all 7 judges score one architecture_complete idea. */
+/** Ideathon judging — spec §13: all 7 judges score one idea. */
 async function handleJudgeIdea(env: Env, item: QueueItem): Promise<void> {
   const ideaId = requirePayloadField(item.payload, "ideaId", "judge_idea");
 
   const idea = await env.DB.prepare(`SELECT * FROM archive_ideas WHERE id = ?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error(`Idea not found: ${ideaId}`);
 
+  // build_scope is null for ideas that never made the top-6 architecture
+  // cut (score-every-idea mode, scheduler.ts): don't feed the judges a
+  // literal "Build plan: null" line — say explicitly that there is none, so
+  // the feasibility criterion judges the written scope it actually has
+  // rather than punishing a rendering artifact.
+  const buildPlan = idea.build_scope
+    ? `\nBuild plan: ${idea.build_scope}`
+    : `\n(Build plan: none submitted — score the concept on the written proposal above)`;
   const prompt =
     `IDEA: ${idea.title}\nOne-liner: ${idea.one_liner}\nProblem: ${idea.problem}\n` +
-    `Solution: ${idea.solution}\nBuild plan: ${idea.build_scope}`;
+    `Solution: ${idea.solution}${buildPlan}`;
   const total = await scoreTarget(env, { eventId: item.event_id, targetType: "idea", targetId: ideaId, phase: "ideathon", prompt });
 
   await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(total, ideaId).run();

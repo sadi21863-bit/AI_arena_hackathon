@@ -34,6 +34,7 @@ const BASE = "/observatory";
 const ROUTES = [
   ["/live",                      "live"],
   ["/cycle/:cycleId",            "live"],
+  ["/archive",                   "archive"],
   ["/office",                    "office"],
   ["/office/:eventId",           "office"],
   ["/graph",                     "graph"],

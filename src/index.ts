@@ -425,6 +425,91 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(withCalibration);
     }
 
+    // Arena Archive (Observatory): one aggregated payload for every event so
+    // the /archive page is a single fetch instead of 11 x N per-table calls.
+    // Grouped queries (one per table, bounded row counts) resolve in a single
+    // DB.batch round trip; the winner's team name and idea title come from
+    // small full-table reads (hundreds of rows max) rather than per-event
+    // joins. Registered before the /events/:id match below on purpose:
+    // "/events/summary" would otherwise parse as eventId="summary".
+    if (url.pathname === "/events/summary" && request.method === "GET") {
+      const [events, ideas, judgedIdeas, interactions, critiques, scores, teams, turns, turnConclusions, chronicle, queue, tribunal, teamNames, ideaTitles] = await env.DB.batch([
+        env.DB.prepare(
+          `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
+           FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
+           ORDER BY e.created_at DESC LIMIT 40`
+        ),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas WHERE status = 'judged' GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_interactions GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_interactions WHERE type = 'critique' GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM judge_scores GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM hackathon_teams GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM build_turns GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, conclusion, COUNT(*) n FROM build_turns GROUP BY event_id, conclusion`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM event_chronicle GROUP BY event_id`),
+        env.DB.prepare(`SELECT event_id, status, COUNT(*) n FROM event_queue GROUP BY event_id, status`),
+        env.DB.prepare(`SELECT event_id, COUNT(*) n FROM tribunal_reflections GROUP BY event_id`),
+        env.DB.prepare(`SELECT id, team_name FROM hackathon_teams`),
+        env.DB.prepare(`SELECT id, title, event_id, ideathon_score FROM archive_ideas WHERE status = 'judged' ORDER BY ideathon_score DESC`),
+      ]);
+
+      const sum = (rows: any[], eventId: string): number => {
+        let total = 0;
+        for (const r of rows) if (r.event_id === eventId) total += r.n;
+        return total;
+      };
+      const queueOf = (rows: any[], eventId: string, status: string): number =>
+        sum(rows.filter((r) => r.status === status), eventId);
+
+      const teamNameOf = new Map(teamNames.results.map((r: any) => [r.id, r.team_name]));
+      const ideaTitleOf = new Map(ideaTitles.results.map((r: any) => [r.id, r.title]));
+      // Top 3 scored ideas per judged ideathon — the page's "what won" line
+      // for a phase that has no winner_team_id by design.
+      const topByEvent = new Map<string, { title: string; score: number }[]>();
+      for (const r of ideaTitles.results as any[]) {
+        const list = topByEvent.get(r.event_id) ?? [];
+        if (r.ideathon_score != null) list.push({ title: r.title, score: r.ideathon_score });
+        topByEvent.set(r.event_id, list.slice(0, 3));
+      }
+
+      const summary = events.results.map((row: any) => {
+        const { calibration_correlation, calibration_passed, ...event } = row;
+        return {
+          ...event,
+          calibration: calibration_correlation != null
+            ? { correlation: calibration_correlation, passed: !!calibration_passed }
+            : null,
+          counts: {
+            ideas: sum(ideas.results, event.id),
+            judgedIdeas: sum(judgedIdeas.results, event.id),
+            interactions: sum(interactions.results, event.id),
+            critiques: sum(critiques.results, event.id),
+            judgeScores: sum(scores.results, event.id),
+            teams: sum(teams.results, event.id),
+            buildTurns: sum(turns.results, event.id),
+            buildSuccesses: sum(turnConclusions.results.filter((r: any) => r.conclusion === "success"), event.id),
+            buildFailures: sum(turnConclusions.results.filter((r: any) => r.conclusion === "failure"), event.id),
+            buildCancelled: sum(turnConclusions.results.filter((r: any) => r.conclusion === "cancelled"), event.id),
+            chronicle: sum(chronicle.results, event.id),
+            queuePending: queueOf(queue.results, event.id, "pending"),
+            queueInProgress: queueOf(queue.results, event.id, "in_progress"),
+            queueCompleted: queueOf(queue.results, event.id, "completed"),
+            queueFailed: queueOf(queue.results, event.id, "failed"),
+            tribunalReflections: sum(tribunal.results, event.id),
+          },
+          winner: event.winner_team_id
+            ? {
+                team: teamNameOf.get(event.winner_team_id) ?? null,
+                idea: ideaTitleOf.get(event.winning_idea_id) ?? null,
+              }
+            : null,
+          topIdeas: topByEvent.get(event.id) ?? [],
+        };
+      });
+      return Response.json(summary);
+    }
+
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
     if (eventMatch && request.method === "GET") {
       const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first<{ type: string }>();

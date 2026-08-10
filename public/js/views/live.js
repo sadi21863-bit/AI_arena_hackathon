@@ -18,6 +18,7 @@ import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { toCycles, findCycle, phasesFor, phaseLabel, isLive, isTerminal, typeLabel } from "../core/model.js";
 import { dateRange, utcDate, shortId, score } from "../core/fmt.js";
+import { renderStrip } from "../core/arena-strip.js";
 
 /* One continuous track across both halves of the cycle, so the handoff is
    visible rather than implied. Phases come from model.js, which mirrors
@@ -194,13 +195,14 @@ export async function mount(el, params) {
 
     // All optional: a missing endpoint must degrade a number to "—", never
     // take the hub down. Pages and the Worker deploy independently.
-    const [ideas, teams, queue, timeline, reflections, graph] = await Promise.all([
+    const [ideas, teams, queue, timeline, reflections, graph, summary] = await Promise.all([
       fetchJson(`/ideas?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/teams`, { optional: true }) : Promise.resolve([]),
       fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/queue-status`, { optional: true }),
       fetchJson(`/events/${encodeURIComponent(i.id)}/timeline`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/tribunal`, { optional: true }) : Promise.resolve([]),
       fetchJson(`/agents/graph?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 60_000, optional: true }),
+      fetchJson("/events/summary", { ttl: 60_000, optional: true }),
     ]);
     if (disposed) return;
 
@@ -213,6 +215,7 @@ export async function mount(el, params) {
     };
 
     const calFailed = i.calibration && i.calibration.passed === false;
+    const activeSummary = (summary || []).find((s) => s.id === cycle.activeEvent.id);
 
     render(el, html`
       <header class="v-live__masthead">
@@ -225,6 +228,8 @@ export async function mount(el, params) {
           ${cycle.isLive ? `${typeLabel(cycle.activeEvent.type)} · ${phaseLabel(cycle.activeEvent)}` : "finished"}
         </span>
       </header>
+
+      ${activeSummary ? html`<div id="v-live-strip"></div>` : ""}
 
       ${calFailed ? html`
         <div class="arena-note arena-note--warn"><span>⚠</span><span>
@@ -247,6 +252,9 @@ export async function mount(el, params) {
       ${params.cycleId ? html`<div class="v-live__back"><a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Current Arena</a></div>` : history(cycles)}
 
       <p class="arena-freshness" data-freshness></p>`);
+
+    const stripEl = el.querySelector("#v-live-strip");
+    if (stripEl && activeSummary) renderStrip(stripEl, activeSummary);
   }
 
   await draw();

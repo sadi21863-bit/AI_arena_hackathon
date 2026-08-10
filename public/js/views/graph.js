@@ -1,11 +1,23 @@
 /**
- * Agent Graph — who critiqued and collaborated with whom.
+ * Agent Graph — who critiqued and collaborated with whom, made legible.
  *
- * First view with a third-party dependency and a long-lived simulation. d3 is
- * vendored under /vendor rather than pulled from a CDN: `integrity` cannot be
- * applied to a dynamic import(), so importing it as a module would have
- * silently dropped SRI. Loading it as a classic script keeps the guarantee,
- * and self-hosting removes the CDN as a dependency entirely.
+ * The first version drew every interaction as a thin 1.4px arrow, so an
+ * ideathon's ~100 critiques collapsed into a solid hairball and the rare
+ * collaboration edges were invisible under them. This redesign fixes the
+ * encoding rather than the layout:
+ *
+ *  - Multi-edges are aggregated per (source, type, target); line width and
+ *    opacity carry volume, not identity.
+ *  - Interaction types are toggleable chips, not just a legend — filtering
+ *    out critiques leaves the collaboration story readable on its own.
+ *  - Clicking an agent enters "focus mode": only its interactions stay
+ *    visible, everything else dims. Click again (or anywhere else) to leave.
+ *  - Every edge and node carries a native tooltip with real counts.
+ *
+ * d3 is vendored under /vendor rather than pulled from a CDN: `integrity`
+ * cannot be applied to a dynamic import(), so importing it as a module would
+ * have silently dropped SRI. Loading it as a classic script keeps the
+ * guarantee, and self-hosting removes the CDN as a dependency entirely.
  *
  * The force simulation MUST be stopped on teardown — otherwise it keeps
  * ticking behind whatever view you navigate to.
@@ -13,8 +25,9 @@
 
 import { fetchJson, FOREVER } from "../core/api.js";
 import { html, render } from "../core/html.js";
-import { href, navigate } from "../core/router.js";
+import { href } from "../core/router.js";
 import { loadScript } from "../core/assets.js";
+import { mountArenaStrip } from "../core/arena-strip.js";
 import * as store from "../core/store.js";
 import { isTerminal } from "../core/model.js";
 import { shortId } from "../core/fmt.js";
@@ -26,26 +39,55 @@ const EDGE_COLORS = {
   collaboration_refused: "var(--arena-chart-5)",
 };
 
+const EDGE_LABELS = {
+  critique: "critiqued",
+  merge: "merged with",
+  propose_collaboration: "proposed collaborating with",
+  collaboration_refused: "refused to collaborate with",
+};
+
+const WIDTH_MAX = 8;
+
+/* Per (source, type, target) aggregation so volume is encoding, not noise. */
+function aggregate(raw) {
+  const map = new Map();
+  for (const e of raw) {
+    const key = `${e.source}|${e.type}|${e.target}`;
+    const hit = map.get(key) || { source: e.source, target: e.target, type: e.type, count: 0 };
+    hit.count++;
+    map.set(key, hit);
+  }
+  return [...map.values()].map((e) => ({
+    ...e,
+    width: Math.min(WIDTH_MAX, 1 + 1.9 * Math.sqrt(e.count)),
+    opacity: Math.min(0.85, 0.35 + e.count * 0.07),
+  }));
+}
+
+const edgeKey = (d) => `${d.source}|${d.type}|${d.target}`;
+
 export async function mount(el, params) {
   let disposed = false;
   let sim = null;
+  let teardownStrip = null;
+  let currentEventId = params.eventId || null;
 
   await store.loadAgents();
   const all = store.events.get().data || (await store.refreshEvents()).data || [];
   const ideathons = all.filter((e) => e.type === "ideathon");
-  const eventId = params.eventId || (ideathons[0] && ideathons[0].id);
 
   render(el, html`
     <header class="arena-page-header">
       <div class="arena-eyebrow">Observatory · spec §11</div>
       <h1>Agent Graph</h1>
-      <p>The social record of one ideathon: who critiqued whom, and which merges were proposed, accepted, or refused. Drag a node to pull the layout apart.</p>
+      <p>Who critiqued and collaborated with whom. Thicker lines mean more interactions, chips below toggle interaction types, and clicking an agent isolates its story.</p>
     </header>
-    <div class="arena-picker">
+    <div id="gr-strip"></div>
+    <div class="arena-picker" style="margin-top:14px">
       <label for="gr-event">Ideathon</label>
       <select class="arena-select" id="gr-event">
         ${ideathons.length
-          ? ideathons.map((e) => html`<option value="${e.id}" ${e.id === eventId ? "selected" : ""}>${shortId(e.id, 18)} · ${e.status}</option>`)
+          ? ideathons.map((e) => html`<option value="${e.id}" ${e.id === currentEventId ? "selected" : ""}>${shortId(e.id, 18)} · ${e.status}</option>`)
           : html`<option>No ideathon events yet</option>`}
       </select>
       <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
@@ -54,90 +96,198 @@ export async function mount(el, params) {
 
   const body = el.querySelector("#gr-body");
   const picker = el.querySelector("#gr-event");
-  if (picker) picker.addEventListener("change", () => navigate(`/graph/${picker.value}`));
+  const stripEl = el.querySelector("#gr-strip");
 
-  if (!eventId) {
-    render(body, html`<div class="arena-state">No ideathon has run yet.</div>`);
-    return () => { disposed = true; };
+  // Param-only navigation does NOT remount (same route key), so the picker
+  // drives the graph itself instead of relying on the router to notice.
+  if (picker) picker.addEventListener("change", () => refetch(picker.value));
+
+  function remountStrip(eventId) {
+    if (teardownStrip) { teardownStrip(); teardownStrip = null; }
+    if (stripEl) teardownStrip = eventId ? mountArenaStrip(stripEl, { eventId }) : mountArenaStrip(stripEl);
   }
 
-  const owner = all.find((e) => e.id === eventId);
-  const [data] = await Promise.all([
-    fetchJson(`/agents/graph?event_id=${encodeURIComponent(eventId)}`, {
-      ttl: isTerminal(owner) ? FOREVER : 60_000, optional: true,
-    }),
-    loadScript("/vendor/d3-7.9.0.min.js").catch(() => null),
-  ]);
-  if (disposed) return () => {};
-
-  const d3 = window.d3;
-  if (!data || !d3) {
-    render(body, html`<div class="arena-state arena-state--error">Couldn't load the graph${d3 ? "" : " library"}.</div>`);
-    return () => { disposed = true; };
+  async function refetch(eventId) {
+    if (disposed || eventId === null || eventId === undefined) return;
+    if (sim) { sim.stop(); sim = null; }
+    render(body, html`<div class="arena-state">Loading the graph…</div>`);
+    await draw(body, eventId, false);
   }
 
-  const nodes = (data.nodes || []).map((n) => ({ id: n.id, name: n.name }));
-  const edges = (data.edges || []).map((e) => ({ ...e }));
-  if (!nodes.length) {
-    render(body, html`<div class="arena-state">No interactions recorded for this event.</div>`);
-    return () => { disposed = true; };
-  }
+  async function draw(bodyEl, eventId, isInitial) {
+    if (disposed) return;
+    if (!eventId) {
+      render(bodyEl, html`<div class="arena-state">No ideathon has run yet.</div>`);
+      return;
+    }
 
-  render(body, html`
-    <div class="v-graph__legend">
-      ${Object.keys(EDGE_COLORS).map((k) => html`
-        <span class="v-graph__legend-item"><i style="background:${EDGE_COLORS[k]}"></i>${k.replace(/_/g, " ")}</span>`)}
-      <span class="v-graph__legend-item v-graph__count">${nodes.length} agents · ${edges.length} interactions</span>
-    </div>
-    <div class="arena-card v-graph__stage"><svg id="gr-svg"></svg></div>`);
+    const [data, d3] = await Promise.all([
+      fetchJson(`/agents/graph?event_id=${encodeURIComponent(eventId)}`, {
+        ttl: isTerminal(all.find((e) => e.id === eventId)) ? FOREVER : 60_000, optional: true,
+      }),
+      loadScript("/vendor/d3-7.9.0.min.js").catch(() => null),
+    ]);
+    if (disposed) return;
 
-  // Navigating away mid-mount (d3 is ~280KB) replaces the outlet, so this
-  // can be gone by now — bail rather than crash on a detached tree.
-  const stage = el.querySelector(".v-graph__stage");
-  if (!stage || !el.isConnected) return () => { disposed = true; };
-  const W = stage.clientWidth || 900;
-  const H = 560;
+    if (!data || !d3) {
+      render(bodyEl, html`<div class="arena-state arena-state--error">Couldn't load the graph${d3 ? "" : " library"}.</div>`);
+      if (isInitial) return;
+      remountStrip(eventId);
+      return;
+    }
 
-  const svg = d3.select("#gr-svg").attr("viewBox", `0 0 ${W} ${H}`).attr("width", "100%").attr("height", H);
+    const nodes = (data.nodes || []).map((n) => ({ id: n.id, name: n.name }));
+    const edges = aggregate(data.edges || []);
+    if (!nodes.length) {
+      render(bodyEl, html`<div class="arena-state">No interactions recorded for this event.</div>`);
+      if (isInitial) return;
+      remountStrip(eventId);
+      return;
+    }
 
-  svg.append("defs").append("marker")
-    .attr("id", "gr-arrow").attr("viewBox", "0 -5 10 10").attr("refX", 26)
-    .attr("markerWidth", 5).attr("markerHeight", 5).attr("orient", "auto")
-    .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "var(--arena-line-strong)");
+    // Focus-mode adjacency and per-agent in/out counts for tooltips. Both
+    // derived from the AGGREGATED edges so counts in the UI always match the
+    // widths on screen.
+    const partners = new Map(nodes.map((n) => [n.id, new Set()]));
+    const inCount = new Map(), outCount = new Map();
+    for (const e of edges) {
+      outCount.set(e.source, (outCount.get(e.source) || 0) + e.count);
+      inCount.set(e.target, (inCount.get(e.target) || 0) + e.count);
+      partners.get(e.source)?.add(e.target);
+      partners.get(e.target)?.add(e.source);
+    }
 
-  const link = svg.append("g").selectAll("line").data(edges).join("line")
-    .attr("stroke", (d) => EDGE_COLORS[d.type] || "var(--arena-line-strong)")
-    .attr("stroke-width", 1.4).attr("stroke-opacity", 0.55)
-    .attr("marker-end", "url(#gr-arrow)");
+    render(bodyEl, html`
+      <div class="v-graph__legend">
+        ${Object.keys(EDGE_COLORS).map((k) => html`
+          <button class="v-graph__legend-item v-graph__toggle" data-type="${k}" aria-pressed="true">
+            <i style="background:${EDGE_COLORS[k]}"></i>${k.replace(/_/g, " ")}
+            <span class="v-graph__toggle-count" data-count="${k}"></span>
+          </button>`)}
+        <span class="v-graph__count">${nodes.length} agents · ${edges.reduce((s, e) => s + e.count, 0)} interactions</span>
+      </div>
+      <div class="arena-card v-graph__stage"><svg id="gr-svg"></svg></div>
+      <p class="v-graph__hint" id="gr-hint">Drag nodes to rearrange · scroll to zoom · click an agent to isolate it</p>`);
 
-  const node = svg.append("g").selectAll("g").data(nodes).join("g").style("cursor", "grab");
-  node.append("circle").attr("r", 17)
-    .attr("fill", "var(--arena-bg-raised)")
-    .attr("stroke", "var(--arena-clay)").attr("stroke-width", 2);
-  node.append("text").text((d) => d.name)
-    .attr("text-anchor", "middle").attr("dy", 32)
-    .attr("font-family", "var(--arena-font-mono)").attr("font-size", 11)
-    .attr("fill", "var(--arena-ink-soft)");
+    const stage = bodyEl.querySelector(".v-graph__stage");
+    if (!stage || !bodyEl.isConnected) return;
+    const W = stage.clientWidth || 900;
+    const H = 560;
 
-  sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(edges).id((d) => d.id).distance(130).strength(0.35))
-    .force("charge", d3.forceManyBody().strength(-420))
-    .force("center", d3.forceCenter(W / 2, H / 2))
-    .force("collide", d3.forceCollide(38))
-    .on("tick", () => {
-      link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
+    const svg = d3.select(bodyEl.querySelector("#gr-svg"))
+      .attr("viewBox", `0 0 ${W} ${H}`).attr("width", "100%").attr("height", H);
+    const viewport = svg.append("g");
+
+    svg.append("defs").append("marker")
+      .attr("id", "gr-arrow").attr("viewBox", "0 -5 10 10").attr("refX", 26)
+      .attr("markerWidth", 5).attr("markerHeight", 5).attr("orient", "auto")
+      .append("path").attr("d", "M0,-5L10,0L0,5").attr("fill", "var(--arena-line-strong)");
+
+    const linkG = viewport.append("g");
+    const nodeG = viewport.append("g");
+
+    let linkSel = linkG.selectAll("line").data(edges, edgeKey).join("line");
+    linkSel.attr("stroke", (d) => EDGE_COLORS[d.type] || "var(--arena-line-strong)")
+      .attr("stroke-width", (d) => d.width)
+      .attr("stroke-opacity", (d) => d.opacity)
+      .attr("marker-end", "url(#gr-arrow)");
+    linkSel.selectAll("title").data((d) => [d]).join("title")
+      .text((d) => `${d.source} → ${d.target}: ${EDGE_LABELS[d.type] || d.type} ×${d.count}`);
+
+    const nodeSel = nodeG.selectAll("g").data(nodes, (d) => d.id).join("g").style("cursor", "pointer");
+    nodeSel.append("circle").attr("r", 17)
+      .attr("fill", "var(--arena-bg-raised)")
+      .attr("stroke", "var(--arena-clay)")
+      .attr("stroke-width", (d) => Math.min(5, 2 + Math.sqrt((outCount.get(d.id) || 0) + (inCount.get(d.id) || 0))));
+    nodeSel.append("text").text((d) => d.name)
+      .attr("text-anchor", "middle").attr("dy", 32)
+      .attr("font-family", "var(--arena-font-mono)").attr("font-size", 11)
+      .attr("fill", "var(--arena-ink-soft)");
+    nodeSel.append("title").text((d) =>
+      `${d.name} — gave ${outCount.get(d.id) || 0} interactions, received ${inCount.get(d.id) || 0}`);
+
+    const filter = { types: new Set(Object.keys(EDGE_COLORS)), focus: null };
+
+    function applyFilter() {
+      const { types, focus } = filter;
+      const visible = edges.filter((e) =>
+        types.has(e.type) && (!focus || e.source === focus || e.target === focus));
+      linkSel = linkG.selectAll("line").data(visible, edgeKey).join("line");
+      linkSel.attr("stroke", (d) => EDGE_COLORS[d.type] || "var(--arena-line-strong)")
+        .attr("stroke-width", (d) => d.width)
+        .attr("stroke-opacity", (d) => (focus ? 0.9 : d.opacity))
+        .attr("marker-end", (d) => (focus ? null : "url(#gr-arrow)"));
+      linkSel.selectAll("title").data((d) => [d]).join("title")
+        .text((d) => `${d.source} → ${d.target}: ${EDGE_LABELS[d.type] || d.type} ×${d.count}`);
+
+      nodeSel.classed("is-dim", (d) => !!focus && d.id !== focus && !partners.get(d.id)?.has(focus));
+      if (sim) sim.alpha(0.5).restart();
+    }
+
+    sim = d3.forceSimulation(nodes)
+      .force("link", d3.forceLink(edges).id((d) => d.id).distance(130).strength(0.35))
+      .force("charge", d3.forceManyBody().strength(-420))
+      .force("center", d3.forceCenter(W / 2, H / 2))
+      .force("collide", d3.forceCollide(38))
+      .on("tick", () => {
+        linkSel.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
           .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
-      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+        nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      });
+
+    nodeSel.call(d3.drag()
+      .on("start", (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
+      .on("end", (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+    const zoom = d3.zoom().scaleExtent([0.25, 5]);
+    zoom.on("zoom", (event) => viewport.attr("transform", event.transform));
+    svg.call(zoom);
+    nodeSel.on("dblclick.zoom", null); // nodes don't zoom on double-click
+
+    const setHint = (msg) => {
+      const hint = bodyEl.querySelector("#gr-hint");
+      if (hint) hint.textContent = msg;
+    };
+
+    nodeSel.on("click", (event, d) => {
+      event.stopPropagation();
+      filter.focus = filter.focus === d.id ? null : d.id;
+      setHint(filter.focus
+        ? `Focus: ${d.name} — click again or click the stage to release`
+        : `Drag nodes to rearrange · scroll to zoom · click an agent to isolate it`);
+      applyFilter();
+    });
+    svg.on("click", () => {
+      if (!filter.focus) return;
+      filter.focus = null;
+      setHint(`Drag nodes to rearrange · scroll to zoom · click an agent to isolate it`);
+      applyFilter();
     });
 
-  node.call(d3.drag()
-    .on("start", (event, d) => { if (!event.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-    .on("drag", (event, d) => { d.fx = event.x; d.fy = event.y; })
-    .on("end", (event, d) => { if (!event.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+    for (const btn of bodyEl.querySelectorAll(".v-graph__toggle")) {
+      const type = btn.dataset.type;
+      const n = edges.filter((e) => e.type === type).reduce((s, e) => s + e.count, 0);
+      btn.querySelector(`[data-count="${type}"]`).textContent = n > 0 ? n : "—";
+      btn.addEventListener("click", () => {
+        if (filter.types.has(type) && filter.types.size === 1) return; // never allow zero types
+        if (filter.types.has(type)) filter.types.delete(type); else filter.types.add(type);
+        btn.setAttribute("aria-pressed", filter.types.has(type));
+        btn.classList.toggle("is-off", !filter.types.has(type));
+        applyFilter();
+      });
+    }
+
+    if (currentEventId !== eventId || !isInitial) remountStrip(eventId);
+  }
+
+  currentEventId = null;
+  await draw(body, params.eventId || (ideathons[0] && ideathons[0].id) || null, true);
 
   return () => {
     disposed = true;
     // Without this the simulation keeps ticking against detached DOM.
     if (sim) sim.stop();
+    if (teardownStrip) teardownStrip();
   };
 }

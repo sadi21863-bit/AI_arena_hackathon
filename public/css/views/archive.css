@@ -1,0 +1,119 @@
+/* Arena Archive view. Prefix: .v-archive__ */
+
+.arena-chip {
+  display: inline-block;
+  font-family: var(--arena-font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--arena-line-strong);
+  color: var(--arena-ink-soft);
+}
+
+.arena-chip--ok { border-color: var(--arena-success); color: var(--arena-success); }
+.arena-chip--warn { border-color: var(--arena-warning); color: var(--arena-warning); }
+.arena-chip--bad { border-color: var(--arena-danger); color: var(--arena-danger); }
+.arena-chip--live {
+  border-color: var(--arena-danger);
+  color: var(--arena-danger);
+  animation: v-archive__pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes v-archive__pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.arena-note--ok { background: var(--arena-success-tint); border-color: var(--arena-success); color: var(--arena-ink); }
+
+.v-archive__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px;
+  margin: 24px 0;
+}
+
+.v-archive__card { padding: 22px 24px; }
+
+.v-archive__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.v-archive__title h2 {
+  font-family: var(--arena-font-display);
+  font-size: 1.35rem;
+  margin: 2px 0 0;
+  color: var(--arena-ink);
+}
+
+.v-archive__id {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  font-weight: 400;
+}
+
+.v-archive__chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.v-archive__meta {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  margin: 6px 0 14px;
+}
+
+.v-archive__lineage { color: var(--arena-ink-soft); }
+
+.v-archive__tops {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+.v-archive__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 14px 8px;
+  margin: 16px 0;
+  border-top: 1px solid var(--arena-line);
+  padding-top: 14px;
+}
+
+.v-archive__stat-value {
+  font-family: var(--arena-font-mono);
+  font-size: 1.25rem;
+  color: var(--arena-ink);
+}
+
+.v-archive__stat-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--arena-ink-faint);
+  margin-top: 2px;
+}
+
+.v-archive__warn {
+  font-size: 0.72rem;
+  color: var(--arena-warning);
+}
+
+.v-archive__links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--arena-line);
+  padding-top: 14px;
+}

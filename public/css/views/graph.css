@@ -1,6 +1,6 @@
 /* Agent Graph. Prefix: .v-graph__ */
 
-.v-graph__legend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; }
+.v-graph__legend { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 14px; align-items: center; }
 .v-graph__legend-item {
   display: flex; align-items: center; gap: 7px;
   font-family: var(--arena-font-mono); font-size: 0.74rem; color: var(--arena-ink-soft);
@@ -10,3 +10,26 @@
 
 .v-graph__stage { padding: 8px; overflow: hidden; }
 .v-graph__stage svg { display: block; width: 100%; }
+
+.v-graph__toggle {
+  background: transparent;
+  border: 1px solid var(--arena-line-strong);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.v-graph__toggle:hover { border-color: var(--arena-clay-deep); }
+.v-graph__toggle.is-off { opacity: 0.4; text-decoration: line-through; }
+.v-graph__toggle[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--arena-line-strong); }
+.v-graph__toggle-count { color: var(--arena-ink-faint); font-size: 0.68rem; }
+
+.v-graph__hint {
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  margin: 14px 0 0;
+  text-align: center;
+}
+
+/* Focus mode: anything not the focused agent or its partners sinks away. */
+.v-graph__stage .is-dim { opacity: 0.12; }
