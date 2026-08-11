@@ -304,6 +304,51 @@ a:hover { color: var(--arena-clay); }
   margin-top: 48px;
 }
 
+/* ---------- Arena context bar (core/arena-context.js) ---------- */
+
+.arena-context {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 32px;
+  background: var(--arena-bg-sunken);
+  border-bottom: 1px solid var(--arena-line);
+  font-family: var(--arena-font-mono);
+  font-size: 0.74rem;
+  color: var(--arena-ink-soft);
+}
+
+.arena-context__row { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.arena-context__crumb { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.arena-context__arena { color: var(--arena-ink); font-weight: 600; font-size: 0.8rem; }
+.arena-context__round { color: var(--arena-ink-faint); }
+
+.arena-context__switch { display: flex; align-items: center; gap: 8px; }
+.arena-context__switch-label { color: var(--arena-ink-faint); }
+.arena-context__switch .arena-select { padding: 4px 10px; font-size: 0.74rem; }
+
+.arena-context__instruments {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.arena-context__instruments a {
+  color: var(--arena-ink-soft);
+  text-decoration: none;
+  font-weight: 500;
+  padding: 2px 0;
+}
+.arena-context__instruments a:hover,
+.arena-context__instruments a[aria-current="page"] { color: var(--arena-clay-deep); }
+
+@media (max-width: 720px) {
+  .arena-context { padding: 10px 20px; }
+  .arena-context__switch-label { display: none; }
+}
+
 /* ---------- Status ---------- */
 
 .arena-pill {

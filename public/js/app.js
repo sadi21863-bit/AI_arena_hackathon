@@ -7,6 +7,7 @@
  */
 
 import { startRouter, activeView } from "./core/router.js";
+import { mountArenaContext } from "./core/arena-context.js";
 import * as store from "./core/store.js";
 
 const outlet = document.getElementById("view");
@@ -25,6 +26,7 @@ function syncNav() {
 store.loadAgents();
 store.start();
 startRouter(outlet);
+mountArenaContext(document.getElementById("arena-context"));
 
 // The router has no event of its own; navigation is always a click or a
 // popstate, both of which bubble to the document.

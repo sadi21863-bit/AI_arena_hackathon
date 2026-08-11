@@ -8,6 +8,8 @@ opencode-turn.log
 .week5_test_event.txt
 tail_output.json
 tail_error.txt
+.impeccable/
+PRODUCT.md
 
 # apply_schema.js writes SQL to a temp file and unlinks it in a finally block.
 # A killed run (Ctrl-C, a terminated background job) skips that cleanup, leaving a

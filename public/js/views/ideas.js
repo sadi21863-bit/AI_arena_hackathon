@@ -7,10 +7,10 @@
 
 import { fetchJson, FOREVER } from "../core/api.js";
 import { html, render } from "../core/html.js";
-import { href, navigate } from "../core/router.js";
+import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isTerminal } from "../core/model.js";
-import { shortId, score } from "../core/fmt.js";
+import { score } from "../core/fmt.js";
 
 const COLLAB_TYPES = ["propose_collaboration", "merge", "collaboration_refused"];
 const COLLAB_LABELS = {
@@ -44,20 +44,9 @@ export async function mount(el, params) {
       <h1>Ideas Board</h1>
       <p>Every idea an ideathon actually produced — the full problem and solution, the critiques it drew, what the judges said, and whether it merged with anyone.</p>
     </header>
-    <div class="arena-picker">
-      <label for="id-event">Ideathon</label>
-      <select class="arena-select" id="id-event">
-        ${ideathons.length
-          ? ideathons.map((e) => html`<option value="${e.id}" ${e.id === eventId ? "selected" : ""}>${shortId(e.id, 18)} · ${e.status}</option>`)
-          : html`<option>No ideathon events yet</option>`}
-      </select>
-      <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
-    </div>
     <div id="id-body"><div class="arena-state">Loading ideas…</div></div>`);
 
   const body = el.querySelector("#id-body");
-  const picker = el.querySelector("#id-event");
-  if (picker) picker.addEventListener("change", () => navigate(`/ideas/${picker.value}`));
 
   if (!eventId) {
     render(body, html`<div class="arena-state">No ideathon has run yet.</div>`);

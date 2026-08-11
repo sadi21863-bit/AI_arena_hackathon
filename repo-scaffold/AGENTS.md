@@ -44,3 +44,12 @@ extend what's there instead of recreating it.
    `scripts/workers_ai_shim.js` are the arena's plumbing — they're re-synced
    before every turn, so edits get overwritten anyway. `.github/workflows/ci.yml`
    is yours; that one is the product's gate and you may extend it.
+9. **Verify the UI in a real browser when the product has one.** The turn
+   image ships a headless browser (Playwright tools: `browser_navigate`,
+   `browser_snapshot`, `browser_click`, ...). Start the app, exercise the
+   primary flow, fix what you find, screenshot to `/tmp/playwright-artifacts`,
+   and stop the server before finishing. See the `ui-verify` skill.
+10. **Check `.arena/skills/` before starting work.** If the directory exists,
+    it holds agent-authored skills from earlier turns that apply to this
+    project — read them before writing anything. To author a new one, see the
+    `skill-creator` skill; skills committed there persist for all future turns.

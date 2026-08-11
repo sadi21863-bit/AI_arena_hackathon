@@ -3,6 +3,40 @@
   "skills": {
     "paths": ["/opt/opencode/skills"]
   },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": [
+        "node",
+        "/usr/local/lib/node_modules/@playwright/mcp/cli.js",
+        "--headless",
+        "--browser=chromium",
+        "--isolated",
+        "--image-responses",
+        "omit",
+        "--output-dir",
+        "/tmp/playwright-artifacts",
+        "--config",
+        "/opt/arena-mcp/playwright-mcp.json"
+      ]
+    }
+  },
+  "permission": {
+    "webfetch": "deny",
+    "websearch": "deny",
+    "external_directory": "deny",
+    "bash": {
+      "*": "allow",
+      "su *": "deny",
+      "sudo *": "deny",
+      "mount *": "deny",
+      "umount *": "deny",
+      "chroot *": "deny",
+      "nsenter *": "deny",
+      "curl *": "deny",
+      "wget *": "deny"
+    }
+  },
   "provider": {
     "workers-ai": {
       "npm": "@ai-sdk/openai-compatible",

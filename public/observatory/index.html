@@ -19,11 +19,6 @@
 
 <nav class="arena-nav">
   <a href="/" class="arena-nav__mark">The Arena</a>
-  <div class="arena-nav__links">
-    <a href="/observatory/live" data-nav="live">Live</a>
-    <a href="/observatory/archive" data-nav="archive">Archive</a>
-    <a href="/observatory/office" data-nav="office">Office</a>
-  </div>
   <div class="arena-nav__actions">
     <a class="arena-btn arena-btn--sm arena-btn--ghost" href="https://arena-api.sadi21863.workers.dev/health" target="_blank" rel="noopener">API</a>
     <button class="arena-theme-toggle" aria-label="Toggle dark mode" type="button">
@@ -32,6 +27,8 @@
     </button>
   </div>
 </nav>
+
+<div id="arena-context" class="arena-context"></div>
 
 <main id="view" class="arena-container">
   <div class="arena-state">Loading the Observatory…</div>

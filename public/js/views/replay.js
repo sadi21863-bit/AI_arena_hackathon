@@ -9,10 +9,9 @@
 
 import { fetchJson, FOREVER } from "../core/api.js";
 import { html, render } from "../core/html.js";
-import { href, navigate } from "../core/router.js";
+import { navigate } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isTerminal } from "../core/model.js";
-import { shortId } from "../core/fmt.js";
 
 const STEP_MS = 1200;
 
@@ -51,15 +50,6 @@ export async function mount(el, params) {
       <h1>Replay</h1>
       <p>Every idea, critique and collaboration in the order it actually happened. Scrub or play it back.</p>
     </header>
-    <div class="arena-picker">
-      <label for="rp-event">Ideathon</label>
-      <select class="arena-select" id="rp-event">
-        ${ideathons.length
-          ? ideathons.map((e) => html`<option value="${e.id}" ${e.id === eventId ? "selected" : ""}>${shortId(e.id, 18)} · ${e.status}</option>`)
-          : html`<option>No ideathon events yet</option>`}
-      </select>
-      <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
-    </div>
     <div class="v-replay__bar arena-card">
       <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-play" aria-label="Play">▶</button>
       <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-back" aria-label="Step back">←</button>
@@ -73,9 +63,6 @@ export async function mount(el, params) {
   const range = el.querySelector("#rp-range");
   const pos = el.querySelector("#rp-pos");
   const playBtn = el.querySelector("#rp-play");
-  const picker = el.querySelector("#rp-event");
-
-  picker.addEventListener("change", () => navigate(`/replay/${picker.value}`));
 
   function stop() {
     clearInterval(playTimer);

@@ -25,12 +25,10 @@
 
 import { fetchJson, FOREVER } from "../core/api.js";
 import { html, render } from "../core/html.js";
-import { href } from "../core/router.js";
 import { loadScript } from "../core/assets.js";
 import { mountArenaStrip } from "../core/arena-strip.js";
 import * as store from "../core/store.js";
 import { isTerminal } from "../core/model.js";
-import { shortId } from "../core/fmt.js";
 
 const EDGE_COLORS = {
   critique: "var(--arena-chart-1)",
@@ -86,24 +84,10 @@ export async function mount(el, params) {
       <p>Who critiqued and collaborated with whom. Thicker lines mean more interactions, chips below toggle interaction types, and clicking an agent isolates its story.</p>
     </header>
     <div id="gr-strip"></div>
-    <div class="arena-picker" style="margin-top:14px">
-      <label for="gr-event">Ideathon</label>
-      <select class="arena-select" id="gr-event">
-        ${ideathons.length
-          ? ideathons.map((e) => html`<option value="${e.id}" ${e.id === currentEventId ? "selected" : ""}>${shortId(e.id, 18)} · ${e.status}</option>`)
-          : html`<option>No ideathon events yet</option>`}
-      </select>
-      <a class="arena-btn arena-btn--sm arena-btn--ghost" href="${href("/live")}">← Live</a>
-    </div>
     <div id="gr-body"><div class="arena-state">Loading the graph…</div></div>`);
 
   const body = el.querySelector("#gr-body");
-  const picker = el.querySelector("#gr-event");
   const stripEl = el.querySelector("#gr-strip");
-
-  // Param-only navigation does NOT remount (same route key), so the picker
-  // drives the graph itself instead of relying on the router to notice.
-  if (picker) picker.addEventListener("change", () => refetch(picker.value));
 
   function remountStrip(eventId) {
     if (teardownStrip) { teardownStrip(); teardownStrip = null; }

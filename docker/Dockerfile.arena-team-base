@@ -5,7 +5,16 @@
 # tools fail with "ripgrep execution failed" and the agent has to fall back
 # to bash), python3, pip3 (the locked-down verification step byte-compiles
 # and tests Python-stack team repos — the 2026-07-29..08-01 event found a
-# team's Python code never ran because the image had no Python at all).
+# team's Python code never ran because the image had no Python at all),
+# chromium-browser (Alpine's own musl chromium, driven by the Playwright MCP
+# server for the agent's browser self-verification — spec D2; Playwright's
+# bundled glibc browsers cannot run on musl, hence the system chromium + a
+# launchOptions.executablePath override in playwright-mcp.json).
+#
+# Chromium runs headless with --no-sandbox and --disable-dev-shm-usage (see
+# playwright-mcp.json): the container has cap-drop=ALL + no-new-privileges, so
+# there is no user-namespace sandbox to use, and /dev/shm is the tiny default
+# (shm is redirected to the /tmp tmpfs instead).
 # curl+bash are used to install OpenCode below, then explicitly removed in
 # the same layer (apk del) — they do NOT persist in the final image, keeping
 # the binary whitelist claim actually true rather than aspirational.
@@ -29,12 +38,23 @@ ARG OPENCODE_VERSION=1.18.8
 # (Alpine's Python 3 + pip, provided via the py3-pip module). Unlike
 # curl/bash, they are deliberately KEPT in the final image: the verification
 # step needs them to build and test Python-stack team repos.
-RUN apk add --no-cache git=~2 ripgrep curl bash python3 py3-pip && \
+RUN apk add --no-cache git=~2 ripgrep curl bash python3 py3-pip chromium chromium-swiftshader && \
     curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash && \
     mv /root/.opencode /opt/opencode 2>/dev/null || true && \
     apk del curl bash && \
     rm -rf /var/cache/apk/*
 ENV PATH="/opt/opencode/bin:${PATH}"
+
+# Playwright MCP (browser self-verification — spec D2), pinned like
+# OPENCODE_VERSION. Installed at image build time as a global npm package so
+# the running turn needs no registry egress (`npx` at runtime would). The MCP
+# server is a local stdio process inside the same container; the browser it
+# drives can only reach localhost (the Squid/iptables scope blocks everything
+# else). chromium-swiftshader (installed above) is what lets Alpine's chromium
+# render headless without a GPU.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.79
+RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" && \
+    rm -rf /root/.npm 2>/dev/null || true
 
 # Baked-in provider config, not one carried by each team's repo — every team
 # gets Workers AI wired up the same way regardless of what's in their
@@ -49,6 +69,11 @@ ENV PATH="/opt/opencode/bin:${PATH}"
 # outside this container entirely.
 COPY opencode.json /opt/opencode/config/opencode.json
 ENV OPENCODE_CONFIG=/opt/opencode/config/opencode.json
+
+# Playwright MCP browser config: points at Alpine's system chromium
+# (executablePath) with the flags the sandbox requires (--no-sandbox,
+# --disable-dev-shm-usage). Read by @playwright/mcp via --config.
+COPY playwright-mcp.json /opt/arena-mcp/playwright-mcp.json
 
 # Build-turn skills (spec §8 agent workflow), baked in like the provider
 # config so every team gets the same quality gates regardless of their
@@ -91,7 +116,7 @@ COPY skills /opt/opencode/skills
 # mismatched uid can't write to it even inside a "non-root" container.
 # Either way the container never runs as uid 0.
 RUN addgroup -g 1000 arena && adduser -D -u 1000 -G arena arena && \
-    chmod -R a+rX /opt/opencode 2>/dev/null || true
+    chmod -R a+rX /opt/opencode /opt/arena-mcp 2>/dev/null || true
 USER 1000:1000
 
 WORKDIR /workspace
