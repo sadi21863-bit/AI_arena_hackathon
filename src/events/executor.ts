@@ -22,6 +22,27 @@ import { requirePayloadField } from "./payload-utils";
 import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence, dispatchTurnIfNeeded } from "./build-turns";
 import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
 
+/** P3 opt-in team turn (2026-08-11): a task_prompt containing the `[team]`
+ * marker runs the team variant — the implement step fans out over subagents
+ * per the arena-team skill (research via explore, implement via general,
+ * review via a read-only general, verify + assemble yourself; one container,
+ * sequential). The marker works as a workflow-input prefix
+ * (`-f task_prompt="[team] build X"`) or inside a dispatch payload. Default
+ * turns never emit it. */
+function applyTeamMode(prompt: string): string {
+  const teamSteps =
+    `1. PLAN + FAN-OUT: state which backlog item this turn covers. Then load the arena-team skill and run it as a one-container team: research via an explore subagent, implement via general subagent(s), review via a read-only general subagent, then verify and assemble the work yourself. Sequential only — one container, one working tree; tell each subagent what the others are doing.\n` +
+    `2. IMPLEMENT + INTEGRATE: as each subagent's work lands, review it and reject or re-run any piece that fails before moving on. Assemble everything, fix integration breaks, and run the repo's checks yourself.\n`;
+  const marker = /\[team\]/;
+  const match = marker.exec(prompt);
+  if (!match) return prompt;
+  const stripped = prompt.slice(0, match.index) + prompt.slice(match.index + match[0].length);
+  // Steps 3 (SELF-VERIFY) and 4 (BACKLOG) keep their numbering and text;
+  // only the PLAN/IMPLEMENT steps are replaced. No-op if the structure ever
+  // changes — the prompt stays valid, it just stops being team mode.
+  return stripped.replace(/1\. PLAN \(1-2 sentences\):[^\n]*\n2\. IMPLEMENT:[^\n]*\n/, teamSteps);
+}
+
 async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof routeInference>[1]["task_type"], instructions: string): Promise<string> {
   const prompt = `${agent.persona}\n\n${instructions}`;
   const result = await routeInference(env, { task_type: taskType, prompt, max_tokens: 700 });
@@ -539,14 +560,14 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       // scheduler and every turn work from) — the prompt drives the agent
       // through the plan, then the work, then its own verification, and
       // requires the turn to touch the test suite.
-      taskPrompt: (opener ? turnAttribution(opener) : "") +
+      taskPrompt: applyTeamMode((opener ? turnAttribution(opener) : "") +
         `This is the team's first build turn for "${idea.title}". The repository was scaffolded with AGENTS.md and BACKLOG.md — read both first, then work from the backlog. If VERIFICATION_FAILURE.log or VERIFICATION_NOTE.log exists at the repo root, read them first — they record what the previous turn's verification found and must be addressed. If the repo has a .arena/skills/ directory, review it — agent-authored skills there apply to this turn.\n\n` +
         `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
         `2. IMPLEMENT: write real project files with your file-writing tools. Build the core of what the idea promises — the primary flow working beats breadth.\n` +
         `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. If the product has a UI, also verify it in the browser: start the app, exercise the primary flow with the Playwright tools (browser_navigate / browser_snapshot), fix what you find, and save a screenshot to /tmp/playwright-artifacts. If no test suite exists yet, add at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
         `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
-        `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`,
+        `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`),
     });
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
   }
@@ -610,13 +631,13 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
     // above — see docs/INVESTIGATION_2026-07-28.md NEW-1. Plan -> implement
     // -> self-verify + backlog-driven, same shape as turn 1 (2026-08-06).
-    taskPrompt: (author ? turnAttribution(author) : "") +
+    taskPrompt: applyTeamMode((author ? turnAttribution(author) : "") +
       `Continue building "${idea?.title}". Review the existing code already committed in this repo and read BACKLOG.md — the task queue every turn works from. If VERIFICATION_FAILURE.log or VERIFICATION_NOTE.log exists at the repo root, read them first — they record what the previous turn's verification found and must be addressed. If the repo has a .arena/skills/ directory, review it — agent-authored skills there apply to this turn.\n\n` +
       `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
       `2. IMPLEMENT: write or modify real files with your tools. Prefer completing the primary flow over starting new breadth.\n` +
       `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. If the product has a UI, also verify it in the browser: start the app, exercise the primary flow with the Playwright tools (browser_navigate / browser_snapshot), fix what you find, and save a screenshot to /tmp/playwright-artifacts. Add or extend at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
       `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
-      `Reference architecture notes (guidance only):\n${idea?.build_scope}`,
+      `Reference architecture notes (guidance only):\n${idea?.build_scope}`),
   });
 }
 

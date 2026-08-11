@@ -1,9 +1,9 @@
 # Build Agent Empowerment — Phase 2 Spec (2026-08-11)
 
-**Status:** P1 + P2 implemented 2026-08-11 (see Implementation log §4a) —
-pending live spike verification (the arena's measure-don't-assume step) and
-the user decisions in §7. Everything else in this doc is the plan those
-changes were built from.
+**Status:** P1 + P2 implemented 2026-08-11, P3 prep (opt-in marker + arena-team
+skill) implemented 2026-08-11 — see Implementation log §4a. Pending: the
+live spike verification (image build + browser turn, needs the runner) and
+the team-vs-single comparison the spec defers to after the spike.
 
 ---
 
@@ -289,6 +289,20 @@ Landed in this session (all of P1 + P2; P3 is config-only prep, agents deferred)
 - `src/events/executor.ts` — both turn prompts (first + continuation): the
   preamble now names `.arena/skills/`, and SELF-VERIFY step 3 now instructs
   browser verification with Playwright when the product has a UI.
+- P3 prep (second commit, same day): `docker/skills/arena-team/SKILL.md` (new
+  baked-in orchestration skill — build director + sequential fan-out over
+  explore/general subagents, one container, no worktrees at this tier) and
+  `applyTeamMode()` in `src/events/executor.ts` — a task_prompt containing
+  the `[team]` marker (workflow-input prefix or dispatch-payload inline) runs
+  the team variant: the PLAN/IMPLEMENT steps are replaced with PLAN+FAN-OUT /
+  IMPLEMENT+INTEGRATE; SELF-VERIFY and BACKLOG steps are untouched. No marker
+  = prompt byte-identical to before. Functionally tested (8/8 assertions,
+  both prompt shapes, marker positions, no-op case). Custom subagent
+  definitions stay deferred; the variant uses the built-in explore/general
+  agents.
+- Note: `git add -A` after a run — the repo had no commits before today;
+  `d78b498` is the initial commit (platform + Phase 1 + P1/P2), P3 prep
+  commits on top.
 
 Validated locally:
 - `npx tsc --noEmit` clean; all JSON parses.
@@ -361,7 +375,9 @@ override any of them and the corresponding work follows.
    chromium implemented first — live-cycle safety; revisit at P4 if the spike
    shows it flaky.]**
 2. **Team turn:** default mode or per-turn opt-in via a prompt flag/param?
-   **[Deferred to P3; opt-in via a prompt variant is the plan.]**
+   **[Answered 2026-08-11: opt-in via the `[team]` task_prompt marker —
+   shipped in P3 prep. Default-vs-opt-in is decided by the P3 comparison
+   turn after the spike.]**
 3. **Tier-2 now?** Any of Penpot/Vela/Context7 worth a network-scope expansion
    before the next live cycle, or defer to P4? **[Deferred to P4 — no scope
    expansion mid-cycle.]**
