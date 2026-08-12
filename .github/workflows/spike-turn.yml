@@ -53,6 +53,8 @@ jobs:
   spike:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Wait for Workers AI quota, then run the spike turn
         env:
