@@ -1,0 +1,120 @@
+name: Spike Turn (one-time live verification)
+
+# One logical spike: turn_id=spike-001 on team=alpha, exercising the SAME
+# hardened pipeline as production turns (team-build-turn.yml, incl. the
+# P0-0a Workers AI shim). The only difference from a normal dispatch is
+# quota timing: Cloudflare Workers AI's daily free allocation resets on a
+# rolling ~24h window (confirmed 429 at 00:00+ UTC on 2026-08-12, so the
+# documented "00:00 UTC" reset is not what actually happens). A turn
+# dispatched during the exhaustion window would crash instantly with 429
+# and honestly fail at the "Enforce real build output" gate — a false
+# result, not the spike. Hence this workflow waits out the window in
+# <=5h45m budgets (public-repo job cap is 6h) and, on budget exhaustion,
+# re-dispatches ITSELF to continue the chain. The spike itself stays
+# single-shot: exactly one team-build-turn run with turn_id=spike-001
+# executes; the recursion is waiting infrastructure only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      turn_id:
+        description: "Turn id — keep spike-001 for the one-shot spike"
+        required: false
+        default: spike-001
+      task_prompt:
+        description: "What the spike turn's agent should work on"
+        required: false
+        default: >-
+          Spike-001 — one-time live verification of the P0-0a Workers AI
+          shim and the hardened build-turn harness against the arena repo
+          itself. Real task (no production behavior changes): add a unit
+          test suite for src/router.ts covering (a) the DAILY_CAPS
+          validation/boundary behavior and (b) the recordUsage
+          neuron-accounting path with its 300-neuron fallback when
+          usage.neurons is absent. Use node:test (no new dependencies),
+          add a `test` script to package.json, make `npm test` pass, keep
+          `npm run typecheck` green, and document how to run tests in
+          README.md. Follow the standard build-turn discipline: plan,
+          implement, self-verify with the repo's own gates, then commit.
+
+concurrency:
+  group: spike-turn-${{ inputs.turn_id || 'spike-001' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+  CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+
+jobs:
+  spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Wait for Workers AI quota, then run the spike turn
+        env:
+          TASK_PROMPT: ${{ inputs.task_prompt }}
+          TURN_ID: ${{ inputs.turn_id || 'spike-001' }}
+        run: |
+          set -euo pipefail
+          API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1/chat/completions"
+          probe() {
+            curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST "$API" \
+              -H "Authorization: Bearer ${CF_API_TOKEN}" \
+              -H 'Content-Type: application/json' \
+              -d '{"model":"@cf/openai/gpt-oss-120b","messages":[{"role":"user","content":"ok"}],"max_tokens":3}' || echo 000
+          }
+          dispatch() { # $1 = workflow file
+            payload=$(jq -n --arg ref master --arg turn "$TURN_ID" --arg prompt "$TASK_PROMPT" \
+              '{ref:$ref, inputs:{team:"alpha", turn_id:$turn, task_prompt:$prompt}}')
+            curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/$1/dispatches" \
+              -d "$payload"
+          }
+          BUDGET_MIN=330
+          WAITED_MIN=0
+          code=$(probe)
+          while [ "$code" != "200" ] && [ "$WAITED_MIN" -lt "$BUDGET_MIN" ]; do
+            echo "[spike] waited ${WAITED_MIN}/${BUDGET_MIN} min — quota HTTP ${code}, sleeping 5 min"
+            sleep 300
+            WAITED_MIN=$((WAITED_MIN + 5))
+            code=$(probe)
+          done
+          if [ "$code" != "200" ]; then
+            echo "::warning::quota still exhausted after ${BUDGET_MIN} min (HTTP ${code}) — dispatching a successor spike run to continue the wait chain; the spike stays one-shot (only the final run executes the turn)"
+            hc=$(dispatch "spike-turn.yml")
+            echo "successor dispatch HTTP ${hc}"
+            exit 0
+          fi
+          echo "quota free (HTTP ${code}) — dispatching the real spike turn"
+          hc=$(dispatch "team-build-turn.yml")
+          echo "turn dispatch HTTP ${hc}"
+          # Poll the team-build-turn run for this turn_id to completion.
+          RUNS="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/team-build-turn.yml/runs?per_page=10"
+          RUN_ID=""
+          for _ in $(seq 1 36); do
+            sleep 10
+            RUN_ID=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" -H 'Accept: application/vnd.github+json' "$RUNS" \
+              | jq -r --arg turn "$TURN_ID" '.workflow_runs[] | select(.display_title | contains($turn)) | select(.status != "in_progress") | .id' | head -1)
+            [ -n "$RUN_ID" ] && break
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::could not find a completed team-build-turn run for $TURN_ID — check the Actions tab for the dispatched run"
+            exit 1
+          fi
+          DETAIL=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")
+          CONC=$(echo "$DETAIL" | jq -r '.conclusion // "unknown"')
+          URL=$(echo "$DETAIL" | jq -r '.html_url')
+          echo "spike turn run ${RUN_ID}: conclusion=${CONC} url=${URL}"
+          if [ "$CONC" = "success" ]; then
+            echo "SPIKE PASSED — turn ${TURN_ID} completed successfully. See ${URL}"
+            exit 0
+          fi
+          echo "::error::spike turn ${TURN_ID} concluded ${CONC} — see ${URL}"
+          exit 1
