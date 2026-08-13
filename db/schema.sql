@@ -24,7 +24,14 @@ CREATE TABLE archive_agents (
     total_critiques_given INTEGER DEFAULT 0,
     total_critiques_received INTEGER DEFAULT 0,
     win_rate REAL DEFAULT 0.0,
-    current_status TEXT DEFAULT 'active'
+    current_status TEXT DEFAULT 'active',
+    -- Conduct of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md): strike ledger with
+    -- clean-arena decay. 3 strikes = submission privilege loss (idea records
+    -- with status 'blocked'). conduct_last_strike_event tracks the last event
+    -- in which a strike was incurred (or decay was applied) so decay never
+    -- fires more than once per event.
+    conduct_strikes INTEGER DEFAULT 0,
+    conduct_last_strike_event TEXT
 );
 
 CREATE TABLE archive_ideas (
@@ -44,7 +51,19 @@ CREATE TABLE archive_ideas (
     status TEXT,
     ideathon_score REAL,
     created_at DATETIME,
-    revised_at DATETIME
+    revised_at DATETIME,
+    -- Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md) — set once at
+    -- classification time by src/conduct/classify.ts (inside postIdea), never
+    -- recomputed after submission. recycle_sim = max embedding cosine vs the
+    -- comparison set (same-event earlier ideas for the dup check, the agent's
+    -- own prior work for the R3 band); recycle_class = fresh | evolution |
+    -- marginal | violation | hard | dup; recycle_of = the record id it
+    -- resembles most. conduct_penalty is the full -1.0..-2.0 penalty or +0.05
+    -- evolution credit, applied once at ideathon scoring (src/judges/scoring.ts).
+    recycle_sim REAL,
+    recycle_class TEXT,
+    recycle_of TEXT,
+    conduct_penalty REAL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ideas_queue_item ON archive_ideas(queue_item_id) WHERE queue_item_id IS NOT NULL;
 

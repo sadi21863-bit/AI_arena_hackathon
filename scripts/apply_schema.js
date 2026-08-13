@@ -64,6 +64,7 @@ const MIGRATIONS = [
   { file: "schema_week8_stall_tracking.sql", sentinel: { type: "column", table: "archive_events", name: "last_progress_at" } },
   { file: "schema_week8_agent_ratings.sql", sentinel: { type: "column", table: "archive_agents", name: "elo_rating" } },
   { file: "schema_week8_chronicle.sql", sentinel: { type: "table", name: "event_chronicle" } },
+  { file: "schema_week9_conduct.sql", sentinel: { type: "column", table: "archive_ideas", name: "recycle_class" } },
 ];
 
 /**

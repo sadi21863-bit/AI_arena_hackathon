@@ -138,6 +138,12 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
     queueItemId: item.id,
   });
 
+  // Code of Conduct v3.1: a blocked submission (suspended agent or hard
+  // violation — recorded but inert) doesn't get critiques either — the
+  // critiques exist to improve ideas that will actually be judged.
+  const stored = await env.DB.prepare(`SELECT status FROM archive_ideas WHERE id = ?`).bind(ideaId).first<{ status: string }>();
+  if (stored?.status === "blocked") return;
+
   // Spec §4: "critique 3 ideas not their own" — queued per-idea rather than
   // as one big batch step, so critique flow starts as soon as ideas exist
   // instead of waiting for every agent to finish submitting first.
@@ -226,7 +232,9 @@ async function handleReviseIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   // already revised this idea (status -> 'revised') and only died before
   // markCompleted, the retry must not overwrite the revision with a second
   // LLM pass — judging/architecture may already have consumed the first one.
-  if (idea.status === "revised" || idea.status === "architecture_complete" || idea.status === "judged") return;
+  // 'blocked' (Code of Conduct v3.1: suspended/hard-violation ideas) never
+  // advances either — the submission is recorded but inert.
+  if (idea.status === "revised" || idea.status === "architecture_complete" || idea.status === "judged" || idea.status === "blocked") return;
 
   const critiques = await env.DB.prepare(
     `SELECT content FROM archive_interactions WHERE target_id = ? AND type = 'critique' ORDER BY timestamp ASC`
@@ -329,8 +337,9 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
   // the retry must not rewrite the build plan — judging may already have
   // scored this idea (judge_idea reads build_scope), and rewriting it then
   // would silently change what was scored. A retry before the UPDATE landed
-  // still sees 'submitted' and re-runs normally.
-  if (idea.status === "architecture_complete" || idea.status === "judged") return;
+  // still sees 'submitted' and re-runs normally. 'blocked' (Code of Conduct
+  // v3.1) ideas never advance: recorded but never judged or built.
+  if (idea.status === "architecture_complete" || idea.status === "judged" || idea.status === "blocked") return;
 
   const text = await callAgent(env, agent, "architecture",
     `Produce a build plan for this idea (spec §3.1 — Day 4-5 Architecture: tech stack, 3 components, top 2 risks, fallback scope), under 200 words:\n` +
@@ -344,6 +353,7 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
 interface IdeaForBuild {
   id: string; agent_id: string; co_agent_id: string | null; title: string; one_liner: string;
   problem: string; solution: string; build_scope: string; ideathon_score: number | null;
+  recycle_sim: number | null; conduct_strikes: number | null; created_at: string;
 }
 
 /**
@@ -482,10 +492,22 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   // Fetch every judged candidate, not just 2, and greedily skip a candidate
   // whose embedding is too similar to an already-picked one — promoting the
   // next distinct idea instead, per the backlog's minimum-fix sketch (P0-0b).
+  //
+  // Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md R7/R8):
+  //  - recycle_class != 'hard' — hard violations never advance, whatever
+  //    their raw score (the sim's exclusion, not a penalty).
+  //  - R8 tie-break in the ORDER BY: when ideathon scores tie (within exact
+  //    float equality — runoff handles the near-miss case below), the
+  //    lower-similarity idea, then the fewer-strikes agent, then the earlier
+  //    submission wins. COALESCE keeps legacy pre-conduct rows (NULL sim/
+  //    strikes) at a neutral value instead of sorting first.
   const candidates = await env.DB.prepare(
-    `SELECT id, agent_id, co_agent_id, title, one_liner, problem, solution, build_scope, ideathon_score
-     FROM archive_ideas WHERE event_id = ? AND status = 'judged'
-     ORDER BY ideathon_score DESC`
+    `SELECT i.id, i.agent_id, i.co_agent_id, i.title, i.one_liner, i.problem, i.solution, i.build_scope,
+            i.ideathon_score, i.recycle_sim, i.created_at, a.conduct_strikes
+     FROM archive_ideas i LEFT JOIN archive_agents a ON a.id = i.agent_id
+     WHERE i.event_id = ? AND i.status = 'judged' AND i.recycle_class != 'hard'
+     ORDER BY i.ideathon_score DESC, COALESCE(i.recycle_sim, 0.5) ASC,
+              COALESCE(a.conduct_strikes, 0) ASC, i.created_at ASC`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
 
   if (candidates.results.length === 0) throw new Error(`No judged ideas found for parent event ${event.parent_event_id}`);
@@ -656,9 +678,17 @@ async function handleJudgeIdea(env: Env, item: QueueItem): Promise<void> {
   const buildPlan = idea.build_scope
     ? `\nBuild plan: ${idea.build_scope}`
     : `\n(Build plan: none submitted — score the concept on the written proposal above)`;
+  // Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md): surface the stored
+  // classification in the judge's context — the judge sees, unambiguously,
+  // that this idea recycles the agent's own prior work (and how closely), so
+  // "Novelty" scoring isn't blind to it. Stored facts read once, not
+  // recomputed — same vector/class the scoring penalty used.
+  const recycleContext = idea.recycle_class
+    ? `\n\nConduct record: this idea was classified at submission as "${idea.recycle_class}" (similarity ${typeof idea.recycle_sim === "number" ? idea.recycle_sim.toFixed(2) : "n/a"} to ${idea.recycle_of ? `idea ${String(idea.recycle_of).slice(0, 8)}` : "the agent's prior work"}).`
+    : "";
   const prompt =
     `IDEA: ${idea.title}\nOne-liner: ${idea.one_liner}\nProblem: ${idea.problem}\n` +
-    `Solution: ${idea.solution}${buildPlan}`;
+    `Solution: ${idea.solution}${buildPlan}${recycleContext}`;
   const total = await scoreTarget(env, { eventId: item.event_id, targetType: "idea", targetId: ideaId, phase: "ideathon", prompt });
 
   await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(total, ideaId).run();

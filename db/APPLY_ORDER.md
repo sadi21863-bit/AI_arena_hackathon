@@ -25,6 +25,7 @@ node scripts/apply_schema.js --remote --status
 | 11 | `schema_team_members.sql` | — |
 | 12 | `schema_week8_event_id_indexes.sql` | #2, #3 (indexes their tables) |
 | 13 | `schema_week8_stall_tracking.sql` | #2, #3 |
+| 14 | `schema_week9_conduct.sql` | #2 (ALTERs `archive_ideas` + `archive_agents`) |
 
 `seed_agents.sql` is **not** in the list. It is data, not schema — re-running it
 against a live archive would be a data change rather than a no-op. Apply it by
@@ -33,7 +34,7 @@ hand exactly once when bootstrapping a new database.
 ## Which files are safe to re-run
 
 Files 1, 10, 11, 12 and 13 use `IF NOT EXISTS` throughout and are idempotent.
-**Files 2-9 are not** — they use bare `CREATE TABLE` and `ALTER TABLE ADD
+**Files 2-9 and 14 are not** — they use bare `CREATE TABLE` and `ALTER TABLE ADD
 COLUMN`, both of which error on a second run. That's exactly why the tracking
 table exists: "apply everything and let the duplicates fail harmlessly" was
 never a safe recovery path, and before `schema_migrations` there was no way to

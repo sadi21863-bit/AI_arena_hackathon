@@ -33,7 +33,7 @@ export interface MemoryRecord {
   text: string;
 }
 
-async function embed(env: Env, text: string): Promise<number[]> {
+export async function embed(env: Env, text: string): Promise<number[]> {
   const result: any = await env.AI.run(EMBEDDING_MODEL, { text: [text] });
   const vector = result?.data?.[0];
   if (!vector) throw new Error("Embedding call returned no vector");
@@ -52,8 +52,8 @@ async function embed(env: Env, text: string): Promise<number[]> {
   return vector;
 }
 
-export async function rememberMemory(env: Env, record: MemoryRecord): Promise<void> {
-  const values = await embed(env, record.text);
+export async function rememberMemory(env: Env, record: MemoryRecord, vector?: number[]): Promise<void> {
+  const values = vector ?? await embed(env, record.text);
   await env.ARCHIVE_VECTORS.upsert([
     {
       id: record.id,

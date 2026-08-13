@@ -152,7 +152,17 @@ export async function scoreTarget(
   const newTotal = newResults.reduce((sum, r) => sum + r.score * r.weight, 0);
   const collaborationBonus = await collaborationBonusFor(env, opts.targetType, opts.targetId);
 
-  return Math.min(10, existingTotal + newTotal + collaborationBonus);
+  // Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md): the conduct penalty/
+  // credit decided at submission time (classify.ts, stored on the idea) is
+  // applied HERE, once, at ideathon scoring — never at hackathon scoring
+  // (targetType 'team'), whose judges score the team's output independently.
+  // Applied identically in finalizeWithPartialScores below, so the stall-
+  // watchdog path and the full path agree on the same number.
+  const conductPenalty = opts.targetType === "idea"
+    ? (await env.DB.prepare(`SELECT conduct_penalty FROM archive_ideas WHERE id = ?`).bind(opts.targetId).first<{ conduct_penalty: number | null }>())?.conduct_penalty ?? 0
+    : 0;
+
+  return Math.min(10, existingTotal + newTotal + collaborationBonus + conductPenalty);
 }
 
 /**
@@ -196,5 +206,12 @@ export async function finalizeWithPartialScores(
 
   const total = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
   const collaborationBonus = await collaborationBonusFor(env, opts.targetType, opts.targetId);
-  return Math.min(10, total + collaborationBonus);
+
+  // Same conduct_penalty as scoreTarget's tail — see its comment; the
+  // watchdog path must produce the same number the full path would have.
+  const conductPenalty = opts.targetType === "idea"
+    ? (await env.DB.prepare(`SELECT conduct_penalty FROM archive_ideas WHERE id = ?`).bind(opts.targetId).first<{ conduct_penalty: number | null }>())?.conduct_penalty ?? 0
+    : 0;
+
+  return Math.min(10, total + collaborationBonus + conductPenalty);
 }

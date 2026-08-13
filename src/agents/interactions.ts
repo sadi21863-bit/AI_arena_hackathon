@@ -7,7 +7,8 @@
  */
 
 import type { Env } from "../env";
-import { rememberMemory } from "./memory";
+import { embed, rememberMemory } from "./memory";
+import { classifyIdea } from "../conduct/classify";
 
 function newId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID()}`;
@@ -45,16 +46,47 @@ export async function postIdea(env: Env, input: PostIdeaInput): Promise<string> 
     if (existing) return existing.id; // this queue item already produced its idea
   }
 
+  // Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md): classify BEFORE the
+  // INSERT — the comparison set is "everything already in the database", so
+  // this idea can't match itself, and "earlier submissions" is exactly the
+  // set R6's first-submission priority depends on. One embedding serves both
+  // classification and RAG memory (memory.ts's rememberMemory accepts a
+  // precomputed vector), so the conduct layer costs no extra inference call.
+  const memoryText =
+    `${input.title}: ${input.oneLiner}\nProblem: ${input.problem}\nSolution: ${input.solution}`;
+  const vector = await embed(env, memoryText);
+  const verdict = await classifyIdea(env, {
+    agentId: input.agentId,
+    eventId: input.eventId,
+    vector,
+  });
+
   const id = newId("idea");
+  // The agent-strikes UPDATE and the idea INSERT land in ONE atomic batch —
+  // a Worker death between them is exactly the crash-retry window the
+  // queue_item_id anchor exists for, and an atomic batch means a retry
+  // either reclassifies from scratch (batch rolled back: no double strike,
+  // same verdict) or returns the existing idea above (batch committed:
+  // strike already recorded). Without this, the two statements could apply
+  // two strikes for one submission on a retry.
   await env.DB.batch([
+    // Ledger write — last_strike_event always points at the most recent
+    // event in which the ledger moved (a strike incurred here, or the
+    // clean-arena decay consumed here); that's what prevents a second
+    // movement within the same event (classify.ts's decay guard checks it).
+    env.DB.prepare(
+      `UPDATE archive_agents SET conduct_strikes = ?, conduct_last_strike_event = ? WHERE id = ?`
+    ).bind(verdict.strikes, input.eventId, input.agentId),
     env.DB.prepare(
       `INSERT INTO archive_ideas
-         (id, event_id, agent_id, title, one_liner, problem, solution, target_user, build_scope, research_anchor, estimated_build_time, queue_item_id, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', datetime('now'))`
+         (id, event_id, agent_id, title, one_liner, problem, solution, target_user, build_scope, research_anchor, estimated_build_time, queue_item_id, status, created_at, recycle_sim, recycle_class, recycle_of, conduct_penalty)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)`
     ).bind(
       id, input.eventId, input.agentId, input.title, input.oneLiner, input.problem,
       input.solution, input.targetUser, input.buildScope, input.researchAnchor ?? null,
-      input.estimatedBuildTime ?? null, input.queueItemId ?? null
+      input.estimatedBuildTime ?? null, input.queueItemId ?? null,
+      verdict.blocked ? 'blocked' : 'submitted',
+      verdict.sim, verdict.cls, verdict.of, verdict.penalty
     ),
     env.DB.prepare(
       `UPDATE archive_agents SET total_ideas_submitted = total_ideas_submitted + 1 WHERE id = ?`
@@ -63,8 +95,25 @@ export async function postIdea(env: Env, input: PostIdeaInput): Promise<string> 
 
   await rememberMemory(env, {
     id, agentId: input.agentId, eventId: input.eventId, type: "idea",
-    text: `${input.title}: ${input.oneLiner}\nProblem: ${input.problem}\nSolution: ${input.solution}`,
-  });
+    text: memoryText,
+  }, vector);
+
+  // Conduct decisions are archive-visible (same pattern as runoff_promotion
+  // in executor.ts) — the Observatory replay timeline should be able to
+  // answer "why was this idea blocked / penalized / credited?" from data,
+  // not Worker logs. Only recorded when the ledger actually moved.
+  if (verdict.cls !== "fresh" || verdict.blocked) {
+    await env.DB.prepare(
+      `INSERT INTO archive_interactions (event_id, timestamp, actor_id, target_id, type, content)
+       VALUES (?, datetime('now'), ?, ?, 'conduct', ?)`
+    ).bind(
+      input.eventId, input.agentId, id,
+      `Code of Conduct v3.1: idea classified "${verdict.cls}" (similarity ${verdict.sim.toFixed(2)}` +
+        (verdict.of ? ` to ${verdict.of.slice(0, 8)}` : "") +
+        `), conduct penalty ${verdict.penalty >= 0 ? "+" : ""}${verdict.penalty.toFixed(2)}, ` +
+        `strikes now ${verdict.strikes}${verdict.blocked ? " — submission blocked (privilege suspended)" : ""}.`
+    ).run();
+  }
 
   return id;
 }

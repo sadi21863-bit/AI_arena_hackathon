@@ -239,9 +239,11 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   // non-primary side) doesn't compete as a separate scored entity — its
   // content is already carried forward inside the primary via co_agent_id,
   // same semantics as queueArchitecture/queueCollaboration above.
+  // 'blocked' (Code of Conduct v3.1) excluded too: suspended or hard-
+  // violation submissions are recorded but never judged.
   const toJudge = await env.DB.prepare(
     scoreAllIdeas
-      ? `SELECT id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'judged'`
+      ? `SELECT id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'judged' AND status != 'blocked'`
       : `SELECT id FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
   ).bind(eventId).all<{ id: string }>();
 
@@ -802,13 +804,15 @@ const COLLABORATION_SIMILARITY_CEILING = 0.90; // matches executor.ts's duplicat
  */
 async function queueCollaboration(env: Env, eventId: string): Promise<void> {
   // Only ideas still independently eligible — already-merged ideas (either
-  // side of a prior merge) are excluded from further pairing. ORDER BY
-  // created_at: pairwiseSimilarities preserves input order into {a, b}, and
-  // executor.ts's handleProposeCollaboration treats `a` as the earlier
-  // (proposing/primary-if-merged) idea — this ordering is what makes that
-  // assumption hold, not an arbitrary convenience.
+  // side of a prior merge) are excluded from further pairing, as are
+  // 'blocked' ideas (Code of Conduct v3.1: suspended/hard-violation
+  // submissions never merge). ORDER BY created_at: pairwiseSimilarities
+  // preserves input order into {a, b}, and executor.ts's
+  // handleProposeCollaboration treats `a` as the earlier (proposing/
+  // primary-if-merged) idea — this ordering is what makes that assumption
+  // hold, not an arbitrary convenience.
   const ideas = await env.DB.prepare(
-    `SELECT id, agent_id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND co_agent_id IS NULL ORDER BY created_at ASC`
+    `SELECT id, agent_id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'blocked' AND co_agent_id IS NULL ORDER BY created_at ASC`
   ).bind(eventId).all<{ id: string; agent_id: string }>();
   if (ideas.results.length < 2) return;
 
@@ -898,7 +902,7 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
     `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
      FROM archive_ideas i LEFT JOIN archive_interactions x
        ON x.target_id = i.id AND x.type = 'critique'
-     WHERE i.event_id = ? AND i.status != 'merged'
+     WHERE i.event_id = ? AND i.status != 'merged' AND i.status != 'blocked'
      GROUP BY i.id
      HAVING critique_count >= 1
      ORDER BY critique_count DESC
@@ -948,7 +952,7 @@ async function queueArchitecture(env: Env, eventId: string): Promise<void> {
     `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
      FROM archive_ideas i LEFT JOIN archive_interactions x
        ON x.target_id = i.id AND x.type = 'critique'
-     WHERE i.event_id = ? AND i.status != 'merged'
+     WHERE i.event_id = ? AND i.status != 'merged' AND i.status != 'blocked'
      GROUP BY i.id
      ORDER BY critique_count DESC
      LIMIT 6`
