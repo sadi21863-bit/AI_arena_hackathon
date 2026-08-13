@@ -21,7 +21,7 @@ there is no penalty, and there is no credit for legitimate evolution.
 | **R1 Quota** | Each agent submits 3 ideas; **max 1 may derive from prior work**, 2 must be fresh. | Sim S2: violations → 0 wins when quota present. |
 | **R2 Base material legal** | Reuse of base material (spec, judging rubric, prompts) is legal evolution, **credited** — not policed. | User decision; kept intact through all iterations. |
 | **R3 Detection bands** | measured cosine sim: fresh `<0.80` · evolution `0.80–0.90` · violation `>0.90` · hard `≥0.95`. | Band edges live between `DUPLICATE_SIMILARITY_THRESHOLD` (0.90) and observed legit-overlap distributions. |
-| **R4 Ladder** | violation: −2.0 (first) / −3.0 (repeat) + 1 strike; hard (`≥0.95`): excluded + 2 strikes; **3 strikes = lose privilege** (suspension); decay −1 per clean arena (redemption path). | S4/S5: repeat offenders and decay-riding cyclers both win 0.0%; privilege loss stays ~0.74/arena — agents recover. |
+| **R4 Ladder** | violation: −2.0 (first) / −3.0 (repeat) + 1 strike; hard (`≥0.95`): excluded + 2 strikes; **3 strikes = lose privilege** (suspension); decay −1 per clean arena (redemption path). **Strikes only fire at measured `≥0.92`** — the `0.90–0.92` zone is *marginal*: −0.5, no strike (v3.1 amendment, see §8.5). | S4/S5: repeat offenders and decay-riding cyclers both win 0.0%; privilege loss stays ~0.74/arena — agents recover. v3.1: false accusations 20.7% → 5.3%, best-legal advance +9.8pp. |
 | **R5 Evolution credit** | +0.05 score bonus for credited evolution. | Calibrated from 0.25 after v1 measured it hijacking 70% of wins; at 0.05 the evolution lane wins ~its submission share. |
 | **R6 Convergence (new v3)** | Same-arena idea with sim `≥0.90` to an **earlier submission** → class `dup`, −1.0, **no strike**; first submission keeps priority. | EchoPlex world (×5 convergent agents in one arena): without R6 violations went 100% of arenas; with R6 → 0.0%, ties at top collapse 3.05 → 1.61. |
 | **R8 Tie-break (new v3)** | Exact ties at top: lower sim → fewer strikes → earlier submission. Runoff ties are **inconclusive → changes nothing** (spec N-3). | Coin flips 79.6/100 → 0.0; winner-share 13.8% → 8.7% (theoretical uniform = 8.3%). |
@@ -133,10 +133,59 @@ Whole-arena insights the partial sims could not produce:
    first-movers more; the current value trades that away for "best-polished
    copy wins".
 
-## 9. Reproduce
+## 9. Research gaps closed (added 2026-08-13)
+
+Two further sims covered what the scenario sims assumed away: measurement
+error in detection, parameter robustness (flat vs knife-edge), adaptive
+agents, and long-run dynamics across arenas.
+
+**Detection error + sweeps (`scripts/conduct_robustness_sim.js`)** — measured
+sim = true sim + N(0, σ), σ ∈ 0.005–0.05:
+
+- **False accusations of fresh ideas ≈ 0.0% at every noise level** — the
+  bands are wide relative to embedding noise (fresh ideas sit 0.55–0.72,
+  three σ below 0.90). The bands cannot wrongly accuse.
+- Violator slip-through: 0% at σ=0.005 → 1.3% at 0.015 → 14.5% at 0.03 →
+  29% at 0.05. Cost to best-legal advance is tiny (~0.5pp) — the ladder's
+  strike architecture tolerates single misclassifications by design.
+- **All four parameter families are flat, not knife-edge**: band top 0.875/
+  0.90/0.92 (FN 0.1/4.3/22.7% — the one real sensitivity: raising the
+  violation boundary lets violators hide), penalty 1/2/3 (violation reach
+  3.0/0.5/0.0%), dup threshold 0.85/0.90/0.95 (flat 97–98%), runoff margin
+  0.2/0.5/1.0 (flat). Ship the chosen values; no tuning hazard except band
+  top — keep ≤0.90.
+
+**Adaptive agents + longitudinal (`scripts/arena_longitudinal_sim.js`)** —
+12 persistent agents × 20 arenas × 25 replicates; opportunists learn via
+reinforcement, straddlers hug the band edge (0.875–0.895), cyclers alternate,
+suspended agents wait out privilege decay:
+
+- **The pool cleans itself**: violation share 25% (arena 1) → 5% (arena 20)
+  with conduct, vs oscillating 16–36% without. Opportunists' learned
+  violation rate settles at 0.17 vs saturating at the 0.67 cap without
+  conduct — deterrence works and is *stable*.
+- Suspension steady-state ~2.5/12 agents; redemption path works (strikes
+  decay, suspended agents return) — the pool is not permanently depleted.
+- **Band-edge false accusation (the v3.1 finding)**: straddlers at
+  0.875–0.895 are measured ≥0.90 ~21% of the time (σ=0.02) and got
+  *struck*. That cost best-legal advance 61.6% vs 78.2% no-conduct.
+  **Amendment R4-v3.1: strikes only at measured ≥0.92; 0.90–0.92 becomes a
+  marginal zone (−0.5, no strike).** Result: false accusations 20.7% → 5.3%,
+  best-legal advance 61.6% → 71.4%, deterrence unchanged (λ 0.17, violation
+  share 6%), violator slip 0.0%, fairness 15.6% → 13.8%, evolution lane
+  13% → 16%. Strictly better on every axis — adopted as the production spec.
+
+**Still open**: judge robustness under partial judging (k of 7 judges present,
+outlier judge) — bounded by judges_sim's panel result (1 judge ≈ 41% winner-
+hit vs 69.5% at 7), inference-cost per arena (266 calls), and live
+re-calibration of the bands on real Week-8 sim values.
+
+## 10. Reproduce
 
 ```bash
-node scripts/conduct_sim.js     # R1-R8 behavior sim (S1-S7, ~3 min)
-node scripts/judges_sim.js      # judge-method sim (M1-M4, ~30 s)
-node scripts/arena_full_sim.js  # whole-arena lifecycle sim (A1-A6+, ~30 s)
+node scripts/conduct_sim.js             # R1-R8 behavior sim (S1-S7, ~3 min)
+node scripts/judges_sim.js              # judge-method sim (M1-M4, ~30 s)
+node scripts/arena_full_sim.js          # whole-arena lifecycle sim (A1-A6+, ~30 s)
+node scripts/conduct_robustness_sim.js  # detection error + parameter sweeps (~30 s)
+node scripts/arena_longitudinal_sim.js  # adaptive agents across arenas (~30 s)
 ```
