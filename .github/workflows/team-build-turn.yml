@@ -296,53 +296,71 @@ jobs:
         id: install
         run: |
           set +e
-          docker run --rm \
-            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
-            --read-only \
-            --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
-            --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
-            --add-host=host.docker.internal:host-gateway \
-            -e HTTP_PROXY=http://host.docker.internal:3128 \
-            -e HTTPS_PROXY=http://host.docker.internal:3128 \
-            -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
-            -e HOME=/tmp \
-            -v "${{ github.workspace }}:/workspace:rw" \
-            -w /workspace \
-            arena-team-base:latest \
-            sh -c 'set +e
-            FAILED=0
-            if [ -f package.json ]; then
-              echo "--- dependency install: npm ---"
-              if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-                echo "lockfile found -> npm ci"
-                npm ci --no-audit --no-fund || FAILED=1
+          # Bounded retry (whole-arena sim finding, docs/ARCHITECTURE_COMPARISON.md
+          # A6: one-shot flaky verification cost ~10pp end-to-end winner accuracy
+          # — a single transient registry/network hiccup flipped a turn to
+          # 'failure' that a retry would have passed, and over a multi-turn event
+          # that compounds into wrong winners). npm ci / pip install over the
+          # Squid proxy are the transient-failure-prone steps; a REAL install
+          # error (bad requirement, missing package) fails identically on all
+          # attempts and still surfaces via INSTALL_EXIT_CODE below.
+          ATTEMPTS=3
+          code=0
+          for attempt in $(seq 1 $ATTEMPTS); do
+            docker run --rm \
+              --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
+              --read-only \
+              --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
+              --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
+              --add-host=host.docker.internal:host-gateway \
+              -e HTTP_PROXY=http://host.docker.internal:3128 \
+              -e HTTPS_PROXY=http://host.docker.internal:3128 \
+              -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
+              -e HOME=/tmp \
+              -v "${{ github.workspace }}:/workspace:rw" \
+              -w /workspace \
+              arena-team-base:latest \
+              sh -c 'set +e
+              FAILED=0
+              if [ -f package.json ]; then
+                echo "--- dependency install: npm ---"
+                if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                  echo "lockfile found -> npm ci"
+                  npm ci --no-audit --no-fund || FAILED=1
+                else
+                  echo "no lockfile -> npm install"
+                  npm install --no-audit --no-fund || FAILED=1
+                fi
+              elif [ -f requirements.txt ]; then
+                echo "--- dependency install: pip (requirements.txt) ---"
+                python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps -r requirements.txt || FAILED=1
+              elif [ -f pyproject.toml ]; then
+                echo "--- dependency install: pip (pyproject.toml) ---"
+                python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps . > /tmp/pip-project.log 2>&1
+                code=$?
+                if [ $code -ne 0 ] && grep -q "does not appear to be a Python project" /tmp/pip-project.log; then
+                  echo "::warning::pyproject.toml is not a Python package (no build-system) — nothing to install from it"
+                elif [ $code -ne 0 ]; then
+                  cat /tmp/pip-project.log
+                  FAILED=1
+                fi
               else
-                echo "no lockfile -> npm install"
-                npm install --no-audit --no-fund || FAILED=1
+                echo "no package.json, requirements.txt or pyproject.toml — no dependencies to install"
               fi
-            elif [ -f requirements.txt ]; then
-              echo "--- dependency install: pip (requirements.txt) ---"
-              python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps -r requirements.txt || FAILED=1
-            elif [ -f pyproject.toml ]; then
-              echo "--- dependency install: pip (pyproject.toml) ---"
-              python3 -m pip install --disable-pip-version-check --no-cache-dir --target /workspace/.pydeps . > /tmp/pip-project.log 2>&1
-              code=$?
-              if [ $code -ne 0 ] && grep -q "does not appear to be a Python project" /tmp/pip-project.log; then
-                echo "::warning::pyproject.toml is not a Python package (no build-system) — nothing to install from it"
-              elif [ $code -ne 0 ]; then
-                cat /tmp/pip-project.log
-                FAILED=1
-              fi
-            else
-              echo "no package.json, requirements.txt or pyproject.toml — no dependencies to install"
+              touch .gitignore
+              grep -qF "node_modules/" .gitignore || echo "node_modules/" >> .gitignore
+              grep -qF "/.pydeps/" .gitignore || echo "/.pydeps/" >> .gitignore
+              echo "install phase FAILED=$FAILED"
+              exit $FAILED'
+            code=$?
+            if [ $code -eq 0 ]; then
+              echo "install container succeeded on attempt $attempt"
+              break
             fi
-            touch .gitignore
-            grep -qF "node_modules/" .gitignore || echo "node_modules/" >> .gitignore
-            grep -qF "/.pydeps/" .gitignore || echo "/.pydeps/" >> .gitignore
-            echo "install phase FAILED=$FAILED"
-            exit $FAILED'
-          code=$?
-          echo "install container exited $code (0 = deps present, 1 = install failed)"
+            echo "install attempt $attempt of $ATTEMPTS failed (exit $code) — retrying; a real install error fails all attempts, this only absorbs transient registry/network hiccups"
+            sleep 10
+          done
+          echo "install container exited $code (0 = deps present, 1 = install failed after $ATTEMPTS attempts)"
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -375,136 +393,152 @@ jobs:
         id: verify
         run: |
           set +e
-          docker run --rm \
-            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
-            --network=none --read-only \
-            --tmpfs /tmp:noexec,nosuid,size=200m,mode=1777 \
-            --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
-            -e HOME=/tmp \
-            -e PYTHONPATH=/workspace/.pydeps \
-            -e PYTHONPYCACHEPREFIX=/tmp/pycache \
-            -e TURN_ID="${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}" \
-            -e INSTALL_EXIT_CODE="${{ steps.install.outputs.exit_code }}" \
-            -v "${{ github.workspace }}:/workspace:rw" \
-            -w /workspace \
-            arena-team-base:latest \
-            sh -c 'set +e
-            VERIFY_FAILED=0
-            ERRLOG=/tmp/verify-errors.log
-            REPORT=/workspace/VERIFICATION_FAILURE.log
-            NOTE=/workspace/VERIFICATION_NOTE.log
-            rm -f "$ERRLOG" "$REPORT" "$NOTE"
-            fail() {
-              echo "::error::$1"
-              echo "$1" >> "$ERRLOG"
-              VERIFY_FAILED=1
-            }
-            # Warnings get committed too, as VERIFICATION_NOTE.log: "no tests
-            # ran" is not a hard fail (turn 1 legitimately starts without a
-            # suite), but it IS a standing requirement the next turn must
-            # address — the turn prompt tells the agent to read this file.
-            # git add -A in the Commit progress step picks it up automatically.
-            note() {
-              echo "::warning::$1"
-              echo "turn $TURN_ID: $1" >> "$NOTE"
-            }
-            echo "--- language-aware verification (network=none) ---"
-            echo "turn: $TURN_ID"
-            if [ "$INSTALL_EXIT_CODE" != "0" ]; then
-              fail "dependency install failed (install phase exit code $INSTALL_EXIT_CODE) — see the Phase B install step log; build checks skipped"
-            elif [ -f package.json ]; then
-              echo "[node] package.json present"
-              if [ ! -d node_modules ]; then
-                fail "node_modules missing after the install phase — dependencies were not installed"
-              else
-                if [ -f tsconfig.json ]; then
-                  echo "[node] tsconfig.json present -> npx tsc --noEmit"
-                  out=$(npx --no-install tsc --noEmit 2>&1)
-                  code=$?
-                  echo "$out"
-                  if [ $code -ne 0 ]; then
-                    echo "$out" >> "$ERRLOG"
-                    fail "TypeScript type-check failed (npx tsc --noEmit) — if typescript is not in devDependencies, add it with: npm install --save-dev typescript"
-                  else
-                    echo "[node] type-check passed"
-                  fi
+          # Bounded retry (same A6 rationale as the install step): tsc /
+          # compileall are deterministic, but a test run can fail transiently
+          # (resource contention under the 2-CPU pids-limit, a test that
+          # polls a port it bound microseconds too early). A deterministic
+          # failure fails both attempts identically and still records
+          # VERIFICATION_FAILURE.log for the next turn.
+          ATTEMPTS=2
+          code=0
+          for attempt in $(seq 1 $ATTEMPTS); do
+            docker run --rm \
+              --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
+              --network=none --read-only \
+              --tmpfs /tmp:noexec,nosuid,size=200m,mode=1777 \
+              --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
+              -e HOME=/tmp \
+              -e PYTHONPATH=/workspace/.pydeps \
+              -e PYTHONPYCACHEPREFIX=/tmp/pycache \
+              -e TURN_ID="${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}" \
+              -e INSTALL_EXIT_CODE="${{ steps.install.outputs.exit_code }}" \
+              -v "${{ github.workspace }}:/workspace:rw" \
+              -w /workspace \
+              arena-team-base:latest \
+              sh -c 'set +e
+              VERIFY_FAILED=0
+              ERRLOG=/tmp/verify-errors.log
+              REPORT=/workspace/VERIFICATION_FAILURE.log
+              NOTE=/workspace/VERIFICATION_NOTE.log
+              rm -f "$ERRLOG" "$REPORT" "$NOTE"
+              fail() {
+                echo "::error::$1"
+                echo "$1" >> "$ERRLOG"
+                VERIFY_FAILED=1
+              }
+              # Warnings get committed too, as VERIFICATION_NOTE.log: "no tests
+              # ran" is not a hard fail (turn 1 legitimately starts without a
+              # suite), but it IS a standing requirement the next turn must
+              # address — the turn prompt tells the agent to read this file.
+              # git add -A in the Commit progress step picks it up automatically.
+              note() {
+                echo "::warning::$1"
+                echo "turn $TURN_ID: $1" >> "$NOTE"
+              }
+              echo "--- language-aware verification (network=none) ---"
+              echo "turn: $TURN_ID"
+              if [ "$INSTALL_EXIT_CODE" != "0" ]; then
+                fail "dependency install failed (install phase exit code $INSTALL_EXIT_CODE) — see the Phase B install step log; build checks skipped"
+              elif [ -f package.json ]; then
+                echo "[node] package.json present"
+                if [ ! -d node_modules ]; then
+                  fail "node_modules missing after the install phase — dependencies were not installed"
                 else
-                  echo "[node] no tsconfig.json — type-check skipped"
-                fi
-                if node -e "const p=require(\"./package.json\");process.exit(p.scripts&&p.scripts.test?0:1)"; then
-                  echo "[node] test script present -> npm test"
-                  out=$(npm test 2>&1)
-                  code=$?
-                  echo "$out"
-                  if [ $code -ne 0 ]; then
-                    echo "$out" >> "$ERRLOG"
-                    fail "npm test failed (exit $code)"
+                  if [ -f tsconfig.json ]; then
+                    echo "[node] tsconfig.json present -> npx tsc --noEmit"
+                    out=$(npx --no-install tsc --noEmit 2>&1)
+                    code=$?
+                    echo "$out"
+                    if [ $code -ne 0 ]; then
+                      echo "$out" >> "$ERRLOG"
+                      fail "TypeScript type-check failed (npx tsc --noEmit) — if typescript is not in devDependencies, add it with: npm install --save-dev typescript"
+                    else
+                      echo "[node] type-check passed"
+                    fi
                   else
-                    echo "[node] tests passed"
+                    echo "[node] no tsconfig.json — type-check skipped"
                   fi
-                else
-                  note "package.json has no test script — no tests ran this turn. The turn prompt requires every turn to add or extend at least one test; the next turn must create a test suite and a test script."
+                  if node -e "const p=require(\"./package.json\");process.exit(p.scripts&&p.scripts.test?0:1)"; then
+                    echo "[node] test script present -> npm test"
+                    out=$(npm test 2>&1)
+                    code=$?
+                    echo "$out"
+                    if [ $code -ne 0 ]; then
+                      echo "$out" >> "$ERRLOG"
+                      fail "npm test failed (exit $code)"
+                    else
+                      echo "[node] tests passed"
+                    fi
+                  else
+                    note "package.json has no test script — no tests ran this turn. The turn prompt requires every turn to add or extend at least one test; the next turn must create a test suite and a test script."
+                  fi
                 fi
-              fi
-            elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
-              echo "[python] Python manifest present"
-              out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
-              code=$?
-              echo "$out"
-              if [ $code -ne 0 ]; then
-                echo "$out" >> "$ERRLOG"
-                fail "python3 -m compileall found syntax errors (exit $code)"
-              else
-                echo "[python] byte-compile passed"
-              fi
-              if python3 -m pytest --version >/dev/null 2>&1; then
-                echo "[python] pytest installed -> python3 -m pytest -q"
-                out=$(python3 -m pytest -q -p no:cacheprovider 2>&1)
+              elif [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+                echo "[python] Python manifest present"
+                out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
                 code=$?
                 echo "$out"
-                if [ $code -eq 0 ]; then
-                  echo "[python] tests passed"
-                elif [ $code -eq 5 ]; then
-                  note "pytest collected no tests — the turn prompt requires every turn to add or extend at least one test; the next turn must add real tests."
-                else
+                if [ $code -ne 0 ]; then
                   echo "$out" >> "$ERRLOG"
-                  fail "pytest failed (exit $code)"
+                  fail "python3 -m compileall found syntax errors (exit $code)"
+                else
+                  echo "[python] byte-compile passed"
+                fi
+                if python3 -m pytest --version >/dev/null 2>&1; then
+                  echo "[python] pytest installed -> python3 -m pytest -q"
+                  out=$(python3 -m pytest -q -p no:cacheprovider 2>&1)
+                  code=$?
+                  echo "$out"
+                  if [ $code -eq 0 ]; then
+                    echo "[python] tests passed"
+                  elif [ $code -eq 5 ]; then
+                    note "pytest collected no tests — the turn prompt requires every turn to add or extend at least one test; the next turn must add real tests."
+                  else
+                    echo "$out" >> "$ERRLOG"
+                    fail "pytest failed (exit $code)"
+                  fi
+                else
+                  note "pytest not installed — only byte-compile ran (add pytest to requirements.txt to get a test gate; the turn prompt requires every turn to add or extend at least one test)."
+                fi
+              elif find . -name "*.py" -not -path "./.pydeps/*" -not -path "./.git/*" 2>/dev/null | grep -q .; then
+                echo "[python] .py files present but no requirements.txt/pyproject.toml — byte-compiling anyway"
+                out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
+                code=$?
+                echo "$out"
+                if [ $code -ne 0 ]; then
+                  echo "$out" >> "$ERRLOG"
+                  fail "python3 -m compileall found syntax errors (exit $code)"
+                else
+                  echo "[python] byte-compile passed"
                 fi
               else
-                note "pytest not installed — only byte-compile ran (add pytest to requirements.txt to get a test gate; the turn prompt requires every turn to add or extend at least one test)."
+                echo "no package.json, requirements.txt, pyproject.toml or Python files — nothing to build or test yet"
               fi
-            elif find . -name "*.py" -not -path "./.pydeps/*" -not -path "./.git/*" 2>/dev/null | grep -q .; then
-              echo "[python] .py files present but no requirements.txt/pyproject.toml — byte-compiling anyway"
-              out=$(python3 -m compileall -q -x "/(\.pydeps|\.git|\.github|\.pytest_cache)/" . 2>&1)
-              code=$?
-              echo "$out"
-              if [ $code -ne 0 ]; then
-                echo "$out" >> "$ERRLOG"
-                fail "python3 -m compileall found syntax errors (exit $code)"
-              else
-                echo "[python] byte-compile passed"
+              if [ $VERIFY_FAILED -ne 0 ]; then
+                {
+                  echo "=== Build verification FAILED — turn $TURN_ID ==="
+                  echo "Reported $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  echo "This file is committed by the commit step so the next"
+                  echo "turn can see what broke. Fix the checks below, then rebuild."
+                  echo ""
+                  cat "$ERRLOG"
+                } > "$REPORT"
+                exit 1
               fi
-            else
-              echo "no package.json, requirements.txt, pyproject.toml or Python files — nothing to build or test yet"
+              echo "--- verification passed ---"
+              exit 0'
+            code=$?
+            if [ $code -eq 0 ]; then
+              echo "verification container succeeded on attempt $attempt"
+              break
             fi
-            if [ $VERIFY_FAILED -ne 0 ]; then
-              {
-                echo "=== Build verification FAILED — turn $TURN_ID ==="
-                echo "Reported $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                echo "This file is committed by the commit step so the next"
-                echo "turn can see what broke. Fix the checks below, then rebuild."
-                echo ""
-                cat "$ERRLOG"
-              } > "$REPORT"
-              exit 1
-            fi
-            echo "--- verification passed ---"
-            exit 0'
-          code=$?
+            echo "verification attempt $attempt of $ATTEMPTS failed (exit $code) — retrying once; a deterministic failure fails both attempts identically"
+            sleep 10
+          done
           if [ $code -ne 0 ]; then
             echo "verify_failed=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "verification container exited $code (0 = checks passed, 1 = checks failed — reported at the end so this turn's work is still committed)"
+          echo "verification container exited $code (0 = checks passed, 1 = checks failed after $ATTEMPTS attempts — reported at the end so this turn's work is still committed)"
           exit 0
 
       - name: Commit progress
