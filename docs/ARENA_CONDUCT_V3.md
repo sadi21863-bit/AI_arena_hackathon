@@ -88,9 +88,55 @@ already on all ideas).
 4. Whether agents actually cite "builds on X" (R2's credit path) once the
    conduct layer is visible to them.
 
-## 7. Reproduce
+## 8. Whole-arena results (arena_full_sim.js — added 2026-08-13)
+
+Full lifecycle sim: ideation → conduct → judging → advancement → 2 teams ×
+4 build turns → hackathon judging → winner (200 arenas per scenario, truth
+known). Fixes made while building it (each was a sim-model bug, not a rule
+change): score recalibration to the live 6–9 spread (the per-judge 10-cap was
+saturating the top), informative runoff verdict (was a coin), quality model
+where top ideas are *differently* strong (cosine ~0.6, matching live
+embedding measurements), derived-idea quality discount for violations only.
+
+| Scenario | winner-hit | winner-hit (best legal) | derivative→hackathon | evolution→hackathon |
+|---|---|---|---|---|
+| **A1 baseline (no conduct)** | 83.0% | 83.0% | **22.0%** | 0.0% |
+| **A2 conduct v3** | 71.5% | 79.0% | **0.0%** | 29.5% |
+| A3 conduct + shared model bias | 70.5% | 79.0% | 0.0% | 31.0% |
+| A4 EchoPlex, no conduct | 83.5% | 83.5% | 100.0% | 0.0% |
+| A4+ EchoPlex, conduct (R6) | 78.0% | 78.0% | 100.0%* | 0.0% |
+| A5 cyclers, no conduct | 81.0% | 81.0% | 10.5% | 0.0% |
+| A5+ cyclers, conduct | 75.0% | 78.0% | 0.0% | 26.5% |
+| A6 flaky pipeline, no conduct | 79.0% | 79.0% | 22.0% | 0.0% |
+| A6+ flaky pipeline, conduct | 69.0% | 78.0% | 0.0% | 29.5% |
+
+*Pure-convergence worlds are structurally all-dups (everyone copies the
+originator); with R6 the *originator* advances 20.5% vs 7.0% without.
+
+Whole-arena insights the partial sims could not produce:
+1. **The integrity tax is ~4pp** (best-legal winner-hit 79.0% vs baseline
+   83.0%) — the honest price of removing derivative ideas from the pool,
+   since some violators' ideas were genuinely good. Advancement of the best
+   *legal* idea is unchanged (87.5% ≈ 87.0%) — the loss is pool size, not
+   ranking quality.
+2. **The biggest end-to-end lever is the build pipeline, not judging**:
+   flakiness costs 10pp of winner-hit (83→79 baseline, 71.5→69 conduct) —
+   more than any judging or conduct knob measured. Hardening
+   `team-build-turn.yml` pays more than any scoring tweak.
+3. **Judge-score saturation is a live hazard**: the per-judge 10-cap
+   (`scoring.ts:155`) compresses the top into exact ties whenever inflation
+   pushes good ideas to 10. Recalibrated sim scores (8.5·q + 1.2) reproduce
+   the live 6–9 spread; the de-inflation layer is the structural fix.
+4. **R6 penalty (−1.0) is a knob, not a law**: originator advances only
+   20.5% in pure-convergence worlds because a mediocre originator still
+   loses to a well-polished dup. Raising the dup penalty protects
+   first-movers more; the current value trades that away for "best-polished
+   copy wins".
+
+## 9. Reproduce
 
 ```bash
-node scripts/conduct_sim.js   # R1-R8 behavior sim (S1-S7, ~3 min)
-node scripts/judges_sim.js    # judge-method sim (M1-M4, ~30 s)
+node scripts/conduct_sim.js     # R1-R8 behavior sim (S1-S7, ~3 min)
+node scripts/judges_sim.js      # judge-method sim (M1-M4, ~30 s)
+node scripts/arena_full_sim.js  # whole-arena lifecycle sim (A1-A6+, ~30 s)
 ```
