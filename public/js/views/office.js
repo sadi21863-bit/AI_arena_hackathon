@@ -1152,7 +1152,7 @@ export async function mount(el, params) {
               const title = `turn ${t.turn_number} · ${what}${t.head_sha ? ` · ${t.head_sha.slice(0, 7)}` : ""}`;
               const chip = { left: x(s).toFixed(2), width: w.toFixed(2), title, num: t.turn_number, st };
               return t.head_sha
-                ? html`<a class="v-office__tl-chip is-${chip.st}" style="left:${chip.left}%;width:${chip.width}%" href="${href(`/diff/${eventId}/${team.team_name}/${t.head_sha}`)}" title="${chip.title}"><span>${chip.num}</span></a>`
+                ? html`<a class="v-office__tl-chip is-${chip.st}" style="left:${chip.left}%;width:${chip.width}%" href="${href(`/diff/${event.id}/${team.team_name}/${t.head_sha}`)}" title="${chip.title}"><span>${chip.num}</span></a>`
                 : html`<div class="v-office__tl-chip is-${chip.st}" style="left:${chip.left}%;width:${chip.width}%" title="${chip.title}"><span>${chip.num}</span></div>`;
             })}
           </div>
