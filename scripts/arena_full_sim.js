@@ -88,7 +88,8 @@ function cosineSim(a, b) {
 /** One full arena. `arenaIndex` lets decay-riders alternate clean/violating. */
 function runArena(seed, arenaIndex, config) {
   const r = rng(seed);
-  const { conduct, world, field, shared, flaky } = config;
+  const { conduct, world, field, shared, flaky, variant } = config;
+  const strikeFloor = variant === "v31" ? 0.92 : 0.90; // v3.1: strikes only on certain detections
 
   // ---- Phase 1: ideation -------------------------------------------------
   const agents = [];
@@ -172,10 +173,15 @@ function runArena(seed, arenaIndex, config) {
       const s = meta.simToPrior;
       if (s >= BAND.hard) {
         meta.cls = "hard"; meta.penalty = PENALTY.hard; meta.strikeGained = 2;
-      } else if (s > BAND.evolution) {
+      } else if (s > BAND.evolution && (variant !== "v31" || s >= strikeFloor)) {
         meta.cls = "violation";
         meta.penalty = agent.strikes > 0 ? PENALTY.violationRepeat : PENALTY.violationFirst;
         meta.strikeGained = 1;
+      } else if (s > BAND.evolution) {
+        // v3.1 marginal zone (0.90-0.92): measurement noise can flip legal
+        // edge-huggers here — soft penalty, no strike.
+        meta.cls = "marginal";
+        meta.penalty = -0.5;
       } else if (s >= BAND.fresh) {
         // R3 evolution band is 0.80-0.90: s >= 0.90 already matched the
         // violation branch above, so >= fresh means exactly the 0.80-0.90 band.
@@ -284,7 +290,7 @@ function runArena(seed, arenaIndex, config) {
   if (teamResults.length === 2) teamResults[0].idea.winner = true;
 
   // ---- Truth bookkeeping --------------------------------------------------
-  const legal = (x) => !conduct || ["fresh", "evolution", "dup"].includes(classified.get(x).cls);
+  const legal = (x) => !conduct || ["fresh", "evolution", "marginal", "dup"].includes(classified.get(x).cls);
   const trueBest = ideas.reduce((best, x) => (x.trueTotal > best.trueTotal ? x : best), ideas[0]);
   const trueBestLegal = ideas.filter(legal).reduce((best, x) => (x.trueTotal > best.trueTotal ? x : best), ideas[0]);
   const trueTop2 = ideas.slice().sort((a, b) => b.trueTotal - a.trueTotal).slice(0, 2);
@@ -354,6 +360,7 @@ const CONDUCT = { conduct: true, world: "standard", field: "standard", shared: f
 
 runScenario("A1 live baseline — no conduct (current arena)", BASE);
 runScenario("A2 conduct v3 (R1-R8)", CONDUCT);
+runScenario("A2+ conduct v3.1 (strikes only >=0.92, marginal zone)", { ...CONDUCT, variant: "v31" });
 runScenario("A3 conduct + shared model bias (all judges same model)", { ...CONDUCT, shared: true });
 runScenario("A4 EchoPlex convergence — NO conduct", { ...BASE, world: "echoplex" });
 runScenario("A4+ EchoPlex convergence — WITH conduct (R6)", { ...CONDUCT, world: "echoplex" });
