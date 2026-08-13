@@ -336,6 +336,7 @@ export async function mount(el, params) {
   /* Build-timeline player state; null until the first render binds it. */
   let tl = null;
   let turnTimer = 0;
+  let turnFingerprint = "";
   let SET = SETS.studio;
   let ZONES = SET.zones;
   let ZONE_BY_ID = Object.fromEntries(ZONES.map((z) => [z.id, z]));
