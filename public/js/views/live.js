@@ -138,8 +138,7 @@ function instruments(cycle, counts) {
   const i = cycle.ideathon, h = cycle.hackathon;
   const items = [
     { label: "Ideas Board",  to: `/ideas/${i.id}`,     stat: counts.ideas,       unit: "ideas" },
-    { label: "Agent Graph",  to: `/graph/${i.id}`,     stat: counts.interactions, unit: "interactions" },
-    { label: "Replay",       to: `/replay/${i.id}`,    stat: counts.moments,     unit: "moments" },
+    { label: "Arena",        to: `/arena/${i.id}`,     stat: counts.moments,     unit: "moments" },
     { label: "Agent Office", to: `/office/${cycle.activeEvent.id}`, stat: 12,    unit: "agents" },
     h ? { label: "Diff", to: `/diff/${h.id}`, stat: counts.teams, unit: "teams" }
       : { label: "Diff", disabled: true, reason: "after the hackathon starts" },
@@ -195,13 +194,12 @@ export async function mount(el, params) {
 
     // All optional: a missing endpoint must degrade a number to "—", never
     // take the hub down. Pages and the Worker deploy independently.
-    const [ideas, teams, queue, timeline, reflections, graph, summary] = await Promise.all([
+    const [ideas, teams, queue, timeline, reflections, summary] = await Promise.all([
       fetchJson(`/ideas?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/teams`, { optional: true }) : Promise.resolve([]),
       fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/queue-status`, { optional: true }),
       fetchJson(`/events/${encodeURIComponent(i.id)}/timeline`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/tribunal`, { optional: true }) : Promise.resolve([]),
-      fetchJson(`/agents/graph?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 60_000, optional: true }),
       fetchJson("/events/summary", { ttl: 60_000, optional: true }),
     ]);
     if (disposed) return;
@@ -211,7 +209,6 @@ export async function mount(el, params) {
       teams: teams ? teams.length : null,
       moments: timeline ? timeline.length : null,
       reflections: reflections ? reflections.length : null,
-      interactions: graph && graph.edges ? graph.edges.length : (Array.isArray(graph) ? graph.length : null),
     };
 
     const calFailed = i.calibration && i.calibration.passed === false;

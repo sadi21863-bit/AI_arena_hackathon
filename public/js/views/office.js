@@ -629,7 +629,7 @@ export async function mount(el, params) {
           <div>Turns taken: <b>${member.turns_taken ?? 0}</b></div>` : ""}
       </div>
       <a class="arena-btn arena-btn--sm arena-btn--ghost v-office__inspector-graph"
-         href="${href(`/graph/${event.type === "hackathon" ? event.parent_event_id : event.id}`)}">See this arena's interactions in Graph →</a>`);
+         href="${href(`/arena/${event.type === "hackathon" ? event.parent_event_id : event.id}`)}">See this arena's interactions →</a>`);
   }
 
   function select(id) {

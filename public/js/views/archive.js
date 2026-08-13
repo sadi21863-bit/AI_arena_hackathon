@@ -109,9 +109,8 @@ function hackathonStats(c) {
 function phaseLinks(arena, type) {
   const links = [
     ["Office", `/observatory/office/${arena.id}`],
-    ["Graph", `/observatory/graph/${arena.id}`],
+    ["Arena", `/observatory/arena/${arena.id}`],
     ["Ideas", `/observatory/ideas/${arena.id}`],
-    ["Replay", `/observatory/replay/${arena.id}`],
   ];
   if (type === "hackathon") {
     links.push(["Diff", `/observatory/diff/${arena.id}`], ["Tribunal", `/observatory/tribunal/${arena.id}`]);

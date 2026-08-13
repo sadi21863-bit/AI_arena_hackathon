@@ -27,9 +27,8 @@ import { toCycles, phaseLabel, typeLabel } from "./model.js";
  *  in the URL; unscoped ones (archive, headroom) don't. */
 const INSTRUMENTS = [
   { id: "live",     label: "Live",     scoped: true,  url: (c) => `/cycle/${c.ideathon.id}` },
-  { id: "replay",   label: "Replay",   scoped: true,  url: (c) => `/replay/${c.ideathon.id}` },
+  { id: "arena",    label: "Arena",    scoped: true,  url: (c) => `/arena/${c.ideathon.id}` },
   { id: "ideas",    label: "Ideas",    scoped: true,  url: (c) => `/ideas/${c.ideathon.id}` },
-  { id: "graph",    label: "Graph",    scoped: true,  url: (c) => `/graph/${c.ideathon.id}` },
   { id: "diff",     label: "Diff",     scoped: true,  url: (c) => `/diff/${c.ideathon.id}` },
   { id: "tribunal", label: "Tribunal", scoped: true,  url: (c) => `/tribunal/${c.ideathon.id}` },
   { id: "office",   label: "Office",   scoped: true,  url: (c) => `/office/${(c.activeEvent || c.ideathon).id}` },

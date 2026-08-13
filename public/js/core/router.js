@@ -37,6 +37,8 @@ const ROUTES = [
   ["/archive",                   "archive"],
   ["/office",                    "office"],
   ["/office/:eventId",           "office"],
+  ["/arena",                     "arena"],
+  ["/arena/:eventId",            "arena"],
   ["/graph",                     "graph"],
   ["/graph/:eventId",            "graph"],
   ["/ideas/:eventId",            "ideas"],
