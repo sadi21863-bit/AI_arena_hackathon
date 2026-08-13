@@ -19,6 +19,7 @@ import * as store from "../core/store.js";
 import { toCycles, findCycle, phasesFor, phaseLabel, isLive, isTerminal, typeLabel } from "../core/model.js";
 import { dateRange, utcDate, shortId, score } from "../core/fmt.js";
 import { renderStrip } from "../core/arena-strip.js";
+import { taskLabel, mountTickClock, utcTime } from "../core/player.js";
 
 /* One continuous track across both halves of the cycle, so the handoff is
    visible rather than implied. Phases come from model.js, which mirrors
@@ -66,6 +67,60 @@ function meter(counts) {
       <div class="arena-meter-legend__item"><span class="arena-meter-legend__swatch" style="background:var(--arena-line-strong)"></span>${counts.pending} pending</div>
       <div class="arena-meter-legend__item"><span class="arena-meter-legend__swatch" style="background:var(--arena-danger)"></span>${counts.failed} failed</div>
     </div>`;
+}
+
+/* Turn machine — the queue as a factory floor: tasks visibly sit in one of
+   four lanes and move across on each cron tick. Real rows only (the last 60
+   from /events/:id/queue-items); the tick clock in the corner is honest
+   about when the data can next change. The pulsing track between lanes is
+   decoration for a process that genuinely stops between ticks. */
+function turnMachine(items) {
+  const list = items || [];
+  const lanes = { pending: [], in_progress: [], completed: [], failed: [] };
+  for (const it of list) {
+    if (!lanes[it.status]) lanes[it.status] = [];
+    lanes[it.status].push(it);
+  }
+  const laneOrder = [
+    { key: "pending", label: "Queued", cls: "v-live__lane--queued" },
+    { key: "in_progress", label: "Working", cls: "v-live__lane--working" },
+    { key: "completed", label: "Done", cls: "v-live__lane--done" },
+    { key: "failed", label: "Failed", cls: "v-live__lane--failed" },
+  ];
+  const nowMs = Date.now();
+  const age = (ts) => {
+    if (!ts) return "";
+    const m = Math.floor((nowMs - new Date(String(ts).replace(" ", "T") + "Z").getTime()) / 60000);
+    return m < 1 ? "just now" : m < 90 ? `${m}m ago` : utcTime(ts);
+  };
+
+  return html`
+    <div class="v-live__lanes">
+      ${laneOrder.map((lane) => {
+        const rows = lanes[lane.key] || [];
+        // Newest first within a lane so fresh arrivals read top-down.
+        const sorted = [...rows].sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+        return html`
+          <div class="v-live__lane ${lane.cls}">
+            <div class="v-live__lane-head">
+              <span>${lane.label}</span>
+              <b>${sorted.length}</b>
+            </div>
+            <div class="v-live__lane-body">
+              ${sorted.length ? sorted.map((it) => {
+                const movedAt = it.status === "completed" ? it.completed_at : it.status === "in_progress" ? it.claimed_at : it.created_at;
+                return html`
+                  <div class="v-live__chip" title="${taskLabel(it.task_type)}${it.agent_id ? " · " + store.agentName(it.agent_id) : ""} · created ${it.created_at || "—"}">
+                    <span class="v-live__chip-task">${taskLabel(it.task_type)}</span>
+                    ${it.agent_id ? html`<span class="v-live__chip-agent">${store.agentName(it.agent_id)}</span>` : ""}
+                    <span class="v-live__chip-time">${age(movedAt)}</span>
+                  </div>`;
+              }) : html`<div class="v-live__lane-empty">—</div>`}
+            </div>
+          </div>`;
+      })}
+    </div>
+    <div class="v-live__track-flow" aria-hidden="true"></div>`;
 }
 
 function ideathonColumn(cycle, ideas) {
@@ -194,10 +249,11 @@ export async function mount(el, params) {
 
     // All optional: a missing endpoint must degrade a number to "—", never
     // take the hub down. Pages and the Worker deploy independently.
-    const [ideas, teams, queue, timeline, reflections, summary] = await Promise.all([
+    const [ideas, teams, queue, queueItems, timeline, reflections, summary] = await Promise.all([
       fetchJson(`/ideas?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/teams`, { optional: true }) : Promise.resolve([]),
       fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/queue-status`, { optional: true }),
+      fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/queue-items`, { optional: true }),
       fetchJson(`/events/${encodeURIComponent(i.id)}/timeline`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/tribunal`, { optional: true }) : Promise.resolve([]),
       fetchJson("/events/summary", { ttl: 60_000, optional: true }),
@@ -241,8 +297,14 @@ export async function mount(el, params) {
       </div>
 
       <section class="arena-card v-live__queue">
-        <div class="arena-section-label">Queue health · ${typeLabel(cycle.activeEvent.type)} (${shortId(cycle.activeEvent.id, 22)})</div>
-        ${queue ? meter(queue) : html`<div class="arena-state">Queue status unavailable.</div>`}
+        <div class="v-live__queue-head">
+          <div>
+            <div class="arena-section-label">Turn machine · ${typeLabel(cycle.activeEvent.type)} (${shortId(cycle.activeEvent.id, 22)})</div>
+            <p class="v-live__queue-note">The last 60 queue items, moving across on each cron tick.</p>
+          </div>
+          <div class="v-live__tick" data-tick>next tick in —</div>
+        </div>
+        ${queueItems ? turnMachine(queueItems) : (queue ? meter(queue) : html`<div class="arena-state">Queue status unavailable.</div>`)}
       </section>
 
       ${instruments(cycle, counts)}
@@ -252,9 +314,16 @@ export async function mount(el, params) {
 
     const stripEl = el.querySelector("#v-live-strip");
     if (stripEl && activeSummary) renderStrip(stripEl, activeSummary);
+
+    /* The queue card re-renders on every draw, so the tick clock inside it
+       must be remounted each time — the old instance's element is gone. */
+    if (tickTeardown) { tickTeardown(); tickTeardown = null; }
+    const tickEl = el.querySelector("[data-tick]");
+    if (tickEl) tickTeardown = mountTickClock(tickEl);
   }
 
+  let tickTeardown = null;
   await draw();
   const off = store.events.subscribe(draw);
-  return () => { disposed = true; off(); };
+  return () => { disposed = true; off(); if (tickTeardown) tickTeardown(); };
 }

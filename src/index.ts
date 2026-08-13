@@ -539,6 +539,22 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(counts);
     }
 
+    // Observatory Live "turn machine" (spec §11): the queue-status route
+    // above exists for the phone-book counts; this one feeds the animated
+    // conveyor — per-item rows so the Live view can show tasks moving
+    // pending -> in_progress -> completed across the cron ticks. Same public
+    // trust tier as queue-status: task type/agent/status/timestamps only,
+    // never payload JSON or error_message internals. Bounded to the most
+    // recent 60 rows so an old event can't push a big payload.
+    const queueItemsMatch = url.pathname.match(/^\/events\/([^/]+)\/queue-items$/);
+    if (queueItemsMatch && request.method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT id, agent_id, task_type, status, created_at, scheduled_for, claimed_at, completed_at
+         FROM event_queue WHERE event_id = ? ORDER BY created_at DESC LIMIT 60`
+      ).bind(queueItemsMatch[1]).all();
+      return Response.json(rows.results);
+    }
+
     // Observatory Agent Office (spec §11): what each of the 12 agents is
     // doing right now, one representative queue row each, so the office
     // view can place a character at the desk matching its current task.

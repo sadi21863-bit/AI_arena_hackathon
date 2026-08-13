@@ -47,10 +47,6 @@ const TYPE_OTHER = { color: "var(--arena-line-strong)", dash: null, label: "inte
 
 const DAY_MS = 86_400_000;
 const STEP_MS = 900;
-
-/* Day-of-cycle spans for the replay phase bar, mirroring phaseForDay in
-   src/events/scheduler.ts (deep_research <2, ideation <3, collab <4,
-   architecture <6, then judging). */
 const PHASE_SPANS = [
   { id: "deep_research",     label: "Research",  from: 0, to: 2 },
   { id: "ideation_critique", label: "Ideation",  from: 2, to: 3 },
@@ -58,8 +54,6 @@ const PHASE_SPANS = [
   { id: "architecture",      label: "Arch",      from: 4, to: 6 },
   { id: "ready_for_judging", label: "Judging",   from: 6, to: 8 },
 ];
-
-const DAY = (ms) => Math.floor(ms / DAY_MS);
 
 /* ---- communities: label propagation over pair interaction weight ---- */
 
@@ -487,62 +481,162 @@ export async function mount(el, params) {
     nodeSel.classed("is-live", (id) => current && (current.agentId === id || current.targetId === id));
     nodeSel.classed("is-dim", false);
 
+    /* While scrubbing, the controls MUST not re-render: drawControls()
+       replaces the track element, which drops the pointer capture and
+       cancels the drag mid-swipe. Update chrome in place instead. */
+    if (!dragging) drawControls();
     drawPhase(current);
-    drawControls();
     drawFeed(current);
   }
 
+  /* Time scale: moments positioned by REAL timestamp, so the track's density
+     marks show the arena's actual pacing — the dead quiet of day 1's
+     research versus the critique burst of days 2-3. */
+  const momentMs = moments.map((m) => new Date(String(m.ts).replace(" ", "T") + "Z").getTime());
+  const tMin = Math.min(...momentMs);
+  const tMax = Math.max(...momentMs);
+  const fracOf = (i) => (tMax === tMin ? 0 : (momentMs[i] - tMin) / (tMax - tMin));
+  const dayOf = (ms) => (startMs ? Math.floor((ms - startMs) / DAY_MS) : 0);
+  let speed = 1;
+  let dragging = false;
+  const RING_C = 2 * Math.PI * 21;
+
   function drawPhase(current) {
-    if (!startMs) { render(phaseEl, ""); return; }
-    const day = current ? DAY(new Date(String(current.ts).replace(" ", "T") + "Z") - startMs) : 0;
-    const spans = PHASE_SPANS.map((p) => ({ ...p, active: day >= p.from && day < p.to }));
-    render(phaseEl, html`
-      <div class="v-arena__phase-bar" role="img" aria-label="Event day ${day} of 8">
-        ${spans.map((p) => html`
-          <div class="v-arena__phase-seg ${p.active ? "is-active" : ""}" style="flex:${p.to - p.from}">
-            <span>${p.label}</span>
-            <i style="left:${Math.max(0, Math.min(100, ((day - p.from) / (p.to - p.from)) * 100))}%"></i>
-          </div>`)}
-      </div>`);
+    const readout = controlsEl.querySelector("#ar-readout");
+    const track = controlsEl.querySelector("#ar-track");
+    if (!readout) return;
+    if (!current) { readout.textContent = ""; return; }
+    const day = dayOf(momentMs[rIndex]);
+    const span = PHASE_SPANS.find((p) => day >= p.from && day < p.to) || PHASE_SPANS[PHASE_SPANS.length - 1];
+    const name = store.agentName(current.agentId);
+    const target = current.targetId ? store.agentName(current.targetId) : "";
+    const what = current.kind === "idea"
+      ? `${name} submitted an idea`
+      : `${name} → ${target} · ${(TYPES[current.type] || TYPE_OTHER).label}`;
+    readout.textContent = `Day ${Math.max(0, day)} · ${span.label} — ${what} · ${rIndex + 1} / ${moments.length}`;
+    if (track) track.setAttribute("aria-valuenow", String(rIndex));
   }
 
   function drawControls() {
     render(controlsEl, html`
-      <div class="v-arena__bar">
-        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-play" aria-label="Play">▶</button>
-        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-back" aria-label="Step back">←</button>
-        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-fwd" aria-label="Step forward">→</button>
-        <input type="range" id="ar-range" min="0" max="${moments.length - 1}" value="${Math.max(0, rIndex)}" aria-label="Timeline position" />
-        <span class="v-arena__pos">${rIndex + 1} / ${moments.length}</span>
+      <div class="v-arena__transport">
+        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-to-start" aria-label="Jump to start">⏮</button>
+        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-back" aria-label="Step back">−1</button>
+        <button class="v-arena__play" id="ar-play" aria-label="Play">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <circle class="v-arena__ring-track" cx="24" cy="24" r="21"></circle>
+            <circle class="v-arena__ring-fill" id="ar-ring" cx="24" cy="24" r="21"></circle>
+            <path class="v-arena__glyph v-arena__glyph-play" d="M19 15 L35 24 L19 33 Z"></path>
+            <path class="v-arena__glyph v-arena__glyph-pause" d="M18 15 L23 15 L23 33 L18 33 Z M25 15 L30 15 L30 33 L25 33 Z"></path>
+          </svg>
+        </button>
+        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-fwd" aria-label="Step forward">+1</button>
+        <button class="arena-btn arena-btn--sm arena-btn--ghost" id="ar-to-end" aria-label="Skip to end">⏭</button>
+        <div class="v-arena__speed" role="group" aria-label="Playback speed">
+          <button data-speed="1" class="is-active" aria-pressed="true">1×</button>
+          <button data-speed="2" aria-pressed="false">2×</button>
+          <button data-speed="4" aria-pressed="false">4×</button>
+        </div>
+      </div>
+      <div class="v-arena__readout" id="ar-readout" aria-live="polite"></div>
+      <div class="v-arena__track" id="ar-track" tabindex="0" role="slider" aria-label="Timeline"
+           aria-valuemin="0" aria-valuemax="${moments.length - 1}" aria-valuenow="0">
+        <div class="v-arena__track-phases" aria-hidden="true">
+          ${PHASE_SPANS.map((p) => html`
+            <div class="v-arena__track-phase" style="left:${(p.from / 8) * 100}%;width:${((p.to - p.from) / 8) * 100}%"><span>${p.label}</span></div>`)}
+        </div>
+        <div class="v-arena__track-ticks" aria-hidden="true">
+          ${moments.map((m, i) => html`<i style="left:${fracOf(i) * 100}%"></i>`)}
+        </div>
+        <div class="v-arena__playhead" id="ar-playhead"><i></i></div>
       </div>`);
-    const range = controlsEl.querySelector("#ar-range");
+
+    const track = controlsEl.querySelector("#ar-track");
     const playBtn = controlsEl.querySelector("#ar-play");
-    range.addEventListener("input", () => { stop(); goTo(parseInt(range.value, 10), false); });
     playBtn.addEventListener("click", () => (playTimer ? stop() : play()));
+    controlsEl.querySelector("#ar-to-start").addEventListener("click", () => { stop(); goTo(0, false); });
     controlsEl.querySelector("#ar-back").addEventListener("click", () => { stop(); goTo(rIndex - 1, false); });
     controlsEl.querySelector("#ar-fwd").addEventListener("click", () => { stop(); goTo(rIndex + 1, false); });
+    controlsEl.querySelector("#ar-to-end").addEventListener("click", () => { stop(); goTo(moments.length - 1, false); });
+    for (const btn of controlsEl.querySelectorAll(".v-arena__speed button")) {
+      btn.addEventListener("click", () => {
+        speed = parseInt(btn.dataset.speed, 10);
+        controlsEl.querySelectorAll(".v-arena__speed button").forEach((b) => {
+          b.classList.toggle("is-active", b === btn);
+          b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+        });
+        if (playTimer) { stop(); play(); }
+      });
+    }
+
+    /* Click-and-drag scrubbing straight on the track. */
+    function seekTo(clientX) {
+      const rect = track.getBoundingClientRect();
+      const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      const target = tMin + frac * (tMax - tMin);
+      let best = 0, bestDiff = Infinity;
+      for (let i = 0; i < moments.length; i++) {
+        const d = Math.abs(momentMs[i] - target);
+        if (d < bestDiff) { bestDiff = d; best = i; }
+      }
+      stop();
+      goTo(best, false);
+    }
+    track.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      seekTo(e.clientX);
+      track.setPointerCapture(e.pointerId);
+      const move = (ev) => { if (ev.buttons) seekTo(ev.clientX); };
+      const up = () => {
+        dragging = false;
+        track.removeEventListener("pointermove", move);
+        track.removeEventListener("pointerup", up);
+      };
+      track.addEventListener("pointermove", move);
+      track.addEventListener("pointerup", up);
+    });
+    track.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") { e.preventDefault(); stop(); goTo(rIndex - 1, false); }
+      if (e.key === "ArrowRight") { e.preventDefault(); stop(); goTo(rIndex + 1, false); }
+    });
+
+    updatePlayhead();
+  }
+
+  function updatePlayhead() {
+    const playhead = controlsEl.querySelector("#ar-playhead");
+    const ring = controlsEl.querySelector("#ar-ring");
+    const track = controlsEl.querySelector("#ar-track");
+    if (playhead) playhead.style.left = `${fracOf(rIndex) * 100}%`;
+    if (ring) {
+      const progress = moments.length > 1 ? rIndex / (moments.length - 1) : 1;
+      ring.style.strokeDashoffset = String(RING_C * (1 - progress));
+    }
+    if (track) track.setAttribute("aria-valuenow", String(Math.max(0, rIndex)));
   }
 
   function stop() {
     clearInterval(playTimer);
     playTimer = null;
     const b = controlsEl.querySelector("#ar-play");
-    if (b) { b.textContent = "▶"; b.setAttribute("aria-label", "Play"); }
+    if (b) { b.classList.remove("is-playing"); b.setAttribute("aria-label", "Play"); }
   }
 
   function play() {
     const b = controlsEl.querySelector("#ar-play");
-    b.textContent = "❚❚"; b.setAttribute("aria-label", "Pause");
+    b.classList.add("is-playing");
+    b.setAttribute("aria-label", "Pause");
     playTimer = setInterval(() => {
       if (rIndex + 1 >= moments.length) return stop();
       goTo(rIndex + 1, false);
-    }, STEP_MS);
+    }, STEP_MS / speed);
   }
 
   function goTo(i, scroll = true) {
     if (!moments.length) return;
     rIndex = Math.max(0, Math.min(moments.length - 1, i));
     applyReplay();
+    updatePlayhead();
     if (scroll) {
       const active = feedEl.querySelector(".is-active");
       if (active && feedEl) feedEl.scrollTop = active.offsetTop - feedEl.clientHeight / 2;
