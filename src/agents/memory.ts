@@ -151,11 +151,22 @@ export function cosineSimilarity(a: number[], b: number[]): number {
  * existing embedding instead of re-embedding, and returns a Map so callers
  * can skip ids Vectorize doesn't have (shouldn't happen for ideas, but
  * getByIds silently omits unknown ids rather than erroring).
+ *
+ * Chunks at 20 ids per call: Vectorize rejects getByIds payloads above that
+ * (VECTOR_GET_ERROR 40007 "too many ids in payload; max id count is 20").
+ * Found live 2026-08-13: the autonomous ideathon c35a0401 was the first
+ * event judged in score-all mode (Groq-pinned -> 36 ideas instead of the
+ * 6 finalists Workers-AI-pinned events produced), and handleTeamFormation's
+ * all-candidates fetch blew the cap every cron tick for ~23h.
  */
 export async function getVectorsByIds(env: Env, ids: string[]): Promise<Map<string, number[]>> {
   if (ids.length === 0) return new Map();
-  const vectors = await env.ARCHIVE_VECTORS.getByIds(ids);
-  return new Map(vectors.map((v) => [v.id, Array.from(v.values)]));
+  const vectors = new Map<string, number[]>();
+  for (let i = 0; i < ids.length; i += 20) {
+    const batch = await env.ARCHIVE_VECTORS.getByIds(ids.slice(i, i + 20));
+    for (const v of batch) vectors.set(v.id, Array.from(v.values));
+  }
+  return vectors;
 }
 
 export interface PairwiseSimilarity {
