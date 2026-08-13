@@ -495,7 +495,11 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   //
   // Code of Conduct v3.1 (docs/ARENA_CONDUCT_V3.md R7/R8):
   //  - recycle_class != 'hard' — hard violations never advance, whatever
-  //    their raw score (the sim's exclusion, not a penalty).
+  //    their raw score (the sim's exclusion, not a penalty). NULL is
+  //    pre-conduct (legacy) and must pass: in SQL, NULL != 'hard' is not
+  //    TRUE, so a bare != clause silently drops every legacy idea — found
+  //    live 2026-08-13, first run of this query against the all-legacy
+  //    c35a0401 parent returned zero candidates.
   //  - R8 tie-break in the ORDER BY: when ideathon scores tie (within exact
   //    float equality — runoff handles the near-miss case below), the
   //    lower-similarity idea, then the fewer-strikes agent, then the earlier
@@ -505,7 +509,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
     `SELECT i.id, i.agent_id, i.co_agent_id, i.title, i.one_liner, i.problem, i.solution, i.build_scope,
             i.ideathon_score, i.recycle_sim, i.created_at, a.conduct_strikes
      FROM archive_ideas i LEFT JOIN archive_agents a ON a.id = i.agent_id
-     WHERE i.event_id = ? AND i.status = 'judged' AND i.recycle_class != 'hard'
+     WHERE i.event_id = ? AND i.status = 'judged' AND (i.recycle_class IS NULL OR i.recycle_class != 'hard')
      ORDER BY i.ideathon_score DESC, COALESCE(i.recycle_sim, 0.5) ASC,
               COALESCE(a.conduct_strikes, 0) ASC, i.created_at ASC`
   ).bind(event.parent_event_id).all<IdeaForBuild>();
