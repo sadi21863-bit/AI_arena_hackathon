@@ -19,7 +19,7 @@
 
 import { fetchJson } from "../core/api.js";
 import { html, render } from "../core/html.js";
-import { href } from "../core/router.js";
+import { href, navigate } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isLive, typeLabel, phaseLabel } from "../core/model.js";
 import { shortId } from "../core/fmt.js";
@@ -1158,6 +1158,22 @@ export async function mount(el, params) {
           </div>
         </div>`;
       })}`);
+
+      // Navigation must not depend on the anchor receiving a click. The tl
+      // container witnesses a DOM shift mid-click (pointerdown lands on the
+      // chip, pointerup on a neighbour) whenever the room re-renders under
+      // the pointer, which swallows the browser's click event entirely.
+      // Navigating on pointerup with the same 4px drag threshold as the
+      // scrubber is deterministic — the href stays on the anchor for
+      // middle-click/open-in-new-tab and semantics.
+      lanesEl.querySelectorAll("a.v-office__tl-chip").forEach((a) => {
+        a.addEventListener("pointerdown", (ev) => { a.__pdX = ev.clientX; });
+        a.addEventListener("pointerup", (ev) => {
+          if (Math.abs(ev.clientX - (a.__pdX ?? ev.clientX)) <= 4) {
+            navigate(a.getAttribute("href").replace(/^#/, ""));
+          }
+        });
+      });
 
       if (!tl) {
         tl = { i: -1, frac: 0, playing: false, speed: 1, dragging: false };
