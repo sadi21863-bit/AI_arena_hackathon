@@ -457,32 +457,17 @@
   margin: 8px 2px 0; font-family: var(--arena-font-mono); font-size: 0.72rem;
   color: var(--arena-ink-soft); min-height: 1.2em; text-align: center;
 }
-.v-office__tl-transport { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
-.v-office__tl-btn {
-  appearance: none; background: transparent; border: 1px solid var(--arena-line-strong);
-  border-radius: 8px; cursor: pointer; font-family: var(--arena-font-mono);
-  font-size: 0.72rem; color: var(--arena-ink-soft); padding: 5px 10px;
+.v-office__tl-trigger {
+  appearance: none; cursor: pointer; flex: none; margin-top: 4px;
+  display: inline-flex; align-items: center;
+  font-family: var(--arena-font-mono); font-size: 0.72rem; letter-spacing: 0.04em;
+  color: var(--arena-ink-soft);
+  background: transparent; border: 1px solid var(--arena-line-strong);
+  border-radius: 999px; padding: 7px 14px;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
-.v-office__tl-btn:hover { color: var(--arena-ink); border-color: var(--arena-clay-deep); }
-.v-office__tl-play {
-  appearance: none; background: transparent; border: none; padding: 0; cursor: pointer;
-  width: 44px; height: 44px;
+.v-office__tl-trigger:hover { border-color: var(--arena-clay-deep); color: var(--arena-ink); }
+.v-office__tl-trigger.is-playing {
+  border-color: var(--arena-clay); color: var(--arena-clay-deep);
+  background: var(--arena-clay-soft);
 }
-.v-office__tl-play svg { width: 100%; height: 100%; display: block; }
-.v-office__tl-ring-track { fill: none; stroke: var(--arena-line); stroke-width: 3; }
-.v-office__tl-ring-fill {
-  fill: none; stroke: var(--arena-clay); stroke-width: 3; stroke-linecap: round;
-  stroke-dasharray: 119.38; stroke-dashoffset: 119.38;
-  transform: rotate(-90deg); transform-origin: 50% 50%;
-  transition: stroke-dashoffset 0.25s ease;
-}
-.v-office__tl-glyph { fill: var(--arena-ink); }
-.v-office__tl-glyph-pause { display: none; }
-.v-office__tl-play.is-playing .v-office__tl-glyph-play { display: none; }
-.v-office__tl-play.is-playing .v-office__tl-glyph-pause { display: block; }
-.v-office__tl-speed { display: flex; border: 1px solid var(--arena-line-strong); border-radius: 999px; overflow: hidden; }
-.v-office__tl-speed button {
-  appearance: none; background: transparent; border: none; cursor: pointer;
-  font-family: var(--arena-font-mono); font-size: 0.66rem; color: var(--arena-ink-soft); padding: 4px 9px;
-}
-.v-office__tl-speed button.is-active { background: var(--arena-clay-soft); color: var(--arena-bg); }

@@ -426,8 +426,9 @@ export async function mount(el, params) {
       <div class="v-office__turns-head">
         <div>
           <div class="arena-section-label">Build · both teams</div>
-          <p class="v-office__turns-note">Each turn sits where it started, sized by how long it ran — the empty space between chips is real idle time between builds. Play, scrub, or click a turn to open its diff.</p>
+          <p class="v-office__turns-note">Each turn sits where it started, sized by how long it ran — the empty space between chips is real idle time between builds. Click a turn to open its diff; drag the track or press ←/→ to move through time.</p>
         </div>
+        <button type="button" class="v-office__tl-trigger" data-act="play" aria-pressed="false">▶ Watch the build</button>
       </div>
       <div class="v-office__tl" id="of-tl">
         <div class="v-office__tl-axis" id="of-tl-axis"></div>
@@ -436,26 +437,6 @@ export async function mount(el, params) {
              aria-label="Build timeline" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
       </div>
       <div class="v-office__tl-readout" id="of-tl-readout"></div>
-      <div class="v-office__tl-transport" id="of-tl-transport">
-        <button type="button" class="v-office__tl-btn" data-act="start" title="Jump to start" aria-label="Jump to start">⏮</button>
-        <button type="button" class="v-office__tl-btn" data-act="prev" title="Previous moment" aria-label="Previous moment">−1</button>
-        <button type="button" class="v-office__tl-play" id="of-tl-play" data-act="play" aria-label="Play build">
-          <svg viewBox="0 0 44 44">
-            <circle class="v-office__tl-ring-track" cx="22" cy="22" r="19"></circle>
-            <circle class="v-office__tl-ring-fill" cx="22" cy="22" r="19"></circle>
-            <path class="v-office__tl-glyph v-office__tl-glyph-play" d="M18 14 L32 22 L18 30 Z"></path>
-            <rect class="v-office__tl-glyph v-office__tl-glyph-pause" x="17" y="14" width="4" height="16"></rect>
-            <rect class="v-office__tl-glyph v-office__tl-glyph-pause" x="24" y="14" width="4" height="16"></rect>
-          </svg>
-        </button>
-        <button type="button" class="v-office__tl-btn" data-act="next" title="Next moment" aria-label="Next moment">+1</button>
-        <button type="button" class="v-office__tl-btn" data-act="end" title="Jump to end" aria-label="Jump to end">⏭</button>
-        <div class="v-office__tl-speed" role="group" aria-label="Speed">
-          <button type="button" data-speed="1" class="is-active">1×</button>
-          <button type="button" data-speed="2">2×</button>
-          <button type="button" data-speed="4">4×</button>
-        </div>
-      </div>
     </section>
     <p class="v-office__chronicle" id="of-chronicle" hidden></p>
     <div class="arena-card v-office__inspector" id="of-inspector">
@@ -1003,8 +984,10 @@ export async function mount(el, params) {
    * the idle gaps between them are exactly the things a badge cannot say.
    *
    * Lanes re-render only when the turn data actually changes (fingerprint on
-   * the store tick), so the playhead position survives polls. Transport
-   * handlers bind once per mount; teardown just clears the advancing timer.
+   * the store tick), so the playhead position survives polls. Controls bind
+   * once per mount; teardown just clears the advancing timer. There is no
+   * transport bar: pacing lives on the timeline itself (click = seek, drag =
+   * scrub, arrows step) with a single pill that plays or pauses the build.
    */
   function drawTurnTimeline() {
     const section = el.querySelector("#of-turns");
@@ -1013,9 +996,7 @@ export async function mount(el, params) {
     const lanesEl = section && el.querySelector("#of-tl-lanes");
     const readoutEl = section && el.querySelector("#of-tl-readout");
     const playheadEl = section && el.querySelector("#of-tl-playhead");
-    const playEl = section && el.querySelector("#of-tl-play");
-    const ringFill = playEl && playEl.querySelector(".v-office__tl-ring-fill");
-    const RING_C = 2 * Math.PI * 19;
+    const triggerEl = section && el.querySelector("[data-act='play']");
     if (!section || !tlEl) return;
 
     const fp = (allTurns || []).map((t) =>
@@ -1066,28 +1047,28 @@ export async function mount(el, params) {
     const renderReadout = () => {
       readoutEl.textContent = readoutAt(spanStart + tl.frac * spanMs);
     };
-    const renderTransport = () => {
-      playEl.classList.toggle("is-playing", tl.playing);
-      ringFill.style.strokeDashoffset = String(RING_C * (1 - tl.frac));
-      section.querySelectorAll("[data-speed]").forEach((b) =>
-        b.classList.toggle("is-active", Number(b.dataset.speed) === tl.speed));
+    const renderPill = () => {
+      triggerEl.classList.toggle("is-playing", tl.playing);
+      triggerEl.setAttribute("aria-pressed", String(tl.playing));
+      triggerEl.textContent = tl.playing ? "❚❚ Pause build" : "▶ Watch the build";
     };
     const advance = () => {
       if (tl.i >= lastIndex) {
         tl.playing = false;
-        renderTransport();
+        renderPill();
         return;
       }
       tl.i += 1;
       setPlayhead((moments[tl.i].t - spanStart) / spanMs);
       renderReadout();
-      if (tl.playing) turnTimer = setTimeout(advance, 900 / tl.speed);
+      if (tl.playing) turnTimer = setTimeout(advance, 900);
     };
     const seek = (ev) => {
       const rect = tlEl.getBoundingClientRect();
       const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
       setPlayhead(frac);
       tl.i = nearest(frac);
+      if (tl.playing) { tl.playing = false; clearTimeout(turnTimer); renderPill(); }
       renderReadout();
     };
 
@@ -1176,26 +1157,12 @@ export async function mount(el, params) {
       });
 
       if (!tl) {
-        tl = { i: -1, frac: 0, playing: false, speed: 1, dragging: false };
-        const transportEl = section.querySelector("#of-tl-transport");
-        transportEl.addEventListener("click", (ev) => {
-          const act = ev.target.closest("[data-act]")?.dataset.act;
-          if (act === "start") { tl.i = 0; setPlayhead(0); renderReadout(); }
-          else if (act === "end") { tl.i = lastIndex; setPlayhead(1); renderReadout(); }
-          else if (act === "prev") { tl.i = Math.max(0, tl.i - 1); setPlayhead((moments[tl.i].t - spanStart) / spanMs); renderReadout(); }
-          else if (act === "next") { tl.i = Math.min(lastIndex, tl.i + 1); setPlayhead((moments[tl.i].t - spanStart) / spanMs); renderReadout(); }
-          else if (act === "play") {
-            if (tl.i >= lastIndex) tl.i = -1;
-            if (tl.playing) { tl.playing = false; clearTimeout(turnTimer); }
-            else { tl.playing = true; advance(); }
-            renderTransport();
-          }
-        });
-        section.querySelector(".v-office__tl-speed").addEventListener("click", (ev) => {
-          const b = ev.target.closest("[data-speed]");
-          if (!b) return;
-          tl.speed = Number(b.dataset.speed);
-          renderTransport();
+        tl = { i: -1, frac: 0, playing: false, dragging: false };
+        triggerEl.addEventListener("click", () => {
+          if (tl.i >= lastIndex) tl.i = -1;
+          if (tl.playing) { tl.playing = false; clearTimeout(turnTimer); }
+          else { tl.playing = true; advance(); }
+          renderPill();
         });
         playheadEl.addEventListener("keydown", (ev) => {
           // The playhead is focused (tabindex 0), so these travel with you
@@ -1208,21 +1175,17 @@ export async function mount(el, params) {
           if (ev.key === "ArrowLeft") { ev.preventDefault(); step(-1); }
           else if (ev.key === "ArrowRight") { ev.preventDefault(); step(1); }
         });
-        // Drag starts only after a 4px threshold. Capturing the pointer on
-        // pointerdown would retarget the pointerup and swallow the anchor's
-        // click — turn chips link to the Diff view, and that navigation is
-        // the reason they exist.
+        // Scrub by dragging; a plain click on the track seeks. Seeking also
+        // pauses — clicking time shouldn't leave the build running behind you.
         let dragStart = null;
         tlEl.addEventListener("pointerdown", (ev) => {
           dragStart = { x: ev.clientX, y: ev.clientY, pid: ev.pointerId };
+          seek(ev);
         });
         tlEl.addEventListener("pointermove", (ev) => {
           if (!dragStart) return;
           if (!tl.dragging && Math.abs(ev.clientX - dragStart.x) > 4) {
             tl.dragging = true;
-            tl.playing = false;
-            clearTimeout(turnTimer);
-            renderTransport();
             tlEl.setPointerCapture(dragStart.pid);
           }
           if (tl.dragging) seek(ev);
@@ -1235,8 +1198,12 @@ export async function mount(el, params) {
         };
         tlEl.addEventListener("pointerup", endDrag);
         tlEl.addEventListener("pointercancel", endDrag);
-        setPlayhead(0);
-        renderTransport();
+        // Default position tells the truth about the event: a live build
+        // parks the playhead at "now" — you arrived mid-build, look at where
+        // things stand; a finished build parks at the start, ready to watch.
+        setPlayhead(anyRunning ? 1 : 0);
+        tl.i = anyRunning ? lastIndex : -1;
+        renderPill();
         renderReadout();
       }
     }
