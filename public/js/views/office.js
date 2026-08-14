@@ -1192,16 +1192,31 @@ export async function mount(el, params) {
           if (ev.key === "ArrowLeft") { ev.preventDefault(); step(-1); }
           else if (ev.key === "ArrowRight") { ev.preventDefault(); step(1); }
         });
+        // Drag starts only after a 4px threshold. Capturing the pointer on
+        // pointerdown would retarget the pointerup and swallow the anchor's
+        // click — turn chips link to the Diff view, and that navigation is
+        // the reason they exist.
+        let dragStart = null;
         tlEl.addEventListener("pointerdown", (ev) => {
-          tl.dragging = true;
-          tl.playing = false;
-          clearTimeout(turnTimer);
-          renderTransport();
-          tlEl.setPointerCapture(ev.pointerId);
-          seek(ev);
+          dragStart = { x: ev.clientX, y: ev.clientY, pid: ev.pointerId };
         });
-        tlEl.addEventListener("pointermove", (ev) => { if (tl.dragging) seek(ev); });
-        const endDrag = (ev) => { if (!tl.dragging) return; tl.dragging = false; tlEl.releasePointerCapture(ev.pointerId); };
+        tlEl.addEventListener("pointermove", (ev) => {
+          if (!dragStart) return;
+          if (!tl.dragging && Math.abs(ev.clientX - dragStart.x) > 4) {
+            tl.dragging = true;
+            tl.playing = false;
+            clearTimeout(turnTimer);
+            renderTransport();
+            tlEl.setPointerCapture(dragStart.pid);
+          }
+          if (tl.dragging) seek(ev);
+        });
+        const endDrag = (ev) => {
+          dragStart = null;
+          if (!tl.dragging) return;
+          tl.dragging = false;
+          tlEl.releasePointerCapture(ev.pointerId);
+        };
         tlEl.addEventListener("pointerup", endDrag);
         tlEl.addEventListener("pointercancel", endDrag);
         setPlayhead(0);
