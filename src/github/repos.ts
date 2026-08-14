@@ -130,11 +130,32 @@ async function putFile(env: Env, owner: string, repo: string, path: string, cont
  *
  * README.md is deliberately NOT here — it carries the team's idea brief and
  * is per-team content, not harness.
+ *
+ * Every file Dockerfile.arena-team-base COPYs into the image MUST be here:
+ * a missing build-context path fails `docker build` before the agent ever
+ * runs, deterministically, on every turn. Found live 2026-08-14:
+ * playwright-mcp.json and docker/skills/ were added to the Dockerfile (COPY
+ * lines) a week before they reached this list, so both teams' 26/26 turns
+ * died at the image-build step with the repo's head_sha never moving an
+ * inch. The allowlist is only a contract if new harness files are added to
+ * it when the harness grows.
  */
+const SKILL_PATHS = [
+  "docker/skills/arena-team/SKILL.md",
+  "docker/skills/code-review-and-quality/SKILL.md",
+  "docker/skills/debugging-and-error-recovery/SKILL.md",
+  "docker/skills/security-and-hardening/SKILL.md",
+  "docker/skills/skill-creator/SKILL.md",
+  "docker/skills/test-driven-development/SKILL.md",
+  "docker/skills/ui-verify/SKILL.md",
+] as const;
+
 const HARNESS_FILES = [
   ".github/workflows/team-build-turn.yml",
   "docker/Dockerfile.arena-team-base",
   "docker/opencode.json",
+  "docker/playwright-mcp.json",
+  ...SKILL_PATHS,
   "scripts/workers_ai_shim.js",
 ] as const;
 
