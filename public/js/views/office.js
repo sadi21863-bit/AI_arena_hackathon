@@ -422,10 +422,6 @@ export async function mount(el, params) {
     <div id="of-note"></div>
     <div class="v-office__set" id="of-set"></div>
     <div id="of-stage"><div class="arena-skel arena-skel--block" style="min-height:440px"></div></div>
-    <p class="v-office__chronicle" id="of-chronicle" hidden></p>
-    <div class="arena-card v-office__inspector" id="of-inspector">
-      <div class="v-office__inspector-empty">Click a character to see what they're working on.</div>
-    </div>
     <section class="arena-card v-office__turns" id="of-turns" hidden>
       <div class="v-office__turns-head">
         <div>
@@ -461,6 +457,10 @@ export async function mount(el, params) {
         </div>
       </div>
     </section>
+    <p class="v-office__chronicle" id="of-chronicle" hidden></p>
+    <div class="arena-card v-office__inspector" id="of-inspector">
+      <div class="v-office__inspector-empty">Click a character to see what they're working on.</div>
+    </div>
     <div class="v-office__legend" id="of-legend"></div>
     <p class="arena-freshness" data-freshness></p>`);
 
