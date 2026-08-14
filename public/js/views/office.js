@@ -331,11 +331,8 @@ export async function mount(el, params) {
   /* team_id -> agent_id whose turn it is next. */
   let turnHolder = {};
   /* Every build turn for this event, not just the latest per team — feeds
-     the build timeline below the room. */
+     the build strip below the room. */
   let allTurns = [];
-  /* Build-timeline player state; null until the first render binds it. */
-  let tl = null;
-  let turnTimer = 0;
   let turnFingerprint = "";
   let SET = SETS.studio;
   let ZONES = SET.zones;
@@ -424,19 +421,10 @@ export async function mount(el, params) {
     <div id="of-stage"><div class="arena-skel arena-skel--block" style="min-height:440px"></div></div>
     <section class="arena-card v-office__turns" id="of-turns" hidden>
       <div class="v-office__turns-head">
-        <div>
-          <div class="arena-section-label">Build · both teams</div>
-          <p class="v-office__turns-note">Each turn sits where it started, sized by how long it ran — the empty space between chips is real idle time between builds. Click a turn to open its diff; drag the track or press ←/→ to move through time.</p>
-        </div>
-        <button type="button" class="v-office__tl-trigger" data-act="play" aria-pressed="false">▶ Watch the build</button>
+        <div class="arena-section-label">Build · both teams</div>
+        <p class="v-office__turns-note">One block per turn, oldest left — the colour is the verdict. Hover a block for its duration and downtime, click it for the diff.</p>
       </div>
-      <div class="v-office__tl" id="of-tl">
-        <div class="v-office__tl-axis" id="of-tl-axis"></div>
-        <div class="v-office__tl-lanes" id="of-tl-lanes"></div>
-        <div class="v-office__tl-playhead" id="of-tl-playhead" tabindex="0" role="slider"
-             aria-label="Build timeline" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
-      </div>
-      <div class="v-office__tl-readout" id="of-tl-readout"></div>
+      <div class="v-office__build-strip" id="of-build-strip"></div>
     </section>
     <p class="v-office__chronicle" id="of-chronicle" hidden></p>
     <div class="arena-card v-office__inspector" id="of-inspector">
@@ -978,26 +966,18 @@ export async function mount(el, params) {
   }
 
   /**
-   * The build's own replay: every turn both teams dispatched, on one real
-   * time axis, under a playhead. The room can only show the LATEST turn on a
-   * bench badge; this shows the whole build — pacing, all-night turns, and
-   * the idle gaps between them are exactly the things a badge cannot say.
-   *
-   * Lanes re-render only when the turn data actually changes (fingerprint on
-   * the store tick), so the playhead position survives polls. Controls bind
-   * once per mount; teardown just clears the advancing timer. There is no
-   * transport bar: pacing lives on the timeline itself (click = seek, drag =
-   * scrub, arrows step) with a single pill that plays or pauses the build.
+   * The build at a glance, in the language every CI surface converged on:
+   * one small block per run, oldest left, colour IS the verdict (green
+   * passed / red failed / amber pulsing while running). Two quiet rows —
+   * no axis, no playhead, no transport, nothing to operate. Hover a block
+   * for its duration, verdict and the idle gap before it; click it for the
+   * diff. Rows re-render only when the turn data actually changes
+   * (fingerprint on the store tick).
    */
-  function drawTurnTimeline() {
+  function drawTurnsStrip() {
     const section = el.querySelector("#of-turns");
-    const tlEl = section && el.querySelector("#of-tl");
-    const axisEl = section && el.querySelector("#of-tl-axis");
-    const lanesEl = section && el.querySelector("#of-tl-lanes");
-    const readoutEl = section && el.querySelector("#of-tl-readout");
-    const playheadEl = section && el.querySelector("#of-tl-playhead");
-    const triggerEl = section && el.querySelector("[data-act='play']");
-    if (!section || !tlEl) return;
+    const stripEl = section && el.querySelector("#of-build-strip");
+    if (!section || !stripEl) return;
 
     const fp = (allTurns || []).map((t) =>
       `${t.turn_id}:${t.status}:${t.conclusion}:${t.dispatched_at}:${t.completed_at}`).join("|");
@@ -1007,206 +987,58 @@ export async function mount(el, params) {
     if (!hasRoster || !allTurns.length || !teams.length) { section.hidden = true; return; }
     section.hidden = false;
 
-    // Moments: every start and end boundary, sorted. A running turn has no
-    // end moment yet — the axis simply extends to now.
-    const moments = [];
-    let spanEnd = 0;
-    let anyRunning = false;
-    for (const t of allTurns) {
-      const s = at(t.dispatched_at);
-      if (!Number.isFinite(s)) continue;
-      moments.push({ t: s, kind: "start", turn: t });
-      const e = at(t.completed_at);
-      if (Number.isFinite(e) && e > s) {
-        moments.push({ t: e, kind: "end", turn: t });
-        if (e > spanEnd) spanEnd = e;
-      } else anyRunning = true;
-    }
-    if (!moments.length) { section.hidden = true; return; }
-    moments.sort((a, b) => a.t - b.t || (a.kind === "end" ? 1 : -1));
-    const spanStart = moments[0].t;
-    const now = Date.now();
-    if (anyRunning && now > spanEnd) spanEnd = now;
-    if (spanEnd <= spanStart) spanEnd = spanStart + DAY_MS;
-    const spanMs = spanEnd - spanStart;
-    const x = (t) => Math.max(0, Math.min(1, (t - spanStart) / spanMs)) * 100;
-    const lastIndex = moments.length - 1;
+    if (!changed) return;
 
     const stateLabel = { success: "passed", failure: "failed", running: "running" };
-    const nearest = (frac) => {
-      const t = spanStart + frac * spanMs;
-      let lo = -1;
-      for (let k = 0; k < moments.length; k++) if (moments[k].t <= t) lo = k;
-      return lo;
-    };
-    const setPlayhead = (frac) => {
-      tl.frac = frac;
-      playheadEl.style.left = `${frac * 100}%`;
-      playheadEl.setAttribute("aria-valuenow", String(Math.round(frac * 100)));
-    };
-    const renderReadout = () => {
-      readoutEl.textContent = readoutAt(spanStart + tl.frac * spanMs);
-    };
-    const renderPill = () => {
-      triggerEl.classList.toggle("is-playing", tl.playing);
-      triggerEl.setAttribute("aria-pressed", String(tl.playing));
-      triggerEl.textContent = tl.playing ? "❚❚ Pause build" : "▶ Watch the build";
-    };
-    const advance = () => {
-      if (tl.i >= lastIndex) {
-        tl.playing = false;
-        renderPill();
-        return;
-      }
-      tl.i += 1;
-      setPlayhead((moments[tl.i].t - spanStart) / spanMs);
-      renderReadout();
-      if (tl.playing) turnTimer = setTimeout(advance, 900);
-    };
-    const seek = (ev) => {
-      const rect = tlEl.getBoundingClientRect();
-      const frac = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
-      setPlayhead(frac);
-      tl.i = nearest(frac);
-      if (tl.playing) { tl.playing = false; clearTimeout(turnTimer); renderPill(); }
-      renderReadout();
-    };
-
-    // What each team was doing at a given instant — the readout's job is to
-    // make "nothing happening" legible too, so idle gaps are named, not
-    // blanked.
-    function readoutAt(tMs) {
-      const day = Math.floor((tMs - spanStart) / DAY_MS) + 1;
-      const parts = teams.map((team) => {
-        const turns = allTurns
-          .filter((t) => t.team_id === team.id)
-          .sort((a, b) => (a.turn_number ?? 0) - (b.turn_number ?? 0));
-        const first = at(turns[0] && turns[0].dispatched_at);
-        if (!Number.isFinite(first) || tMs < first) return `${team.team_name}: no turns yet`;
-        let cur = null, next = null;
-        for (const t of turns) {
-          const st = at(t.dispatched_at);
-          if (!Number.isFinite(st)) continue;
-          if (st <= tMs) cur = t;
-          else { next = t; break; }
+    const now = Date.now();
+    render(stripEl, html`${teams.map((team) => {
+      const turns = allTurns
+        .filter((t) => t.team_id === team.id)
+        .sort((a, b) => (a.turn_number ?? 0) - (b.turn_number ?? 0));
+      let running = 0, passed = 0, failed = 0;
+      const blocks = turns.map((t, k) => {
+        const st = ciState(t);
+        const s = at(t.dispatched_at);
+        if (st === "running") running++;
+        else if (st === "success") passed++;
+        else failed++;
+        if (!Number.isFinite(s)) return html`<span class="v-office__strip-block is-${st}" title="turn ${t.turn_number} · unknown time"></span>`;
+        const what = st === "running"
+          ? `running ${fmtDur(now - s)}`
+          : `${stateLabel[st]} in ${fmtDur(at(t.completed_at) - s)}`;
+        let idle = "";
+        const prev = turns[k - 1];
+        if (prev) {
+          const gap = s - at(prev.completed_at);
+          if (Number.isFinite(gap) && gap > 0) idle = ` · idle ${fmtDur(gap)} after turn ${prev.turn_number}`;
         }
-        const cEnd = cur ? (ciState(cur) === "running" ? Infinity : at(cur.completed_at)) : 0;
-        if (cur && tMs < cEnd) {
-          return `${team.team_name}: turn ${cur.turn_number} running ${fmtDur(tMs - at(cur.dispatched_at))}`;
-        }
-        if (cur) {
-          const done = fmtDur(cEnd - at(cur.dispatched_at));
-          const gap = next ? fmtDur(at(next.dispatched_at) - cEnd) : "since";
-          return `${team.team_name}: turn ${cur.turn_number} ${stateLabel[ciState(cur)]} (${done}) · idle ${gap}`;
-        }
-        return `${team.team_name}: no turns yet`;
+        const title = `turn ${t.turn_number} · ${what}${idle}${t.head_sha ? ` · ${t.head_sha.slice(0, 7)}` : ""}`;
+        const block = { st, title };
+        return t.head_sha
+          ? html`<a class="v-office__strip-block is-${block.st}" title="${block.title}" href="${href(`/diff/${event.id}/${team.team_name}/${t.head_sha}`)}"></a>`
+          : html`<span class="v-office__strip-block is-${block.st}" title="${block.title}"></span>`;
       });
-      return `Day ${day} · ${utcTime(new Date(tMs).toISOString())} — ${parts.join(" · ")}`;
-    }
+      const sum = `${turns.length} turn${turns.length === 1 ? "" : "s"} · ${running} running · ${passed} passed · ${failed} failed`;
+      return html`
+      <div class="v-office__strip-row">
+        <div class="v-office__strip-head">
+          <span class="v-office__strip-team">${team.team_name}</span>
+          <span class="v-office__strip-sum">${sum}</span>
+        </div>
+        <div class="v-office__strip-blocks">${blocks}</div>
+      </div>`;
+    })}`);
 
-    if (changed) {
-      const days = Math.max(1, Math.ceil(spanMs / DAY_MS));
-      const marks = [];
-      for (let k = 1; k <= days; k++) {
-        const t = spanStart + k * DAY_MS;
-        if (t > spanEnd) break;
-        marks.push(html`<span style="left:${x(t).toFixed(2)}%">Day ${k}</span>`);
-      }
-      axisEl.replaceChildren();
-      render(axisEl, html`${marks}`);
-
-      render(lanesEl, html`${teams.map((team) => {
-        const turns = allTurns
-          .filter((t) => t.team_id === team.id)
-          .sort((a, b) => (a.turn_number ?? 0) - (b.turn_number ?? 0));
-        return html`
-        <div class="v-office__tl-lane">
-          <span class="v-office__tl-lane-label">${team.team_name}</span>
-          <div class="v-office__tl-lane-track">
-            ${turns.map((t) => {
-              const s = at(t.dispatched_at);
-              if (!Number.isFinite(s)) return "";
-              const st = ciState(t);
-              const end = st === "running" ? now : at(t.completed_at);
-              const w = Math.max(0.6, ((end - s) / spanMs) * 100);
-              const what = st === "running" ? "running" : `ran ${fmtDur(end - s)} · ${stateLabel[st]}`;
-              const title = `turn ${t.turn_number} · ${what}${t.head_sha ? ` · ${t.head_sha.slice(0, 7)}` : ""}`;
-              const chip = { left: x(s).toFixed(2), width: w.toFixed(2), title, num: t.turn_number, st };
-              return t.head_sha
-                ? html`<a class="v-office__tl-chip is-${chip.st}" style="left:${chip.left}%;width:${chip.width}%" href="${href(`/diff/${event.id}/${team.team_name}/${t.head_sha}`)}" title="${chip.title}"><span>${chip.num}</span></a>`
-                : html`<div class="v-office__tl-chip is-${chip.st}" style="left:${chip.left}%;width:${chip.width}%" title="${chip.title}"><span>${chip.num}</span></div>`;
-            })}
-          </div>
-        </div>`;
-      })}`);
-
-      // Navigation must not depend on the anchor receiving a click. The tl
-      // container witnesses a DOM shift mid-click (pointerdown lands on the
-      // chip, pointerup on a neighbour) whenever the room re-renders under
-      // the pointer, which swallows the browser's click event entirely.
-      // Navigating on pointerup with the same 4px drag threshold as the
-      // scrubber is deterministic — the href stays on the anchor for
-      // middle-click/open-in-new-tab and semantics.
-      lanesEl.querySelectorAll("a.v-office__tl-chip").forEach((a) => {
-        a.addEventListener("pointerdown", (ev) => { a.__pdX = ev.clientX; });
-        a.addEventListener("pointerup", (ev) => {
-          if (Math.abs(ev.clientX - (a.__pdX ?? ev.clientX)) <= 4) {
-            navigate(a.getAttribute("href").replace(/^#/, ""));
-          }
-        });
+    // Same pointerup navigation as before: the room re-renders under the
+    // pointer mid-click, which swallows the anchor's click entirely.
+    stripEl.querySelectorAll("a.v-office__strip-block").forEach((a) => {
+      a.addEventListener("pointerdown", (ev) => { a.__pdX = ev.clientX; });
+      a.addEventListener("pointerup", (ev) => {
+        if (Math.abs(ev.clientX - (a.__pdX ?? ev.clientX)) <= 4) {
+          navigate(a.getAttribute("href").replace(/^#/, ""));
+        }
       });
-
-      if (!tl) {
-        tl = { i: -1, frac: 0, playing: false, dragging: false };
-        triggerEl.addEventListener("click", () => {
-          if (tl.i >= lastIndex) tl.i = -1;
-          if (tl.playing) { tl.playing = false; clearTimeout(turnTimer); }
-          else { tl.playing = true; advance(); }
-          renderPill();
-        });
-        playheadEl.addEventListener("keydown", (ev) => {
-          // The playhead is focused (tabindex 0), so these travel with you
-          // instead of hijacking page-wide arrows like a global handler would.
-          const step = (dir) => {
-            tl.i = Math.max(-1, Math.min(lastIndex, tl.i + dir));
-            setPlayhead(tl.i < 0 ? 0 : (moments[tl.i].t - spanStart) / spanMs);
-            renderReadout();
-          };
-          if (ev.key === "ArrowLeft") { ev.preventDefault(); step(-1); }
-          else if (ev.key === "ArrowRight") { ev.preventDefault(); step(1); }
-        });
-        // Scrub by dragging; a plain click on the track seeks. Seeking also
-        // pauses — clicking time shouldn't leave the build running behind you.
-        let dragStart = null;
-        tlEl.addEventListener("pointerdown", (ev) => {
-          dragStart = { x: ev.clientX, y: ev.clientY, pid: ev.pointerId };
-          seek(ev);
-        });
-        tlEl.addEventListener("pointermove", (ev) => {
-          if (!dragStart) return;
-          if (!tl.dragging && Math.abs(ev.clientX - dragStart.x) > 4) {
-            tl.dragging = true;
-            tlEl.setPointerCapture(dragStart.pid);
-          }
-          if (tl.dragging) seek(ev);
-        });
-        const endDrag = (ev) => {
-          dragStart = null;
-          if (!tl.dragging) return;
-          tl.dragging = false;
-          tlEl.releasePointerCapture(ev.pointerId);
-        };
-        tlEl.addEventListener("pointerup", endDrag);
-        tlEl.addEventListener("pointercancel", endDrag);
-        // Default position tells the truth about the event: a live build
-        // parks the playhead at "now" — you arrived mid-build, look at where
-        // things stand; a finished build parks at the start, ready to watch.
-        setPlayhead(anyRunning ? 1 : 0);
-        tl.i = anyRunning ? lastIndex : -1;
-        renderPill();
-        renderReadout();
-      }
-    }
+    });
   }
 
   // Layout depends on the room's pixel size, which changes on resize with no
@@ -1430,7 +1262,7 @@ export async function mount(el, params) {
 
   draw(activity);
   scheduleRoam();
-  drawTurnTimeline();
+  drawTurnsStrip();
 
   // Re-draw off the shared store tick rather than a private timer.
   const off = store.events.subscribe(async () => {
@@ -1458,7 +1290,7 @@ export async function mount(el, params) {
     if (nextJudging) judging = nextJudging;
     if (nextCollab) applyCollaborations(nextCollab);
     draw(next);
-    drawTurnTimeline();
+    drawTurnsStrip();
   });
 
   return () => {
@@ -1471,7 +1303,6 @@ export async function mount(el, params) {
     window.removeEventListener("resize", onResize);
     clearTimeout(resizeTimer);
     clearTimeout(roamTimer);
-    clearTimeout(turnTimer);
     Object.values(nodes).forEach(stopWalk);
   };
 }
