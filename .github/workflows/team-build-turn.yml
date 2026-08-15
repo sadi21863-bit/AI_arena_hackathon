@@ -206,10 +206,35 @@ jobs:
         # threw that work away and re-ran the same turn from scratch. The
         # acceptance check below still fails a genuinely empty turn; this only
         # stops a late crash from discarding work that did happen.
+        #
+        # Self-healing watchdog (2026-08-15, docs/INVESTIGATION_2026-08-15.md):
+        # turns 15-18 (alpha) and 14-17 (beta) burned the full 120-min job
+        # timeout producing ZERO bytes of agent output — the first model call
+        # hung forever and only the job's hard cap ended the turn, which then
+        # reconciled as a 'cancelled' run. Two fixes:
+        #
+        #   (1) scripts/workers_ai_shim.js now times out a stalled upstream
+        #       api.cloudflare.com call (SHIM_UPSTREAM_TIMEOUT_MS, default
+        #       180s) so opencode sees a real error within minutes and either
+        #       retries or exits with a diagnosable failure. This is the root
+        #       cause fix.
+        #
+        #   (2) This watchdog is the belt-and-suspenders: the container runs
+        #       in the background while this step watches the turn logs AND
+        #       the working tree. If neither grows for
+        #       WATCHDOG_SILENCE_MINUTES (default 10), the agent is hung —
+        #       healthy agents emit a JSON event every 1-5s (measured: max
+        #       inter-event gap 17.6s on the one successful turn). Kill the
+        #       container, fail the turn FAST, so it records a real 'failure'
+        #       (never a silent 'cancelled') and the scheduler dispatches the
+        #       next turn minutes later instead of 120 minutes later.
         id: agent
         run: |
           set +e
-          docker run --rm \
+          CONTAINER="arena-agent-${{ github.run_id }}"
+          WATCHDOG_SILENCE_MINUTES="${WATCHDOG_SILENCE_MINUTES:-10}"
+
+          docker run --rm --name "$CONTAINER" \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
@@ -227,10 +252,49 @@ jobs:
             opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
               --model workers-ai/@cf/openai/gpt-oss-120b \
               --auto \
-              --format json > opencode-turn.log 2> opencode-turn.err.log
+              --format json > opencode-turn.log 2> opencode-turn.err.log &
+          DOCKER_PID=$!
+
+          LAST_BYTES=0
+          LAST_CHANGED=0
+          LAST_ACTIVE=$(date +%s)
+          TIMED_OUT=0
+          # Loop on the CONTAINER's state, not `kill -0 $DOCKER_PID`: a
+          # backgrounded process that has exited stays a zombie until `wait`,
+          # and kill -0 keeps succeeding on a zombie — so that test would never
+          # see a normally-finished turn and the watchdog would wrongly fire.
+          while [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ]; do
+            sleep 30
+            BYTES=$(( $(wc -c < opencode-turn.log 2>/dev/null || echo 0) + $(wc -c < opencode-turn.err.log 2>/dev/null || echo 0) ))
+            # File changes count as liveness only when the WORKING SET grows
+            # or shrinks — not merely being non-empty, or one write would keep
+            # a then-hung agent marked alive forever. The count (not a hash)
+            # misses same-file edits, but the BYTES signal covers those:
+            # opencode emits a JSON event per step, so a working agent grows
+            # the log constantly regardless of which file it edits.
+            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' 2>/dev/null | wc -l)
+            NOW=$(date +%s)
+            if [ "$BYTES" != "$LAST_BYTES" ] || [ "${CHANGED:-0}" != "$LAST_CHANGED" ]; then
+              LAST_BYTES=$BYTES
+              LAST_CHANGED=${CHANGED:-0}
+              LAST_ACTIVE=$NOW
+            fi
+            if [ $(( NOW - LAST_ACTIVE )) -ge $(( WATCHDOG_SILENCE_MINUTES * 60 )) ]; then
+              echo "::error::Agent silent for ${WATCHDOG_SILENCE_MINUTES} min (no output, no file changes) — killing container ${CONTAINER}"
+              docker kill "$CONTAINER" 2>/dev/null || true
+              TIMED_OUT=1
+              break
+            fi
+          done
+          wait "$DOCKER_PID"
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          echo "opencode exited $code"
+          echo "timed_out=$TIMED_OUT" >> "$GITHUB_OUTPUT"
+          if [ "$TIMED_OUT" = "1" ]; then
+            echo "opencode was killed by the silence watchdog after ${WATCHDOG_SILENCE_MINUTES} min of no activity (exit ${code})"
+          else
+            echo "opencode exited $code"
+          fi
           exit 0
         # --auto approves OpenCode's own permission prompts (needed since
         # there's no human to click "yes" in CI) — the container's cap-drop
@@ -255,7 +319,7 @@ jobs:
           echo "--- shim ---"
           cat "$RUNNER_TEMP/shim.log" 2>/dev/null || echo "shim.log not found"
           echo "--- crash signature (empty means the P0-0a id bug did not recur) ---"
-          grep -iE "expected 'id'|InvalidResponseData|upstream error" \
+          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream" \
             opencode-turn.log opencode-turn.err.log "$RUNNER_TEMP/shim.log" 2>/dev/null || true
 
       - name: Enforce real build output
@@ -570,7 +634,11 @@ jobs:
         # status, without throwing away real progress to get it.
         if: steps.agent.outputs.exit_code != '0'
         run: |
-          echo "::error::opencode exited ${{ steps.agent.outputs.exit_code }}. Any files it produced before crashing were committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
+          if [ "${{ steps.agent.outputs.timed_out }}" = "1" ]; then
+            echo "::error::Agent was killed by the silence watchdog (no output and no file changes for 10+ minutes) instead of burning the full job timeout. This turn records a real failure — the scheduler dispatches the next turn minutes from now rather than 2 hours from now. Any files produced before the stall were committed and pushed."
+          else
+            echo "::error::opencode exited ${{ steps.agent.outputs.exit_code }}. Any files it produced before crashing were committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
+          fi
           exit 1
 
       - name: Report verification failure (after the work was preserved)

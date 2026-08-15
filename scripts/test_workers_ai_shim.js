@@ -15,7 +15,8 @@
 "use strict";
 
 const assert = require("assert");
-const { normalizeToolCallIds, normalizeRequestBody, createSseRewriter } = require("./workers_ai_shim");
+const http = require("http");
+const { normalizeToolCallIds, normalizeRequestBody, createSseRewriter, startServer } = require("./workers_ai_shim");
 
 let passed = 0;
 const check = (name, fn) => {
@@ -148,4 +149,71 @@ check("end-to-end: a realistic 5-tool-call stream where only the last id is bad"
   assert.ok(out.trimEnd().endsWith("data: [DONE]"), "stream terminator preserved");
 });
 
-console.log(`\n${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
+console.log("startServer upstream timeout");
+
+// The 2026-08-15 failure shape, pinned without network access: a stalled
+// upstream must fail the request (502 + diagnostic) after the timeout, not
+// hang the turn until the 120-min job cap kills it.
+(async () => {
+  // Stub the upstream with a request object that never delivers a response,
+  // but that — like a real socket — emits 'error' when destroy(err) is called.
+  const neverResponds = () => {
+    const fake = {
+      errorCb: null,
+      timeoutFn: null,
+      setTimeout(ms, fn) {
+        this.timeoutFn = setTimeout(fn, ms);
+        return this;
+      },
+      destroy(err) {
+        if (this.timeoutFn) clearTimeout(this.timeoutFn);
+        if (err && this.errorCb) process.nextTick(() => this.errorCb(err));
+        return this;
+      },
+      on(ev, cb) {
+        if (ev === "error") this.errorCb = cb;
+        return this;
+      },
+      end() {
+        return this;
+      },
+    };
+    return fake;
+  };
+
+  const server = startServer({
+    port: 3199,
+    accountId: "test-account",
+    apiToken: "test-token",
+    upstreamTimeoutMs: 200,
+    requestFn: neverResponds,
+  });
+
+  await new Promise((resolve) => server.listen(3199, "127.0.0.1", resolve));
+
+  const start = Date.now();
+  const outcome = await new Promise((resolve) => {
+    const req = http.request({ port: 3199, host: "127.0.0.1", path: "/v1/chat/completions", method: "POST" }, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve({ status: res.statusCode, body }));
+    });
+    req.end(JSON.stringify({ model: "x", messages: [{ role: "user", content: "hi" }] }));
+  });
+  server.close();
+
+  try {
+    assert.strictEqual(outcome.status, 502, `expected 502, got ${outcome.status}`);
+    assert.ok(outcome.body.includes("timed out"), `expected a timeout diagnostic in body, got: ${outcome.body}`);
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed >= 200, `should not respond before the timeout, responded after ${elapsed}ms`);
+    assert.ok(elapsed < 5000, `should respond promptly after the timeout, took ${elapsed}ms`);
+    console.log(`  ok   stalled upstream returns 502 + timeout diagnostic (${elapsed}ms)`);
+    passed++;
+  } catch (err) {
+    console.error(`  FAIL ${err.message}`);
+    process.exitCode = 1;
+  }
+
+  console.log(`\n${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
+})();

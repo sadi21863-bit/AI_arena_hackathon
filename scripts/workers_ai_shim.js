@@ -161,10 +161,31 @@ function createSseRewriter() {
   };
 }
 
-function startServer({ port, accountId, apiToken }) {
+function startServer({ port, accountId, apiToken, upstreamTimeoutMs, requestFn }) {
   const upstreamBase = `/client/v4/accounts/${accountId}/ai/v1`;
+  // 2026-08-15: the turns that burned the full 120-min job timeout with zero
+  // agent output were a hang on the FIRST model call, and the shim's upstream
+  // https.request had no timeout at all — a stalled api.cloudflare.com
+  // response never resolved, opencode never emitted a byte, and only the job's
+  // hard timeout ended the turn. Env-overridable so the runner can tune it
+  // without touching the harness file.
+  const timeoutMs = upstreamTimeoutMs || Number(process.env.SHIM_UPSTREAM_TIMEOUT_MS) || 180000;
+  // Injectable for tests (the timeout can be verified without network access);
+  // in production this is always the real https.request.
+  const upstreamRequest = requestFn || https.request;
 
   const server = http.createServer((req, res) => {
+    const startedAt = Date.now();
+    // Every request is logged to stdout (-> shim.log on the runner). Before
+    // this, the only shim log line was its startup banner, so an incident
+    // couldn't even answer "did opencode reach the shim?". The START line
+    // answers that; the follow-up line records the upstream's disposition.
+    const logLine = (note) => {
+      const ms = Date.now() - startedAt;
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} -> ${note} (${ms}ms)`);
+    };
+    logLine("START");
+
     const chunks = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
@@ -189,9 +210,10 @@ function startServer({ port, accountId, apiToken }) {
         accept: req.headers.accept || "*/*",
       };
 
-      const upstream = https.request(
+      const upstream = upstreamRequest(
         { hostname: "api.cloudflare.com", port: 443, path: upstreamBase + suffix, method: req.method, headers },
         (up) => {
+          logLine(`upstream ${up.statusCode || 502} ${up.headers["content-type"] || ""}`);
           res.writeHead(up.statusCode || 502, {
             "content-type": up.headers["content-type"] || "application/json",
             // No content-length: rewriting changes byte counts, and the
@@ -223,7 +245,19 @@ function startServer({ port, accountId, apiToken }) {
         }
       );
 
+      // A stalled upstream must fail the request, not hang the turn. Without
+      // this timeout the 2026-08-15 failure mode (zero output for the full
+      // 120-min job cap) was the ONLY outcome: opencode waited forever on the
+      // first model call. With it, the call fails fast, opencode sees a real
+      // error and either retries or exits with a diagnosable failure, and the
+      // step watchdog in team-build-turn.yml never has to fire.
+      upstream.setTimeout(timeoutMs, () => {
+        const err = new Error(`upstream api.cloudflare.com timed out after ${timeoutMs}ms`);
+        upstream.destroy(err);
+      });
+
       upstream.on("error", (err) => {
+        logLine(`upstream error: ${err.message}`);
         if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: `shim upstream error: ${err.message}` } }));
       });
