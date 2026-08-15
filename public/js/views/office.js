@@ -26,29 +26,29 @@ import { shortId } from "../core/fmt.js";
 import { mountArenaStrip } from "../core/arena-strip.js";
 import { utcTime } from "../core/player.js";
 
-/* Row order must match scripts/generate_office_sprites.js. */
+/* Row order must match scripts/generate_office_pixel.js. */
 const ROW = { idle: 0, walk_down: 1, walk_left: 2, walk_right: 3, walk_up: 4 };
 const SHEET_COLS = 6, SHEET_ROWS = 5;
 const WALK_FRAMES = 6;
-const WALK_FPS = 8;          // matches the source Godot SpriteFrames timing
+const WALK_FPS = 8;          // matches the source pipoya frame timing (3-frame loop x2)
 const MOVE_MS = 1150;        // must match the CSS transition duration
 const MOVE_EPSILON = 0.4;    // %, below this a "move" isn't worth animating
 
-/* 8 source characters cover 12 agents; 4 are hue-rotated twins. Cosmetic
-   only — reshuffle freely, nothing depends on the mapping. */
+/* 12 agents, 12 distinct pipoya pixel characters — no hue-rotated twins.
+   Cosmetic only — reshuffle freely, nothing depends on the mapping. */
 const CAST = {
-  agent_alex:  { sprite: "alex",      filter: null },
-  agent_casey: { sprite: "casey",     filter: null },
-  agent_blake: { sprite: "dean",      filter: null },
-  agent_drew:  { sprite: "detective", filter: null },
-  agent_ellis: { sprite: "jordan",    filter: null },
-  agent_finn:  { sprite: "morgan",    filter: null },
-  agent_gale:  { sprite: "riley",     filter: null },
-  agent_hale:  { sprite: "sam",       filter: null },
-  agent_iris:  { sprite: "dean",      filter: "hue-rotate(120deg) saturate(1.3)" },
-  agent_jade:  { sprite: "detective", filter: "hue-rotate(200deg) saturate(1.3)" },
-  agent_kai:   { sprite: "jordan",    filter: "hue-rotate(280deg) saturate(1.3)" },
-  agent_leo:   { sprite: "morgan",    filter: "hue-rotate(45deg) saturate(1.3)" },
+  agent_alex:  { sprite: "alex",  filter: null },
+  agent_casey: { sprite: "casey", filter: null },
+  agent_blake: { sprite: "blake", filter: null },
+  agent_drew:  { sprite: "drew",  filter: null },
+  agent_ellis: { sprite: "ellis", filter: null },
+  agent_finn:  { sprite: "finn",  filter: null },
+  agent_gale:  { sprite: "gale",  filter: null },
+  agent_hale:  { sprite: "hale",  filter: null },
+  agent_iris:  { sprite: "iris",  filter: null },
+  agent_jade:  { sprite: "jade",  filter: null },
+  agent_kai:   { sprite: "kai",   filter: null },
+  agent_leo:   { sprite: "leo",   filter: null },
 };
 
 /**
@@ -76,6 +76,9 @@ const CAST = {
  *    rearrangement, not new art — no set can require a stylesheet change.
  *
  * Zone `y` is where characters stand; the label renders slightly below it.
+ * Props are pixel sprites from the stcrbcn office pack, so a prop class is a
+ * single furnishing item (desk, chair, shelf...) and sets compose them into
+ * office districts rather than one big empty room.
  */
 const SETS = {
   library: {
@@ -83,15 +86,25 @@ const SETS = {
     blurb: "Twelve lenses, twelve carrels. Everyone is reading.",
     fallbackZone: "research",
     zones: [
-      { id: "research", label: "Carrels",   x: 50, y: 38 },
+      { id: "research", label: "Carrels",    x: 50, y: 36 },
       { id: "idea",     label: "Long Table", x: 50, y: 66 },
-      { id: "break",    label: "Break Area", x: 86, y: 80 },
+      { id: "break",    label: "Break Area", x: 86, y: 78 },
     ],
     props: [
-      { cls: "shelf", x: 10, y: 24 }, { cls: "shelf", x: 30, y: 24 },
-      { cls: "shelf", x: 70, y: 24 }, { cls: "shelf", x: 90, y: 24 },
-      { cls: "table", x: 50, y: 62 }, { cls: "plant", x: 6, y: 78 },
-      { cls: "plant", x: 94, y: 60 }, { cls: "cooler", x: 88, y: 74 },
+      // A row of carrels along the back wall, with the archive behind.
+      { cls: "shelf", x: 8, y: 24 }, { cls: "shelf", x: 24, y: 24 },
+      { cls: "shelf", x: 76, y: 24 }, { cls: "shelf", x: 92, y: 24 },
+      { cls: "desk", x: 20, y: 34 }, { cls: "chair", x: 20, y: 42 },
+      { cls: "deskb", x: 36, y: 34 }, { cls: "chair", x: 36, y: 42 },
+      { cls: "desk", x: 52, y: 34 }, { cls: "chair", x: 52, y: 42 },
+      { cls: "deskb", x: 68, y: 34 }, { cls: "chair", x: 68, y: 42 },
+      { cls: "desk", x: 84, y: 34 }, { cls: "chair", x: 84, y: 42 },
+      { cls: "printer", x: 8, y: 50 }, { cls: "filing", x: 94, y: 50 },
+      // The long table for shared reading, then the break corner.
+      { cls: "table", x: 38, y: 64 }, { cls: "chair", x: 46, y: 64 },
+      { cls: "chair", x: 54, y: 64 }, { cls: "chair", x: 62, y: 64 },
+      { cls: "couch", x: 84, y: 72 }, { cls: "coffee", x: 94, y: 78 },
+      { cls: "plant", x: 6, y: 78 }, { cls: "rug", x: 80, y: 84 },
     ],
   },
 
@@ -100,18 +113,23 @@ const SETS = {
     blurb: "Ideas go up, critiques come back. The busiest room in the cycle.",
     fallbackZone: "break",
     zones: [
-      { id: "idea",         label: "Idea Desks",       x: 30, y: 34 },
+      { id: "idea",         label: "Idea Desks",       x: 28, y: 34 },
       { id: "critique",     label: "Critique Corner",  x: 76, y: 36 },
       { id: "research",     label: "Reading Nook",     x: 12, y: 62 },
-      { id: "architecture", label: "Drafting Table",   x: 46, y: 64 },
-      { id: "break",        label: "Break Area",       x: 82, y: 74 },
+      { id: "architecture", label: "Drafting Table",   x: 48, y: 64 },
+      { id: "break",        label: "Break Area",       x: 84, y: 78 },
     ],
     props: [
-      { cls: "desk", x: 20, y: 28 }, { cls: "desk", x: 40, y: 28 },
-      { cls: "board", x: 76, y: 27 }, { cls: "shelf", x: 6, y: 52 },
-      { cls: "table", x: 46, y: 60 }, { cls: "couch", x: 82, y: 70 },
-      { cls: "cooler", x: 94, y: 76 }, { cls: "rug", x: 46, y: 76 },
-      { cls: "plant", x: 62, y: 80 },
+      { cls: "desk", x: 16, y: 28 }, { cls: "chair", x: 16, y: 36 },
+      { cls: "desk", x: 28, y: 28 }, { cls: "chair", x: 28, y: 36 },
+      { cls: "desk", x: 40, y: 28 }, { cls: "chair", x: 40, y: 36 },
+      { cls: "board", x: 76, y: 26 }, { cls: "shelf", x: 94, y: 30 },
+      { cls: "table", x: 48, y: 60 }, { cls: "chair", x: 40, y: 60 },
+      { cls: "chair", x: 56, y: 60 }, { cls: "chair", x: 48, y: 68 },
+      { cls: "bookshelf", x: 6, y: 52 }, { cls: "printer", x: 88, y: 52 },
+      { cls: "couch", x: 84, y: 72 }, { cls: "coffee", x: 94, y: 76 },
+      { cls: "cooler", x: 6, y: 78 }, { cls: "rug", x: 78, y: 82 },
+      { cls: "plant", x: 60, y: 80 },
     ],
   },
 
@@ -121,14 +139,18 @@ const SETS = {
     fallbackZone: "break",
     zones: [
       { id: "collaboration", label: "Merge Tables", x: 50, y: 40 },
-      { id: "idea",          label: "Idea Desks",   x: 16, y: 66 },
-      { id: "break",         label: "Break Area",   x: 82, y: 72 },
+      { id: "idea",          label: "Idea Desks",   x: 16, y: 64 },
+      { id: "break",         label: "Break Area",   x: 84, y: 76 },
     ],
     props: [
-      { cls: "table", x: 34, y: 36 }, { cls: "table", x: 66, y: 36 },
-      { cls: "desk", x: 16, y: 62 }, { cls: "couch", x: 82, y: 68 },
-      { cls: "rug", x: 50, y: 52 }, { cls: "plant", x: 6, y: 82 },
-      { cls: "plant", x: 94, y: 50 },
+      { cls: "table", x: 36, y: 34 }, { cls: "chair", x: 30, y: 40 },
+      { cls: "chair", x: 42, y: 40 }, { cls: "table", x: 64, y: 34 },
+      { cls: "chair", x: 58, y: 40 }, { cls: "chair", x: 70, y: 40 },
+      { cls: "board", x: 50, y: 20 },
+      { cls: "desk", x: 16, y: 60 }, { cls: "chair", x: 16, y: 68 },
+      { cls: "couch", x: 84, y: 68 }, { cls: "rug", x: 50, y: 54 },
+      { cls: "plant", x: 6, y: 40 }, { cls: "plant", x: 94, y: 40 },
+      { cls: "coffee", x: 94, y: 80 }, { cls: "filing", x: 6, y: 78 },
     ],
   },
 
@@ -142,10 +164,14 @@ const SETS = {
       { id: "break",        label: "Observers",       x: 50, y: 74 },
     ],
     props: [
-      { cls: "board", x: 84, y: 30 }, { cls: "table", x: 30, y: 36 },
-      { cls: "table", x: 55, y: 36 }, { cls: "couch", x: 50, y: 70 },
-      { cls: "rug", x: 50, y: 78 }, { cls: "shelf", x: 8, y: 30 },
-      { cls: "plant", x: 8, y: 80 },
+      { cls: "board", x: 84, y: 30 }, { cls: "table", x: 30, y: 34 },
+      { cls: "chair", x: 24, y: 40 }, { cls: "chair", x: 36, y: 40 },
+      { cls: "table", x: 56, y: 34 }, { cls: "chair", x: 50, y: 40 },
+      { cls: "chair", x: 62, y: 40 }, { cls: "printer", x: 8, y: 30 },
+      { cls: "shelf", x: 94, y: 30 }, { cls: "couch", x: 50, y: 70 },
+      { cls: "rug", x: 50, y: 78 }, { cls: "plant", x: 6, y: 78 },
+      { cls: "coffee", x: 90, y: 76 }, { cls: "desk", x: 12, y: 46 },
+      { cls: "chair", x: 12, y: 54 }, { cls: "filing", x: 88, y: 50 },
     ],
   },
 
@@ -161,6 +187,9 @@ const SETS = {
       { cls: "table", x: 34, y: 26 }, { cls: "table", x: 66, y: 26 },
       { cls: "board", x: 50, y: 16 }, { cls: "rug", x: 50, y: 66 },
       { cls: "plant", x: 8, y: 40 }, { cls: "plant", x: 92, y: 40 },
+      { cls: "shelf", x: 8, y: 26 }, { cls: "shelf", x: 92, y: 26 },
+      { cls: "couch", x: 30, y: 74 }, { cls: "couch", x: 70, y: 74 },
+      { cls: "coffee", x: 50, y: 82 }, { cls: "printer", x: 16, y: 60 },
     ],
   },
 
@@ -181,10 +210,15 @@ const SETS = {
       { id: "break",      label: "Break Area",      x: 50, y: 80 },
     ],
     props: [
-      { cls: "desk", x: 24, y: 34 }, { cls: "desk", x: 76, y: 34 },
+      { cls: "desk", x: 24, y: 34 }, { cls: "chair", x: 24, y: 42 },
+      { cls: "desk", x: 38, y: 34 }, { cls: "chair", x: 38, y: 42 },
+      { cls: "desk", x: 62, y: 34 }, { cls: "chair", x: 62, y: 42 },
+      { cls: "desk", x: 76, y: 34 }, { cls: "chair", x: 76, y: 42 },
       { cls: "board", x: 10, y: 30 }, { cls: "board", x: 90, y: 30 },
-      { cls: "table", x: 50, y: 62 }, { cls: "couch", x: 50, y: 78 },
+      { cls: "table", x: 50, y: 62 }, { cls: "chair", x: 42, y: 62 },
+      { cls: "chair", x: 58, y: 62 }, { cls: "couch", x: 50, y: 78 },
       { cls: "cooler", x: 92, y: 76 }, { cls: "plant", x: 6, y: 76 },
+      { cls: "filing", x: 6, y: 46 }, { cls: "printer", x: 94, y: 46 },
     ],
   },
 
@@ -198,8 +232,11 @@ const SETS = {
     ],
     props: [
       { cls: "rug", x: 50, y: 50 }, { cls: "table", x: 50, y: 32 },
+      { cls: "chair", x: 42, y: 40 }, { cls: "chair", x: 58, y: 40 },
+      { cls: "chair", x: 50, y: 58 },
       { cls: "plant", x: 8, y: 34 }, { cls: "plant", x: 92, y: 34 },
-      { cls: "couch", x: 86, y: 76 },
+      { cls: "couch", x: 86, y: 76 }, { cls: "coffee", x: 94, y: 82 },
+      { cls: "shelf", x: 8, y: 60 }, { cls: "board", x: 90, y: 20 },
     ],
   },
 
@@ -214,8 +251,12 @@ const SETS = {
     ],
     props: [
       { cls: "board", x: 50, y: 18 }, { cls: "table", x: 34, y: 36 },
-      { cls: "table", x: 66, y: 40 }, { cls: "rug", x: 50, y: 74 },
+      { cls: "chair", x: 34, y: 44 }, { cls: "table", x: 66, y: 40 },
+      { cls: "chair", x: 66, y: 48 }, { cls: "rug", x: 50, y: 74 },
       { cls: "shelf", x: 8, y: 28 }, { cls: "shelf", x: 92, y: 28 },
+      { cls: "filing", x: 8, y: 56 }, { cls: "filing", x: 92, y: 56 },
+      { cls: "plant", x: 6, y: 80 }, { cls: "plant", x: 94, y: 80 },
+      { cls: "couch", x: 50, y: 82 },
     ],
   },
 };
@@ -321,7 +362,8 @@ export async function mount(el, params) {
    * being AT it rather than inside it.
    */
   function loiterSpots() {
-    const landmarks = (SET.props || []).filter((p) => ["couch", "cooler", "plant", "shelf", "rug"].includes(p.cls));
+    const landmarks = (SET.props || []).filter((p) =>
+      ["couch", "cooler", "plant", "shelf", "bookshelf", "rug", "coffee"].includes(p.cls));
     return landmarks.map((p) => ({ x: p.x, y: Math.min(92, p.y + 7) }));
   }
   /* agent_id -> roster row, populated for hackathons only. */
@@ -680,7 +722,7 @@ export async function mount(el, params) {
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
             <div class="v-office__bubble" hidden></div>
             <div class="v-office__emote"></div>
-            <div class="v-office__sprite" style="background-image:url(/observatory/assets/office/sprites/${CAST[a.agent_id].sprite}.webp)${CAST[a.agent_id].filter ? `;filter:${CAST[a.agent_id].filter}` : ""}"></div>
+            <div class="v-office__sprite" style="background-image:url(/observatory/assets/office/pixel/sprites/${CAST[a.agent_id].sprite}.webp)${CAST[a.agent_id].filter ? `;filter:${CAST[a.agent_id].filter}` : ""}"></div>
             <div class="v-office__name">${a.name}</div>
           </div>`)}
       </div>`);
@@ -942,9 +984,9 @@ export async function mount(el, params) {
    * P6: the office pet. Naps beside whoever has been idle longest, which is a
    * cheap way to make "nothing is happening" look intentional.
    *
-   * Drawn in CSS like the furniture — the 3D pet packs in the asset dump would
-   * need the Blender render pipeline to match the characters' style, and a
-   * mismatched sprite would look worse than a shape.
+   * A pixel ghost from the pipoya pack (pet.webp), rendered with the same
+   * pixelated treatment as the characters so it reads as part of the room
+   * rather than an import.
    */
   function drawPet(agents) {
     const pet = el.querySelector("#of-pet");

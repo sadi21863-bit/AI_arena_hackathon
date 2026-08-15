@@ -84,29 +84,35 @@ because it's yours and it already solved the harder version:
 
 I initially wrote off the 3D packs in `asset dump/` as unusable in a DOM room,
 and the 2D `kenney_roguelike-indoors` tilesheet (16×16, CC0) as the usable one.
-**That was backwards**, and the reason matters:
 
-`office.css` says the characters are *"pre-rendered low-poly 3D, not retro pixel
-art"*. Dropping 16×16 pixel-art furniture next to them would clash badly. The 3D
-packs are the stylistically correct source — and there is already a pipeline:
+**The 3D route was tried and rejected.** A batch of Kenney furniture GLBs was
+rendered through the Blender pipeline and dropped into the room alongside the
+pre-rendered low-poly characters, on a `backdrop.webp` wall. The result read as
+a dollhouse photo slapped on a CSS floor — the flat isometric render fought the
+CSS floorboards and the 3D characters at every edge. It was the wrong call, and
+it's gone.
 
-`project-chimera/godot/tools/render_character.py` is a **headless Blender
-renderer** that takes a Kenney mini-character GLB and outputs top-down frames —
-6 walk frames, idle plus 4 directions, 256px, 30° camera elevation. That is
-*exactly* the 6×5 sheet `office.js` indexes (`SHEET_COLS=6, SHEET_ROWS=5`), and
-`scripts/generate_office_sprites.js` already reads from
-`project-chimera/godot/assets` with a hardcoded 8-name `CHARACTERS` array.
+What shipped instead is **all 2D pixel art**, and that's the decision this
+section records. The characters are **pipoya** 32px character chips (free for
+commercial/personal use), the furniture is the **stcrbcn "Office Furniture"**
+pack (CC BY 4.0, credited in `THIRD_PARTY_NOTICES.md`), and the floor/wall stay
+CSS-drawn so they theme cleanly. Everything renders with
+`image-rendering: pixelated`, so the 32px source upscales crisply instead of
+blurring.
 
-Two consequences:
+Two consequences of the pixel route:
 
-1. **The 4 hue-rotated twins can be retired.** `kenney_mini-characters.zip`
-   ships 29 GLBs. Render 4 more through the existing pipeline, add the names to
-   `CHARACTERS`, re-run `npm run office:generate-sprites`. Twelve genuinely
-   distinct agents — this is asset work, not engineering.
-2. **Props can match the characters exactly**, by rendering
-   `kenney_furniture-kit` / `Ultimate House Interior Pack` GLBs through the same
-   script at the same camera angle. Today's props are CSS boxes; rendered props
-   would sit in the same visual world as the cast.
+1. **Twelve genuinely distinct agents, no hue-rotates.** pipoya ships dozens of
+   separate character designs, so each of the 12 agents gets its own sprite
+   instead of four people sharing eight sheets. `scripts/generate_office_pixel.js`
+   re-lays the 3-frame pipoya walks out onto the renderer's 6×5 sheet (idle row =
+   down-facing frame 0, each 3-frame walk repeated to 6) so `office.js`'s
+   `ROW`/`WALK_FRAMES` constants are untouched.
+2. **Props compose into office districts.** The CSS boxes became stcrbcn pixel
+   sprites (`desk`, `chair`, `table`, `board`, `shelf`, `bookshelf`, `couch`,
+   `plant`, `cooler`, `coffee`, `filing`, `printer`), and the sets place them in
+   rows and corners so a phase reads as a real office — carrels, a break corner,
+   a review wall — rather than one big empty room.
 
 ---
 

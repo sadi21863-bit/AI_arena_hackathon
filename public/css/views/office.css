@@ -35,72 +35,46 @@
   background-image: repeating-linear-gradient(90deg, transparent 0 96px, color-mix(in srgb, #000 7%, transparent) 96px 98px);
 }
 
-/* --- Furniture, CSS-drawn so it needs no extra image assets --- */
+/* --- Furniture: pixel sprites from the stcrbcn office pack (CC BY 4.0) --- */
 .v-office__prop { position: absolute; transform: translate(-50%, -50%); pointer-events: none; }
 
-.v-office__prop--desk {
-  width: 128px; height: 46px; border-radius: 6px;
-  background: linear-gradient(#a9793f, #8c6132);
-  box-shadow: 0 5px 0 rgba(0,0,0,0.22), inset 0 3px 0 rgba(255,255,255,0.17);
-}
-.v-office__prop--desk::before {
-  content: ""; position: absolute; left: 50%; top: -21px; transform: translateX(-50%);
-  width: 44px; height: 27px; border-radius: 3px;
-  background: #2f3742; border: 2px solid #1d232b; box-shadow: inset 0 0 0 2px #5d7fa6;
-}
+.v-office__prop--desk, .v-office__prop--deskb,
+.v-office__prop--table, .v-office__prop--shelf,
+.v-office__prop--couch, .v-office__prop--plant,
+.v-office__prop--cooler, .v-office__prop--filing,
+.v-office__prop--printer { width: 64px; height: 64px; }
 
-.v-office__prop--table {
-  width: 140px; height: 62px; border-radius: 50%;
-  background: linear-gradient(#a9793f, #8a5f31);
-  box-shadow: 0 5px 0 rgba(0,0,0,0.2), inset 0 3px 0 rgba(255,255,255,0.16);
-}
+.v-office__prop--chair, .v-office__prop--board,
+.v-office__prop--bookshelf, .v-office__prop--coffee { width: 48px; height: 48px; }
 
-.v-office__prop--board {
-  width: 118px; height: 62px; border-radius: 4px;
-  background: #eee7d7; border: 4px solid #6b5636;
-  box-shadow: 0 4px 0 rgba(0,0,0,0.2);
-  background-image:
-    linear-gradient(120deg, transparent 42%, rgba(120,150,190,0.5) 42% 47%, transparent 47%),
-    linear-gradient(60deg, transparent 55%, rgba(190,120,120,0.45) 55% 60%, transparent 60%);
+.v-office__prop--desk, .v-office__prop--deskb,
+.v-office__prop--chair, .v-office__prop--table,
+.v-office__prop--board, .v-office__prop--shelf,
+.v-office__prop--bookshelf, .v-office__prop--couch,
+.v-office__prop--plant, .v-office__prop--cooler,
+.v-office__prop--coffee, .v-office__prop--filing,
+.v-office__prop--printer {
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center;
+  image-rendering: pixelated;
 }
+.v-office__prop--desk    { background-image: url(/observatory/assets/office/pixel/furniture/desk.webp); }
+.v-office__prop--deskb   { background-image: url(/observatory/assets/office/pixel/furniture/deskb.webp); }
+.v-office__prop--chair   { background-image: url(/observatory/assets/office/pixel/furniture/chair.webp); }
+.v-office__prop--table   { background-image: url(/observatory/assets/office/pixel/furniture/table.webp); }
+.v-office__prop--board   { background-image: url(/observatory/assets/office/pixel/furniture/board.webp); }
+.v-office__prop--shelf   { background-image: url(/observatory/assets/office/pixel/furniture/shelf.webp); }
+.v-office__prop--bookshelf { background-image: url(/observatory/assets/office/pixel/furniture/bookshelf.webp); }
+.v-office__prop--couch   { background-image: url(/observatory/assets/office/pixel/furniture/couch.webp); }
+.v-office__prop--plant   { background-image: url(/observatory/assets/office/pixel/furniture/plant.webp); }
+.v-office__prop--cooler  { background-image: url(/observatory/assets/office/pixel/furniture/cooler.webp); }
+.v-office__prop--coffee  { background-image: url(/observatory/assets/office/pixel/furniture/coffee.webp); }
+.v-office__prop--filing  { background-image: url(/observatory/assets/office/pixel/furniture/filing.webp); }
+.v-office__prop--printer { background-image: url(/observatory/assets/office/pixel/furniture/printer.webp); }
 
-.v-office__prop--shelf {
-  width: 74px; height: 82px; border-radius: 4px;
-  background: linear-gradient(#8c6132, #6f4b26);
-  box-shadow: 0 4px 0 rgba(0,0,0,0.22);
-  background-image: repeating-linear-gradient(0deg, transparent 0 22px, rgba(0,0,0,0.35) 22px 25px);
-}
-.v-office__prop--shelf::after {
-  content: ""; position: absolute; left: 7px; top: 5px; width: 60px; height: 13px; border-radius: 2px;
-  background: repeating-linear-gradient(90deg, #b4483f 0 7px, #d6a13c 7px 13px, #4f7f9c 13px 20px);
-}
-
-.v-office__prop--couch {
-  width: 122px; height: 44px; border-radius: 10px 10px 6px 6px;
-  background: linear-gradient(#5d7f6d, #47614f);
-  box-shadow: 0 5px 0 rgba(0,0,0,0.22), inset 0 4px 0 rgba(255,255,255,0.12);
-}
-
-.v-office__prop--plant { width: 34px; height: 46px; }
-.v-office__prop--plant::before {
-  content: ""; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 22px; height: 17px; border-radius: 3px 3px 5px 5px; background: #a6603a;
-}
-.v-office__prop--plant::after {
-  content: ""; position: absolute; bottom: 13px; left: 50%; transform: translateX(-50%);
-  width: 32px; height: 34px; border-radius: 50% 50% 42% 42%; background: radial-gradient(#5f8a4e, #3f6435);
-}
-
-.v-office__prop--cooler { width: 26px; height: 52px; }
-.v-office__prop--cooler::before {
-  content: ""; position: absolute; bottom: 0; left: 0; width: 26px; height: 32px;
-  border-radius: 3px; background: #d3d8dc; box-shadow: 0 3px 0 rgba(0,0,0,0.2);
-}
-.v-office__prop--cooler::after {
-  content: ""; position: absolute; top: 0; left: 3px; width: 20px; height: 24px;
-  border-radius: 4px 4px 2px 2px; background: rgba(120,180,205,0.85);
-}
-
+/* The rug is drawn — it's a floor marking, not a prop, and a soft ellipse
+   under the characters reads better than a crisp sprite would. */
 .v-office__prop--rug {
   width: 190px; height: 96px; border-radius: 50%;
   background: radial-gradient(closest-side, color-mix(in srgb, var(--arena-clay) 34%, transparent), color-mix(in srgb, var(--arena-clay) 16%, transparent));
@@ -135,9 +109,11 @@
   /* Fills the parent so character size is defined in exactly one place.
      The sheet is a 6x5 grid = 600% x 500% of one cell, so frame offsets in
      % stay correct at any size and JS never needs the pixel dimensions.
-     Source art is pre-rendered 3D, not pixel art — no image-rendering. */
+     Source art is 32px pixel art (pipoya), upscaled by the browser — nearest-
+     neighbour so the pixels stay crisp rather than smoothing into a blur. */
   width: 100%; height: 100%;
   background-size: 600% 500%; background-repeat: no-repeat;
+  image-rendering: pixelated;
 }
 .v-office__agent.is-working .v-office__sprite { animation: office-bob 1.7s ease-in-out infinite; }
 @keyframes office-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
@@ -196,27 +172,14 @@
 }
 
 /* --- P6: the office pet ------------------------------------------------
-   Drawn, not a sprite. The 3D pet packs in the asset dump would need the
-   Blender render pipeline to match the characters' pre-rendered style, and a
-   mismatched sprite would look worse than an honest shape — the same reason
-   the furniture is CSS. A loaf-shaped cat, asleep. */
+   A pixel ghost from the pipoya pack (pet.webp), same rendering treatment as
+   the characters. The ghost "naps" beside the most idle agent. */
 .v-office__pet {
-  position: absolute; width: 22px; height: 13px;
-  transform: translate(-50%, -20%);
-  background: var(--arena-ink-faint);
-  border-radius: 11px 11px 8px 8px;
-  opacity: 0.75; pointer-events: none;
-}
-.v-office__pet::before {            /* head */
-  content: ""; position: absolute; left: -5px; top: 1px;
-  width: 10px; height: 10px; border-radius: 50%;
-  background: var(--arena-ink-faint);
-}
-.v-office__pet::after {             /* tail, curled round */
-  content: ""; position: absolute; right: -6px; bottom: 1px;
-  width: 10px; height: 6px;
-  border: 2px solid var(--arena-ink-faint); border-left: none;
-  border-radius: 0 8px 8px 0;
+  position: absolute; width: 32px; height: 32px;
+  transform: translate(-50%, -50%);
+  background: url(/observatory/assets/office/pixel/pet.webp) center / contain no-repeat;
+  image-rendering: pixelated;
+  opacity: 0.85; pointer-events: none;
 }
 
 /* --- P5: the judges' bench -------------------------------------------
@@ -374,9 +337,10 @@
 
 @media (max-width: 760px) {
   .v-office__room { aspect-ratio: 3 / 4; }
-  .v-office__prop--desk { width: 84px; height: 32px; }
-  .v-office__prop--desk::before { width: 30px; height: 19px; top: -15px; }
-  .v-office__prop--board, .v-office__prop--table { width: 88px; }
+  /* Props keep their desktop sizes here on purpose: the source sprites are
+     32px / 16px and the displayed sizes (64px / 48px) are exact integer
+     multiples, so pixelated scaling stays crisp. Shrinking them to fit the
+     narrower room would land on non-integer scales and blur the pixels. */
   .v-office__prop--rug { width: 130px; }
   /* No character size here any more — the container-query clamp handles every
      width continuously, and a hard 48px override would reintroduce exactly
