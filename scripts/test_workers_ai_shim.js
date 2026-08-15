@@ -16,7 +16,7 @@
 
 const assert = require("assert");
 const http = require("http");
-const { normalizeToolCallIds, normalizeRequestBody, createSseRewriter, startServer } = require("./workers_ai_shim");
+const { normalizeToolCallIds, normalizeRequestBody, createSseRewriter, upstreamPathFor, startServer } = require("./workers_ai_shim");
 
 let passed = 0;
 const check = (name, fn) => {
@@ -147,6 +147,47 @@ check("end-to-end: a realistic 5-tool-call stream where only the last id is bad"
   assert.ok(out.includes('"id":"5"'), "bad id coerced");
   assert.ok(!/"id":5[,}]/.test(out), "no raw integer id may survive");
   assert.ok(out.trimEnd().endsWith("data: [DONE]"), "stream terminator preserved");
+});
+
+console.log("upstreamPathFor (authorization boundary)");
+
+// The shim holds the account token and forwards whatever it is given, so a
+// client-controlled path with `..` segments would reach the wider Cloudflare
+// account API with full credentials. Only the allowlisted AI endpoints may
+// ever be forwarded.
+const BASE = "/client/v4/accounts/test-account/ai/v1";
+
+check("maps the chat completions endpoint onto the upstream AI base", () => {
+  assert.strictEqual(upstreamPathFor("/v1/chat/completions", BASE), `${BASE}/chat/completions`);
+});
+
+check("maps the models endpoint onto the upstream AI base", () => {
+  assert.strictEqual(upstreamPathFor("/v1/models", BASE), `${BASE}/models`);
+});
+
+check("rejects a path-traversal attempt escaping the AI namespace", () => {
+  assert.strictEqual(upstreamPathFor("/v1/../../accounts/test-account/images/v1", BASE), null);
+});
+
+check("rejects a URL-encoded traversal attempt", () => {
+  assert.strictEqual(upstreamPathFor("/v1/%2e%2e/%2e%2e/members", BASE), null);
+});
+
+check("rejects a non-/v1 path outright", () => {
+  assert.strictEqual(upstreamPathFor("/client/v4/accounts/test-account/storage/kv", BASE), null);
+});
+
+check("rejects any endpoint outside the allowlist, even under /v1", () => {
+  assert.strictEqual(upstreamPathFor("/v1/images/v1", BASE), null);
+});
+
+check("rejects an empty/root path", () => {
+  assert.strictEqual(upstreamPathFor("/", BASE), null);
+  assert.strictEqual(upstreamPathFor("", BASE), null);
+});
+
+check("strips a query string rather than forwarding it upstream", () => {
+  assert.strictEqual(upstreamPathFor("/v1/models?model=x", BASE), `${BASE}/models`);
 });
 
 console.log("startServer upstream timeout");

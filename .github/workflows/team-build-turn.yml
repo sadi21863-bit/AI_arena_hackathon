@@ -255,18 +255,53 @@ jobs:
           CONTAINER="arena-agent-${{ github.run_id }}"
           WATCHDOG_SILENCE_MINUTES="${WATCHDOG_SILENCE_MINUTES:-10}"
 
+          # Harness-critical paths are read-only inside the container. A
+          # subverted agent writing a workflow file here is a full
+          # secret-exfiltration vector: "Commit progress" pushes it, and the
+          # pushed .github/workflows/* runs on a NORMAL runner with every
+          # repo secret and unrestricted egress — entirely outside the
+          # sandbox this step exists to provide. Same for .git/hooks (git
+          # executes them during the runner's own push, with ARENA_PUSH_TOKEN
+          # in the step env) and .git/config (could repoint core.hooksPath to
+          # a writable dir or rewrite remotes). Bind-mounting them read-only
+          # makes the write fail at the filesystem level no matter what the
+          # container does — a per-path ro mount beats a blanket .git mount,
+          # which would also lock the agent out of committing (AGENTS.md rule 5).
+          #
+          # The extra mount only applies when the path exists in the checkout;
+          # a missing .github (never the case for a team repo, which always
+          # has the harness + scaffold) would otherwise be created empty by
+          # docker and show up as a phantom change in "Enforce real build output".
+          RO_MOUNTS=()
+          for rel in .github .git/hooks .git/config; do
+            if [ -e "${{ github.workspace }}/$rel" ]; then
+              RO_MOUNTS+=(-v "${{ github.workspace }}/$rel:/workspace/$rel:ro")
+            fi
+          done
+
+          # Git identity via env, not `git config`: with .git/config mounted
+          # read-only (see RO_MOUNTS above), `git config user.name` would
+          # fail with "could not lock config file" and every agent commit
+          # (AGENTS.md rule 5) would break. Git reads these at commit time
+          # and never needs to write the config file, so commits work while
+          # the config file itself stays untouchable.
           docker run --rm --name "$CONTAINER" \
             --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=256 \
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
             --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
             --add-host=host.docker.internal:host-gateway \
+            "${RO_MOUNTS[@]}" \
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e ARENA_AI_BASE_URL=http://host.docker.internal:3129/v1 \
             -e ARENA_AI_API_KEY=shim-injects-the-real-credential \
             -e HOME=/tmp \
+            -e GIT_AUTHOR_NAME=arena-turn-agent \
+            -e GIT_AUTHOR_EMAIL=arena-turn-agent@users.noreply.github.com \
+            -e GIT_COMMITTER_NAME=arena-turn-agent \
+            -e GIT_COMMITTER_EMAIL=arena-turn-agent@users.noreply.github.com \
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
@@ -413,6 +448,18 @@ jobs:
           # attempts and still surfaces via INSTALL_EXIT_CODE below.
           ATTEMPTS=3
           code=0
+          # Same harness-critical ro mounts as Phase A (see that step's
+          # comment): a compromised npm/pip package runs its postinstall
+          # scripts with rw workspace + network here, and the verification
+          # container runs the agent's own test/build code — both are equally
+          # able to drop a workflow file or git hook that "Commit progress"
+          # would then push to a NORMAL runner with full secrets + egress.
+          RO_MOUNTS=()
+          for rel in .github .git/hooks .git/config; do
+            if [ -e "${{ github.workspace }}/$rel" ]; then
+              RO_MOUNTS+=(-v "${{ github.workspace }}/$rel:/workspace/$rel:ro")
+            fi
+          done
           for attempt in $(seq 1 $ATTEMPTS); do
             docker run --rm \
               --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
@@ -420,6 +467,7 @@ jobs:
               --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
               --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
               --add-host=host.docker.internal:host-gateway \
+              "${RO_MOUNTS[@]}" \
               -e HTTP_PROXY=http://host.docker.internal:3128 \
               -e HTTPS_PROXY=http://host.docker.internal:3128 \
               -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
@@ -508,6 +556,18 @@ jobs:
           # VERIFICATION_FAILURE.log for the next turn.
           ATTEMPTS=2
           code=0
+          # Same harness-critical ro mounts as Phase A (see that step's
+          # comment): this container runs the agent's OWN test/build code at
+          # full write privilege on the workspace — every bit as capable of
+          # planting a workflow file or git hook. network=none stops it from
+          # EXFILTRATING, but the planted file would still get pushed by
+          # "Commit progress" below and execute on a normal runner later.
+          RO_MOUNTS=()
+          for rel in .github .git/hooks .git/config; do
+            if [ -e "${{ github.workspace }}/$rel" ]; then
+              RO_MOUNTS+=(-v "${{ github.workspace }}/$rel:/workspace/$rel:ro")
+            fi
+          done
           for attempt in $(seq 1 $ATTEMPTS); do
             docker run --rm \
               --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=50 \
@@ -519,6 +579,7 @@ jobs:
               -e PYTHONPYCACHEPREFIX=/tmp/pycache \
               -e TURN_ID="${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}" \
               -e INSTALL_EXIT_CODE="${{ steps.install.outputs.exit_code }}" \
+              "${RO_MOUNTS[@]}" \
               -v "${{ github.workspace }}:/workspace:rw" \
               -w /workspace \
               arena-team-base:latest \
@@ -660,24 +721,47 @@ jobs:
           exit 0
 
       - name: Commit progress
-        # The push must use a credential that carries the `workflows` OAuth
-        # scope when the turn agent touched .github/workflows/ — which is
-        # expected (AGENTS.md rule 8 gives the team its own product CI under
-        # .github/workflows/ci.yml). GITHUB_TOKEN can never carry that scope:
-        # `workflows` is a PAT/GitHub-App scope, not a GITHUB_TOKEN
-        # permission, so `permissions: workflows: write` is not even a valid
-        # YAML key (workflow fails to parse), and a push containing workflow
-        # file changes is refused with "refusing to allow a GitHub App to
-        # create or update workflow ... without `workflows` permission"
-        # (found live, spike-ui-001 zen rerun, after build + verification had
-        # both passed). Use the repo's ARENA_PUSH_TOKEN (a PAT with the
-        # `workflow` scope) for the push; the default GITHUB_TOKEN is the
-        # fallback so the harness still works on repos without that secret.
+        # The push uses a credential that carries the `workflows` OAuth scope:
+        # GITHUB_TOKEN can never carry that scope (`workflows` is a
+        # PAT/GitHub-App scope, not a GITHUB_TOKEN permission, so
+        # `permissions: workflows: write` is not even a valid YAML key).
+        # Use the repo's ARENA_PUSH_TOKEN (a PAT with the `workflow` scope)
+        # for the push; the default GITHUB_TOKEN is the fallback so the
+        # harness still works on repos without that secret.
+        #
+        # NOTE: since the turn agent no longer owns workflow files (they are
+        # harness-owned and ro-mounted in every container — see Phase A), the
+        # push should never contain .github/ changes at all. The restore
+        # guard below enforces that: it resets .github/ to the turn-start
+        # HEAD (and drops any untracked file inside it) so a subverted agent
+        # or a compromised dependency can never push a workflow file that
+        # would then execute on a NORMAL runner with full secrets and egress.
         env:
           ARENA_PUSH_TOKEN: ${{ secrets.ARENA_PUSH_TOKEN }}
         run: |
           git config user.name "arena-bot[${{ github.event.inputs.team || github.event.client_payload.team }}]"
           git config user.email "arena-bot@users.noreply.github.com"
+          START_HEAD="${{ steps.turnstart.outputs.head }}"
+          # Restore harness-critical paths the turn must never change. The
+          # per-path ro mounts make container-side writes fail at the
+          # filesystem level; this is the second layer for anything that
+          # slips past them (e.g. a git-level trick that stages a blob
+          # without a working-tree write). checkout restores tracked files;
+          # clean -fd drops untracked ones (a brand-new workflow file) that
+          # checkout would leave in place.
+          git checkout "$START_HEAD" -- .github/ 2>/dev/null \
+            || echo "::warning::could not reset .github/ to $START_HEAD — check for workflow file tampering"
+          git clean -fd -- .github/ 2>/dev/null || true
+          # .git/hooks and .git/config are untracked, so there is nothing to
+          # checkout — the ro mounts are their only protection. Sanity-check
+          # anyway: a hook would execute during THIS push with
+          # ARENA_PUSH_TOKEN in the step env, and core.hooksPath/config
+          # rewrites would redirect the runner's own git.
+          NON_SAMPLE_HOOKS=$(find .git/hooks -maxdepth 1 -type f ! -name "*.sample" 2>/dev/null)
+          if [ -n "$NON_SAMPLE_HOOKS" ]; then
+            echo "::error::unexpected git hooks found in the workspace (they would run during this push): $NON_SAMPLE_HOOKS"
+            echo "$NON_SAMPLE_HOOKS" | xargs -r rm -f
+          fi
           git add -A
           git diff --cached --quiet || git commit -m "Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}"
           if [ -n "$ARENA_PUSH_TOKEN" ]; then

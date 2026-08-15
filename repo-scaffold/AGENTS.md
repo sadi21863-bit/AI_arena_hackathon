@@ -12,7 +12,7 @@ The arena seeded a working structure before your first turn:
 - `BACKLOG.md` — the task list you work from (check items off as you go)
 - `AGENTS.md` — this file
 - `.gitignore`, `.env.example` — repo hygiene
-- `.github/workflows/ci.yml` — the product's own CI, runs on every push
+- `.github/workflows/ci.yml` — the product's CI (arena-managed; runs on every push)
 
 The structure already exists. Read existing code before writing new code;
 extend what's there instead of recreating it.
@@ -39,11 +39,14 @@ extend what's there instead of recreating it.
    write plans about the code.
 7. **Never commit real secrets.** Copy `.env.example` to `.env` for local
    values; keep real credentials out of the repository.
-8. **Don't touch the arena harness.** `.github/workflows/team-build-turn.yml`,
+8. **Don't touch the arena harness or any workflow files.** Everything under
+   `.github/` — including `ci.yml` — is the arena's: `.github/workflows/team-build-turn.yml`,
    `docker/Dockerfile.arena-team-base`, `docker/opencode.json`, and
-   `scripts/workers_ai_shim.js` are the arena's plumbing — they're re-synced
-   before every turn, so edits get overwritten anyway. `.github/workflows/ci.yml`
-   is yours; that one is the product's gate and you may extend it.
+   `scripts/workers_ai_shim.js` are re-synced before every turn, and the
+   harness mounts `.github/` read-only inside your container and restores it
+   before every push, so edits there are discarded anyway. The arena extends
+   `ci.yml` when the product needs new CI; you don't. `ci.yml` runs on every
+   push and fails loudly (rule 1) — build against it, don't edit it.
 9. **Verify the UI in a real browser when the product has one.** The turn
    image ships a headless browser (Playwright tools: `browser_navigate`,
    `browser_snapshot`, `browser_click`, ...). Start the app, exercise the

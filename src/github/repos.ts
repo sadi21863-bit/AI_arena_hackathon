@@ -172,8 +172,12 @@ const HARNESS_FILES = [
  * Deliberately separate from HARNESS_FILES: that list is re-synced before
  * every turn for fairness (syncTeamHarness) and must never overwrite
  * agent-written content — BACKLOG.md in particular is the agent's working
- * document. These are seeded once, at creation, and then belong to the
- * team.
+ * document. These are seeded once, at creation. Everything under .github/
+ * (including ci.yml) is arena-managed: the build-turn workflow mounts
+ * .github/ read-only in the agent container and restores it to the turn-start
+ * HEAD before each push, so a team repo's CI cannot diverge from what the
+ * arena shipped — the arena extends ci.yml when a product needs new CI, not
+ * the team.
  */
 const SCAFFOLD_FILES = [
   "AGENTS.md",

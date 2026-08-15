@@ -161,6 +161,31 @@ function createSseRewriter() {
   };
 }
 
+/**
+ * The only Workers AI endpoints the shim exists to proxy, keyed by the path
+ * OpenCode's openai-compatible provider actually calls. Everything else is
+ * rejected — this is the shim's authorization boundary.
+ *
+ * The shim holds CF_API_TOKEN and forwards whatever path it is given to
+ * api.cloudflare.com. Without an allowlist, a request path containing `..`
+ * segments (or the container ever being coerced into calling an unlisted
+ * path) would escape the `accounts/{id}/ai/v1` namespace and reach the
+ * wider Cloudflare account API with the full account token attached. The
+ * fix is to not forward client-controlled paths at all: only exact,
+ * enumerated suffixes are mapped onto the upstream base, so traversal can't
+ * change what the token is spent on.
+ */
+const ALLOWED_UPSTREAM_SUFFIXES = new Set(["/chat/completions", "/models", "/embeddings"]);
+
+function upstreamPathFor(reqUrl, upstreamBase) {
+  if (typeof reqUrl !== "string") return null;
+  const path = reqUrl.split("?")[0]; // drop any query string — never forwarded
+  if (path !== "/v1" && !path.startsWith("/v1/")) return null;
+  const suffix = path.slice("/v1".length) || "/";
+  if (!ALLOWED_UPSTREAM_SUFFIXES.has(suffix)) return null;
+  return upstreamBase + suffix;
+}
+
 function startServer({ port, accountId, apiToken, upstreamTimeoutMs, requestFn }) {
   const upstreamBase = `/client/v4/accounts/${accountId}/ai/v1`;
   // 2026-08-15: the turns that burned the full 120-min job timeout with zero
@@ -201,7 +226,21 @@ function startServer({ port, accountId, apiToken, upstreamTimeoutMs, requestFn }
         }
       }
 
-      const suffix = req.url.replace(/^\/v1/, "");
+      const upstreamPath = upstreamPathFor(req.url, upstreamBase);
+      if (!upstreamPath) {
+        // The shim is an authorization boundary, not a general-purpose proxy:
+        // it holds CF_API_TOKEN, so any request it forwards reaches Cloudflare
+        // with the full account credential attached. A client-controlled path
+        // (e.g. one carrying `..` segments) must never be forwarded at all —
+        // only the allowlisted AI endpoints above are. Rejecting unknown
+        // paths also makes the shim a canary: a 400 here means something
+        // other than the coding agent is probing it.
+        logLine(`rejected (path not allowlisted): ${req.url}`);
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "shim: path not allowlisted" } }));
+        return;
+      }
+
       const headers = {
         "content-type": req.headers["content-type"] || "application/json",
         "content-length": Buffer.byteLength(body),
@@ -211,7 +250,7 @@ function startServer({ port, accountId, apiToken, upstreamTimeoutMs, requestFn }
       };
 
       const upstream = upstreamRequest(
-        { hostname: "api.cloudflare.com", port: 443, path: upstreamBase + suffix, method: req.method, headers },
+        { hostname: "api.cloudflare.com", port: 443, path: upstreamPath, method: req.method, headers },
         (up) => {
           logLine(`upstream ${up.statusCode || 502} ${up.headers["content-type"] || ""}`);
           res.writeHead(up.statusCode || 502, {
@@ -275,7 +314,7 @@ function startServer({ port, accountId, apiToken, upstreamTimeoutMs, requestFn }
   return server;
 }
 
-module.exports = { normalizeToolCallIds, normalizeRequestBody, createSseRewriter, startServer };
+module.exports = { normalizeToolCallIds, normalizeRequestBody, createSseRewriter, upstreamPathFor, startServer };
 
 if (require.main === module) {
   const accountId = process.env.CF_ACCOUNT_ID;
