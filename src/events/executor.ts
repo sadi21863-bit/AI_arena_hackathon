@@ -11,7 +11,7 @@ import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
-import { recallMemory, queryArchive, getVectorsByIds, cosineSimilarity } from "../agents/memory";
+import { recallMemory, recallLessons, queryArchive, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
 import { createTeamRepo, syncTeamHarness } from "../github/repos";
 import { scoreTarget } from "../judges/scoring";
@@ -84,6 +84,17 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const memories = await recallMemory(env, agent.id, `${agent.lens} opportunities and research findings`, 3);
   const context = memories.map((m) => `- ${m.text}`).join("\n") || "(no prior research recalled)";
 
+  // Tribunal carry-over (spec §14 "synthesis carries into the next event",
+  // fixed 2026-08-15): the agent's own distilled lessons from past events,
+  // recalled by type='reflection' instead of competing with ideas/critiques
+  // for the top-3 similarity slots. The lesson is an explicit prompt line,
+  // so "what did I learn last time" is guaranteed present at ideation time,
+  // not a lottery — see recallLessons in agents/memory.ts.
+  const lessons = await recallLessons(env, agent.id, `${agent.lens} lesson from my past performance to apply this event`, 2);
+  const lessonsText = lessons.length
+    ? `\n\nYour own past-event lesson(s) — apply these this event:\n` + lessons.map((l) => `- ${l.text.slice(0, 240)}`).join("\n")
+    : "";
+
   // Found live (docs/INVESTIGATION_2026-07-28.md NEW-2): this call runs up to
   // 3x per agent per event (scheduler.ts's queueIdeationAndCritique) with an
   // identical prompt each time, so 10/12 agents submitted 2-3 near-duplicate
@@ -119,7 +130,7 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
     : "";
 
   const text = await callAgent(env, agent, "design",
-    `Recent research from your own lens:\n${context}${priorIdeasText}${pastIdeasText}\n\n` +
+    `Recent research from your own lens:\n${context}${lessonsText}${priorIdeasText}${pastIdeasText}\n\n` +
     `Submit ONE product idea grounded in that research — a new idea, or a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
     `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
     `build_scope should be a short buildable-in-days scope, not a vague vision.`
@@ -194,8 +205,18 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
     ? `Your own earlier take on related ideas:\n${priorViews.map((p) => `- ${p.text.slice(0, 240)}`).join("\n")}\n\n`
     : "";
 
+  // Tribunal carry-over, same guarantee as handleSubmitIdea (2026-08-15):
+  // the critic's own past-event lessons, recalled by type='reflection'
+  // (recallLessons), so critique quality is informed by what this agent
+  // learned last event — not just what it happens to remember about the
+  // idea itself.
+  const lessons = await recallLessons(env, agent.id, `${agent.lens} lesson about giving useful critiques`, 2);
+  const lessonsText = lessons.length
+    ? `Your own past-event lesson(s) — apply these while critiquing:\n${lessons.map((l) => `- ${l.text.slice(0, 240)}`).join("\n")}\n\n`
+    : "";
+
   const text = await callAgent(env, agent, "validate",
-    `${groundingText}${priorViewsText}Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
+    `${groundingText}${priorViewsText}${lessonsText}Critique this idea from your lens:\nTitle: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
     `Respond with ONLY a JSON object: {"strength": string, "weakness": string, "suggestion": string}. All three fields are required, spec §4.`
   );
 

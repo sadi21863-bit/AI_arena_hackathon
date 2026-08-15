@@ -259,6 +259,22 @@ jobs:
           LAST_CHANGED=0
           LAST_ACTIVE=$(date +%s)
           TIMED_OUT=0
+          # Wait for the container to EXIST before arming the watchdog. The
+          # original loop checked `docker inspect ... = "true"` as its entry
+          # condition immediately after `docker run ... &`, but docker run
+          # needs a moment to create the container — so on the first pass the
+          # inspect returned empty, the loop never ran, the watchdog was never
+          # armed, and `wait $DOCKER_PID` then blocked for the whole job
+          # budget. Found live on spike-ui-001: the agent hung on provider
+          # 429s for 118 min and the job was silently killed by the 120-min
+          # cap instead of failing fast at the 10-min silence mark. Poll until
+          # the container shows up (it must either be running or have already
+          # exited); only then does the silence loop below take over.
+          for _ in $(seq 1 60); do
+            STATE=$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+            [ -n "$STATE" ] && break
+            sleep 1
+          done
           # Loop on the CONTAINER's state, not `kill -0 $DOCKER_PID`: a
           # backgrounded process that has exited stays a zombie until `wait`,
           # and kill -0 keeps succeeding on a zombie — so that test would never

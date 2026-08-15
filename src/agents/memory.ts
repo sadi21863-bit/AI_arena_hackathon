@@ -131,6 +131,30 @@ export async function recallMemory(
 }
 
 /**
+ * Recall of ONE agent's tribunal lessons only — spec §14's "synthesis
+ * carries into the next event" made guaranteed instead of probabilistic.
+ *
+ * Before this existed, executor.ts surfaced past agent output with
+ * recallMemory(), which has no type filter — so a synthesis reflection
+ * (embedded by handleTribunalSynthesize with type="reflection") only
+ * reached the next event's prompt if it happened to out-similarity the
+ * agent's own ideas/critiques/research on the same query. Usually it
+ * didn't, so the lessons sat in the archive unread. Filtering on
+ * type="reflection" (Vectorize equality filter, agents/memory.ts
+ * queryArchive) makes "what did I learn last time" a first-class, always-
+ * present context line instead of a lottery. Same Hermes/GenericAgent
+ * self-improving-agent pattern: past performance feeds the next prompt.
+ */
+export async function recallLessons(
+  env: Env,
+  agentId: string,
+  queryText: string,
+  topK = 3
+): Promise<RecalledMemory[]> {
+  return queryArchive(env, queryText, { agentId, type: "reflection" }, topK);
+}
+
+/**
  * Cosine similarity between two already-embedded vectors — for comparing
  * specific records against each other (e.g. idea deduplication), not
  * semantic search against the whole index.
