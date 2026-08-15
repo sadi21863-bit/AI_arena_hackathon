@@ -289,6 +289,10 @@ export async function mount(el, params) {
       `${ideaList.get(id).length} ideas · gave ${t.given}, received ${t.received} interactions`;
   };
 
+  nodeSel.attr("tabindex", 0)
+    .attr("role", "button")
+    .attr("aria-label", (id) => nodeInfo(id).replace(/\n/g, ", "));
+
   nodeSel.append("circle").attr("r", (id) => 12 + Math.min(12, Math.sqrt(ideaList.get(id).length) * 4))
     .attr("fill", "var(--arena-bg-raised)")
     .attr("stroke", (id) => {
@@ -360,6 +364,18 @@ export async function mount(el, params) {
      edge filtering only make sense in Constellation — during Replay the
      link layer belongs to the playback, not the filter. */
   nodeSel.on("click", (event, id) => {
+    event.stopPropagation();
+    if (activeTab !== "constellation") { drawFocus(id); return; }
+    filter.focus = filter.focus === id ? null : id;
+    applyFilter();
+    drawFocus(id);
+  });
+  /* Keyboard parity with the click handler above — the nodes are
+     focusable (tabindex=0), so Enter/Space must activate them too, else
+     a keyboard-only user can tab to an agent but never read its story. */
+  nodeSel.on("keydown", (event, id) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
     event.stopPropagation();
     if (activeTab !== "constellation") { drawFocus(id); return; }
     filter.focus = filter.focus === id ? null : id;
@@ -664,6 +680,12 @@ export async function mount(el, params) {
       </div>`);
     for (const item of feedEl.querySelectorAll(".v-arena__feed-item")) {
       item.addEventListener("click", () => { stop(); goTo(parseInt(item.dataset.feedIndex, 10)); });
+      item.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        stop();
+        goTo(parseInt(item.dataset.feedIndex, 10));
+      });
     }
   }
 
@@ -688,14 +710,28 @@ export async function mount(el, params) {
     drawFocus(filter.focus);
   }
 
-  for (const tab of el.querySelectorAll(".v-arena__tabs button")) {
-    tab.addEventListener("click", () => {
-      activeTab = tab.dataset.tab === "replay" ? "replay" : "constellation";
-      el.querySelectorAll(".v-arena__tabs button").forEach((b) => {
-        b.classList.toggle("is-active", b === tab);
-        b.setAttribute("aria-selected", b === tab ? "true" : "false");
-      });
-      if (activeTab === "replay") showReplay(); else showConstellation();
+  const tabButtons = () => [...el.querySelectorAll(".v-arena__tabs button")];
+  const activateTab = (tab) => {
+    activeTab = tab.dataset.tab === "replay" ? "replay" : "constellation";
+    tabButtons().forEach((b) => {
+      b.classList.toggle("is-active", b === tab);
+      b.setAttribute("aria-selected", b === tab ? "true" : "false");
+    });
+    if (activeTab === "replay") showReplay(); else showConstellation();
+  };
+  for (const tab of tabButtons()) {
+    tab.addEventListener("click", () => activateTab(tab));
+    /* Arrow keys move between tabs per the ARIA tabs pattern — otherwise
+       each tab is a separate Tab stop and the Replay/Constellation switch
+       is unusable from the keyboard beyond clicking. */
+    tab.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const tabs = tabButtons();
+      const i = tabs.indexOf(tab);
+      const next = tabs[(i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
+      e.preventDefault();
+      next.focus();
+      activateTab(next);
     });
   }
 

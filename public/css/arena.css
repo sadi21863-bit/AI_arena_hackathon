@@ -26,7 +26,11 @@
   --arena-bg-sunken: #e9e1d1;
   --arena-ink: #211b14;
   --arena-ink-soft: #55483a;
-  --arena-ink-faint: #8c7b66;
+  /* ink-faint is a TEXT color used for captions, timestamps and labels, so
+     it must clear 4.5:1 like every other ink token. #8c7b66 measured 3.56:1
+     on --arena-bg and 3.14:1 on --arena-bg-sunken (below AA) — #715d48 is
+     5.45:1 on bg, 4.81:1 on the darkest surface it sits on. */
+  --arena-ink-faint: #715d48;
   --arena-line: #ddd2ba;
   --arena-line-strong: #c7b797;
 
@@ -78,7 +82,9 @@
   --arena-bg-sunken: #120d08;
   --arena-ink: #f1e9da;
   --arena-ink-soft: #cbb99e;
-  --arena-ink-faint: #8c7860;
+  /* Same AA fix as the light theme: #8c7860 measured 4.32:1 on --arena-bg
+     (below 4.5) — #a08b6d is 5.57:1 on bg, 5.17:1 on --arena-bg-raised. */
+  --arena-ink-faint: #a08b6d;
   --arena-line: #3a2d1c;
   --arena-line-strong: #4d3c26;
   --arena-clay: #e07a4e;
@@ -161,6 +167,15 @@ a:hover { color: var(--arena-clay); }
   border-radius: 3px;
 }
 
+/* SVG graph nodes (arena + graph views) are focusable via tabindex=0 and
+   act as buttons, but the global :focus-visible outline does not render
+   reliably on SVG <g> elements — ring the visible circle instead so the
+   focused node is legible on both themes. */
+g[role="button"]:focus-visible circle {
+  stroke: var(--arena-focus);
+  stroke-width: 3px;
+}
+
 /* Grain overlay — subtle texture so flat cream fields don't feel sterile.
    Multiply is right on cream; on the dark field it would crush to black. */
 .arena-grain {
@@ -237,6 +252,30 @@ a:hover { color: var(--arena-clay); }
 .arena-strip__stat b { color: var(--arena-ink); font-weight: 600; }
 
 /* ---------- Navigation ---------- */
+
+/* Skip link (observatory shell): visually hidden off-canvas until focused,
+   when it becomes the first thing a keyboard user reaches on a fresh load.
+   The global :focus-visible outline would draw even when it is off-screen,
+   which is why this block sets its own. */
+.arena-skip {
+  position: absolute;
+  top: -48px;
+  left: 12px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--arena-radius-sm);
+  background: var(--arena-bg-raised);
+  border: 1px solid var(--arena-focus);
+  color: var(--arena-ink);
+  font-family: var(--arena-font-body);
+  font-size: 0.9rem;
+  text-decoration: none;
+  box-shadow: var(--arena-shadow-lifted);
+  transition: top 0.12s ease;
+}
+.arena-skip:focus {
+  top: 12px;
+}
 
 .arena-nav {
   position: sticky;

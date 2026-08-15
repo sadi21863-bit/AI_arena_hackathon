@@ -120,6 +120,29 @@ export function navigate(path, { replace = false } = {}) {
   resolve();
 }
 
+const TITLES = {
+  live: "Live",
+  archive: "Archive",
+  office: "Office",
+  arena: "Arena",
+  graph: "Agent Graph",
+  ideas: "Ideas",
+  replay: "Replay",
+  diff: "Diff",
+  tribunal: "Tribunal",
+  headroom: "Headroom",
+};
+
+/** The document title should describe what's on screen — hash navigation
+    never changes it on its own, so the browser tab would otherwise read the
+    shell's static title on every view. */
+function setTitle(hit) {
+  const seg = hit ? hit.pattern.split("/")[1] : null;
+  const base = seg ? TITLES[seg] || seg : "Not found";
+  const id = hit && hit.params && (hit.params.eventId || hit.params.cycleId);
+  document.title = id ? `${base} · ${id}` : base;
+}
+
 async function resolve() {
   // Claimed here, BEFORE any await, so tokens follow navigation order. If it
   // were claimed after the dynamic import, a slower earlier view could take a
@@ -131,6 +154,7 @@ async function resolve() {
   // Re-mounting the same view for a param-only change is the view's job to
   // handle via its own state; remounting would drop scroll and focus.
   const key = hit ? hit.pattern.split("/")[1] : "404";
+  setTitle(hit);
 
   if (teardown) {
     try { teardown(); } catch (err) { console.error("teardown failed", err); }

@@ -204,8 +204,14 @@ export async function mount(el, params) {
       .attr("text-anchor", "middle").attr("dy", 32)
       .attr("font-family", "var(--arena-font-mono)").attr("font-size", 11)
       .attr("fill", "var(--arena-ink-soft)");
-    nodeSel.append("title").text((d) =>
-      `${d.name} — gave ${outCount.get(d.id) || 0} interactions, received ${inCount.get(d.id) || 0}`);
+    const nodeInfo = (d) => `${d.name} — gave ${outCount.get(d.id) || 0} interactions, received ${inCount.get(d.id) || 0}`;
+    nodeSel.append("title").text(nodeInfo);
+    /* Keyboard parity with the click handler below: the nodes are
+       focusable (tabindex=0), so Enter/Space must isolate them too — else a
+       keyboard-only user can tab to an agent but never focus it. */
+    nodeSel.attr("tabindex", 0)
+      .attr("role", "button")
+      .attr("aria-label", (d) => `${d.name}. ${nodeInfo(d)}`);
 
     const filter = { types: new Set(Object.keys(EDGE_COLORS)), focus: null };
 
@@ -256,6 +262,16 @@ export async function mount(el, params) {
       filter.focus = filter.focus === d.id ? null : d.id;
       setHint(filter.focus
         ? `Focus: ${d.name} — click again or click the stage to release`
+        : `Drag nodes to rearrange · scroll to zoom · click an agent to isolate it`);
+      applyFilter();
+    });
+    nodeSel.on("keydown", (event, d) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      event.stopPropagation();
+      filter.focus = filter.focus === d.id ? null : d.id;
+      setHint(filter.focus
+        ? `Focus: ${d.name} — press again or click the stage to release`
         : `Drag nodes to rearrange · scroll to zoom · click an agent to isolate it`);
       applyFilter();
     });

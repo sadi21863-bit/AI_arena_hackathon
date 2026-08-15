@@ -17,6 +17,13 @@
 <body>
 <div class="arena-grain" aria-hidden="true"></div>
 
+<!-- Skip link: the nav is the first tab stop, so a keyboard user lands on
+     the brand link before any view content every single navigation. The link
+     jumps focus to the main content on first tab press; it is visually hidden
+     until focused. The target needs a tabindex so the browser honors the
+     focus move (main is not focusable by default). -->
+<a class="arena-skip" href="#view">Skip to content</a>
+
 <nav class="arena-nav">
   <a href="/" class="arena-nav__mark">The Arena</a>
   <div class="arena-nav__actions">
@@ -30,7 +37,7 @@
 
 <div id="arena-context" class="arena-context"></div>
 
-<main id="view" class="arena-container">
+<main id="view" class="arena-container" tabindex="-1">
   <div class="arena-state">Loading the Observatory…</div>
 </main>
 
