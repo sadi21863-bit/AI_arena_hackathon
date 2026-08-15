@@ -694,6 +694,24 @@ export async function mount(el, params) {
           <div>Build role: <b>${member.build_role || "—"}</b></div>
           <div>Turns taken: <b>${member.turns_taken ?? 0}</b></div>` : ""}
       </div>
+      ${(() => {
+        // G6: the agent's real queue width. The representative row above is
+        // one position; the active list is the parallelism it hides. Rendered
+        // as textContent-safe list items — these are queue rows, not LLM
+        // prose, but every label below already goes through taskInfo.
+        const tasks = Array.isArray(a.active_tasks) ? a.active_tasks : [];
+        if (tasks.length <= 1) return "";
+        const label = (t) => (taskInfo(t.task_type) ? taskInfo(t.task_type).label : t.task_type);
+        return html`
+          <div class="v-office__inspector-rows v-office__inspector-tasks">
+            <div><b>${tasks.length} queued tasks</b></div>
+            ${tasks.map((t) => html`
+              <div class="v-office__inspector-task">
+                <span class="v-office__inspector-task-dot"></span>
+                ${label(t)} <span class="v-office__inspector-task-status">${t.status || ""}</span>
+              </div>`)}
+          </div>`;
+      })()}
       <a class="arena-btn arena-btn--sm arena-btn--ghost v-office__inspector-graph"
          href="${href(`/arena/${event.type === "hackathon" ? event.parent_event_id : event.id}`)}">See this arena's interactions →</a>`);
   }
@@ -722,6 +740,7 @@ export async function mount(el, params) {
           <div class="v-office__agent" id="of-agent-${a.agent_id}" tabindex="0" role="button" aria-label="${a.name}">
             <div class="v-office__bubble" hidden></div>
             <div class="v-office__emote"></div>
+            <div class="v-office__busy" hidden title=""></div>
             <div class="v-office__sprite" style="background-image:url(/observatory/assets/office/pixel/sprites/${CAST[a.agent_id].sprite}.webp)${CAST[a.agent_id].filter ? `;filter:${CAST[a.agent_id].filter}` : ""}"></div>
             <div class="v-office__name">${a.name}</div>
           </div>`)}
@@ -734,6 +753,7 @@ export async function mount(el, params) {
         el: node,
         spriteEl: node.querySelector(".v-office__sprite"),
         emoteEl: node.querySelector(".v-office__emote"),
+        busyEl: node.querySelector(".v-office__busy"),
         bubbleEl: node.querySelector(".v-office__bubble"),
         x: 50, y: 74,          // everyone starts at the break area and walks out
         walkTimer: null, settleTimer: null,
@@ -868,11 +888,28 @@ export async function mount(el, params) {
         node.el.classList.toggle("is-working", a.status === "in_progress");
         node.el.classList.toggle("is-abandoned", abandoned);
         node.el.classList.toggle("is-struggling", struggling);
+
+        // G6 (docs/OFFICE_INVESTIGATION_2026-07-31.md): one representative row
+        // per agent hid parallelism — an agent with three queued critiques
+        // looked identical to one with a single task. The active list from
+        // the API makes that visible: a badge showing the true width of the
+        // agent's queue. Only shown past a single task (1 is what the sprite
+        // already represents, a badge would be noise).
+        const busyCount = (a.active_count ?? (Array.isArray(a.active_tasks) ? a.active_tasks.length : 0));
+        if (node.busyEl) {
+          const busy = !abandoned && busyCount > 1;
+          node.busyEl.hidden = !busy;
+          if (busy) {
+            node.busyEl.textContent = `×${busyCount}`;
+            node.busyEl.title = `${busyCount} queued tasks for ${a.name} — click to see them all`;
+          }
+        }
+
         node.el.title = abandoned
           ? `${a.name} · GIVEN UP ON — ${a.failed_attempts} failed ${a.failed_task_type} attempts, no longer retrying`
           : struggling
             ? `${a.name} · ${a.failed_attempts} failed ${a.failed_task_type} attempt(s), still retrying`
-            : `${a.name}${info ? ` · ${info.label}` : " · idle"}${a.status ? ` (${a.status})` : ""}`;
+            : `${a.name}${info ? ` · ${info.label}` : " · idle"}${a.status ? ` (${a.status})` : ""}${busyCount > 1 ? ` · ${busyCount} queued` : ""}`;
 
         // P3: the work itself. Rendered as text nodes rather than innerHTML —
         // every string here is LLM output, and it reaches the DOM without

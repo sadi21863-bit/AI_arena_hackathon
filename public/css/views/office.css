@@ -143,6 +143,24 @@
 .v-office__agent.is-working .v-office__emote { animation: office-emote 2.2s ease-in-out infinite; }
 @keyframes office-emote { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-3px); } }
 
+/* --- G6: busy badge ------------------------------------------------------
+   One task per agent used to be all the room could show, so an agent with
+   three queued critiques looked identical to one with a single task. The
+   badge sits at the top corner of the character — clear of the emote above
+   their head and the name below — and just states the queue width. Hidden
+   unless the API reports more than one active task, so an idle room stays
+   exactly as clean as it was. */
+.v-office__busy {
+  position: absolute; top: -4px; right: -6px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--arena-font-mono); font-size: 0.66rem; font-weight: 700;
+  color: var(--arena-bg); background: var(--arena-accent, #7a5cff);
+  border-radius: 9px; box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  z-index: 3;
+}
+.v-office__agent.is-abandoned .v-office__busy { display: none; }
+
 /* --- Inspector --- */
 .v-office__inspector { padding: 18px 22px; margin-top: 16px; }
 .v-office__inspector-empty { font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-ink-faint); }
@@ -151,6 +169,17 @@
 .v-office__inspector-rows { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 13px; }
 .v-office__inspector-rows div { font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
 .v-office__inspector-rows b { color: var(--arena-ink); font-weight: 600; }
+
+/* G6: the full queued-task list in the inspector. Laid out as stacked rows
+   (not the wrap-row grid above) because each entry is one task line, and a
+   wrap grid would turn "3 critiques, 1 research" into an unreadable chain. */
+.v-office__inspector-tasks { flex-direction: column; gap: 5px; margin-top: 12px; }
+.v-office__inspector-task { display: flex; align-items: center; gap: 7px; }
+.v-office__inspector-task-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--arena-ink-faint);
+}
+.v-office__inspector-task-status { color: var(--arena-ink-faint); }
 
 /* --- P1: failure states -------------------------------------------------
    An agent the scheduler has permanently given up on used to render exactly

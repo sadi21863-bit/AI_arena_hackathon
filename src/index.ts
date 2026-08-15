@@ -607,10 +607,22 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const failsByAgentTask = new Map<string, number>();
       const failInfo = new Map<string, { count: number; lastError: string | null; taskType: string }>();
       const completedByAgentTask = new Set<string>();
+      // G6 (docs/OFFICE_INVESTIGATION_2026-07-31.md): the representative row
+      // hides parallelism — an agent with three queued critiques looks
+      // identical to one with a single task. The active list below is every
+      // pending/in_progress row for the agent (unbounded; D1's schema keeps
+      // one event's queue small enough that shipping the whole list is fine),
+      // so the Office can show the real width of each agent's work.
+      const activeByAgent = new Map<string, Row[]>();
 
       for (const row of rows.results) {
         const key = `${row.agent_id}|${row.task_type}`;
         if (row.status === "completed") completedByAgentTask.add(key);
+        if (row.status === "pending" || row.status === "in_progress") {
+          const list = activeByAgent.get(row.agent_id) ?? [];
+          list.push(row);
+          activeByAgent.set(row.agent_id, list);
+        }
         if (row.status === "failed") {
           const n = (failsByAgentTask.get(key) ?? 0) + 1;
           failsByAgentTask.set(key, n);
@@ -636,6 +648,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         AGENTS.map((agent) => {
           const row = best.get(agent.id);
           const fail = failInfo.get(agent.id);
+          // G6: the full active queue, most-recently-updated first, so the
+          // Office can show an agent with three queued critiques as busy at
+          // three places rather than one. Deliberately separate from the
+          // representative `row` above — `task_type`/`status` stay the
+          // positioning data, this list is the parallelism a position hides.
+          const active = (activeByAgent.get(agent.id) ?? []).slice().sort((a, b) => stamp(b).localeCompare(stamp(a)));
           return {
             agent_id: agent.id,
             name: agent.name,
@@ -643,6 +661,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
             task_type: row?.task_type ?? null,
             status: row?.status ?? null,
             updated_at: row ? stamp(row) : null,
+            active_count: active.length,
+            active_tasks: active.map((r) => ({
+              task_type: r.task_type,
+              status: r.status,
+              updated_at: stamp(r),
+            })),
             // P1. `abandoned` mirrors the watchdog exactly: at or past the cap
             // on some task_type, with nothing completed for that same
             // task_type — i.e. scheduler.ts has stopped retrying and will not
