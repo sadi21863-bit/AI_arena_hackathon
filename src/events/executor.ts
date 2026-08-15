@@ -612,6 +612,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
         `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
         `2. IMPLEMENT: write real project files with your file-writing tools. Build the core of what the idea promises — the primary flow working beats breadth.\n` +
         `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. If the product has a UI, also verify it in the browser: start the app, exercise the primary flow with the Playwright tools (browser_navigate / browser_snapshot), fix what you find, and save a screenshot to /tmp/playwright-artifacts. If no test suite exists yet, add at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
+      `3.5 REVIEW your own diff before finishing: load and run the baked code-review-and-quality and security-and-hardening skills against your changes and fix what they flag. This is not optional — the sandbox's egress filtering exists because of these rules, and a turn that ships an unreviewed change has not finished.\n` +
         `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`),
@@ -683,6 +684,7 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
       `1. PLAN (1-2 sentences): state which backlog item you will implement this turn and the files it touches.\n` +
       `2. IMPLEMENT: write or modify real files with your tools. Prefer completing the primary flow over starting new breadth.\n` +
       `3. SELF-VERIFY before finishing: run the checks the repo declares (npm test / npx tsc --noEmit / pytest) and fix what fails. If the product has a UI, also verify it in the browser: start the app, exercise the primary flow with the Playwright tools (browser_navigate / browser_snapshot), fix what you find, and save a screenshot to /tmp/playwright-artifacts. Add or extend at least one test this turn. The build verification step after you finish will fail the turn if the code does not build or tests fail.\n` +
+      `3.5 REVIEW your own diff before finishing: load and run the baked code-review-and-quality and security-and-hardening skills against your changes and fix what they flag. This is not optional — the sandbox's egress filtering exists because of these rules, and a turn that ships an unreviewed change has not finished.\n` +
       `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
       `Reference architecture notes (guidance only):\n${idea?.build_scope}`),
   });
