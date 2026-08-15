@@ -75,6 +75,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Record turn-start HEAD
+        # The "Enforce real build output" gate below must detect work that the
+        # agent COMMITTED as well as uncommitted file changes — AGENTS.md
+        # rule 5 explicitly tells the turn agent to "commit small, focused
+        # changes", so a good agent leaves a clean working tree and the old
+        # git-status-only check falsely reported "no file changes" (found live
+        # on the spike-ui-001 zen rerun: agent built the app, ran 7 green
+        # tests, committed twice, exited 0 — and was still failed). Capture
+        # the SHA the turn starts from; the gate compares against it.
+        id: turnstart
+        run: echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build team base image
         # arena-team-base:latest doesn't persist between jobs (each run is a
         # fresh VM), so it's built fresh here from docker/Dockerfile.arena-team-base
@@ -179,6 +191,15 @@ jobs:
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
         #
+        # --pids-limit=256 (raised from 100, spike-ui-001 zen rerun, found
+        # live): the container also runs the Playwright MCP browser for the
+        # ui-verify step. chromium's headless footprint is ~50 pids and the
+        # opencode/node baseline is ~58, so --pids-limit=100 overflowed
+        # (cgroup pids.max) and every browser launch crashed with "Target
+        # crashed" — the agent had to fall back to an HTTP smoke check. 256
+        # still bounds runaway processes (a fork bomb can't spiral) while
+        # giving a real browser turn enough headroom to actually happen.
+        #
         # --user "$(id -u):$(id -g)" (not a hardcoded 1000:1000): /workspace
         # is bind-mounted from the runner's checkout, owned by the runner's
         # actual uid — a mismatched uid can't write into it even though the
@@ -235,7 +256,7 @@ jobs:
           WATCHDOG_SILENCE_MINUTES="${WATCHDOG_SILENCE_MINUTES:-10}"
 
           docker run --rm --name "$CONTAINER" \
-            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=100 \
+            --cpus="2" --memory="4g" --memory-swap="4g" --pids-limit=256 \
             --read-only \
             --tmpfs /tmp:noexec,nosuid,size=500m,mode=1777 \
             --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges:true \
@@ -348,13 +369,19 @@ jobs:
         # or the commit step, so a no-op turn is reported as a failure
         # instead of a silent success.
         run: |
+          START_HEAD="${{ steps.turnstart.outputs.head }}"
+          NOW_HEAD=$(git rev-parse HEAD)
           CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log')
-          if [ -z "$CHANGED" ]; then
-            echo "::error::Build turn produced no file changes outside the turn logs — the agent emitted text without writing any files. Failing the job instead of reporting a false success."
+          if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
+            echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
           fi
-          echo "Files changed this turn:"
+          echo "Files changed this turn (uncommitted):"
           echo "$CHANGED"
+          if [ "$NOW_HEAD" != "$START_HEAD" ]; then
+            echo "Commits made this turn ($START_HEAD..$NOW_HEAD):"
+            git log --oneline "$START_HEAD..$NOW_HEAD"
+          fi
 
       - name: Phase B — install dependencies (network-scoped to package registries)
         # The verification step below runs --network=none, so dependencies
@@ -522,7 +549,18 @@ jobs:
               elif [ -f package.json ]; then
                 echo "[node] package.json present"
                 if [ ! -d node_modules ]; then
-                  fail "node_modules missing after the install phase — dependencies were not installed"
+                  # A dependency-free node app legitimately has no node_modules
+                  # after a successful install (found live, spike-ui-001: the
+                  # turn agent built a dependency-free node:http app — `npm
+                  # install` succeeded and still created no node_modules, and
+                  # the old unconditional check hard-failed the whole turn on
+                  # it). Only fail when the manifest actually declares
+                  # dependencies that should have been installed.
+                  if node -e "const p=require('./package.json');const d=Object.assign({},p.dependencies,p.devDependencies);process.exit(Object.keys(d).length?0:1)"; then
+                    fail "node_modules missing after the install phase — dependencies were not installed"
+                  else
+                    echo "[node] no dependencies declared — node_modules not expected, skipping"
+                  fi
                 else
                   if [ -f tsconfig.json ]; then
                     echo "[node] tsconfig.json present -> npx tsc --noEmit"
@@ -622,12 +660,38 @@ jobs:
           exit 0
 
       - name: Commit progress
+        # The push must use a credential that carries the `workflows` OAuth
+        # scope when the turn agent touched .github/workflows/ — which is
+        # expected (AGENTS.md rule 8 gives the team its own product CI under
+        # .github/workflows/ci.yml). GITHUB_TOKEN can never carry that scope:
+        # `workflows` is a PAT/GitHub-App scope, not a GITHUB_TOKEN
+        # permission, so `permissions: workflows: write` is not even a valid
+        # YAML key (workflow fails to parse), and a push containing workflow
+        # file changes is refused with "refusing to allow a GitHub App to
+        # create or update workflow ... without `workflows` permission"
+        # (found live, spike-ui-001 zen rerun, after build + verification had
+        # both passed). Use the repo's ARENA_PUSH_TOKEN (a PAT with the
+        # `workflow` scope) for the push; the default GITHUB_TOKEN is the
+        # fallback so the harness still works on repos without that secret.
+        env:
+          ARENA_PUSH_TOKEN: ${{ secrets.ARENA_PUSH_TOKEN }}
         run: |
           git config user.name "arena-bot[${{ github.event.inputs.team || github.event.client_payload.team }}]"
           git config user.email "arena-bot@users.noreply.github.com"
           git add -A
           git diff --cached --quiet || git commit -m "Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}"
-          git push
+          if [ -n "$ARENA_PUSH_TOKEN" ]; then
+            # actions/checkout sets an http.extraheader with GITHUB_TOKEN
+            # (a GitHub App token), and git sends that Authorization header in
+            # preference to the credential embedded in the push URL — so the
+            # PAT in the URL was silently ignored and GitHub still saw a
+            # GitHub App token and refused the workflow-file changes. Drop the
+            # extraheader first so the PAT is the only credential offered.
+            git config --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+            git push "https://x-access-token:${ARENA_PUSH_TOKEN}@github.com/${{ github.repository }}.git" HEAD:${GITHUB_REF##*/}
+          else
+            git push
+          fi
 
       - name: Upload turn log as artifact
         if: always()
