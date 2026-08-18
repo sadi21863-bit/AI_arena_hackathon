@@ -21,6 +21,17 @@ const COLLAB_LABELS = {
   collaboration_refused: "refused collaboration",
 };
 
+const QUEUE_LABELS = {
+  "pending→in_progress": "claimed",
+  "in_progress→completed": "completed",
+  "in_progress→failed": "failed",
+  "in_progress→pending": "reset",
+};
+
+function queueLabel(row) {
+  return QUEUE_LABELS[`${row.from_status}→${row.to_status}`] || `${row.from_status} → ${row.to_status}`;
+}
+
 function summarize(item) {
   if (!item.content) return "";
   if (COLLAB_LABELS[item.type]) return item.content;
@@ -51,7 +62,7 @@ export async function mount(el, params) {
       <p>Every idea, critique and collaboration in the order it actually happened. Scrub or play it back.</p>
     </header>
     <div class="v-replay__bar arena-card">
-      <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-play" aria-label="Play">▶</button>
+      <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-play" aria-label="Run the tape">Run</button>
       <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-back" aria-label="Step back">←</button>
       <button class="arena-btn arena-btn--sm arena-btn--ghost" id="rp-fwd" aria-label="Step forward">→</button>
       <input type="range" id="rp-range" min="0" max="0" value="0" aria-label="Timeline position" />
@@ -67,8 +78,8 @@ export async function mount(el, params) {
   function stop() {
     clearInterval(playTimer);
     playTimer = null;
-    playBtn.textContent = "▶";
-    playBtn.setAttribute("aria-label", "Play");
+    playBtn.textContent = "Run";
+    playBtn.setAttribute("aria-label", "Run the tape");
   }
 
   function goTo(i, { scroll = true } = {}) {
@@ -88,8 +99,8 @@ export async function mount(el, params) {
   }
 
   function play() {
-    playBtn.textContent = "❚❚";
-    playBtn.setAttribute("aria-label", "Pause");
+    playBtn.textContent = "Hold";
+    playBtn.setAttribute("aria-label", "Hold the tape");
     playTimer = setInterval(() => {
       if (index + 1 > items.length - 1) return stop();
       goTo(index + 1);
@@ -107,13 +118,24 @@ export async function mount(el, params) {
   }
 
   const owner = all.find((e) => e.id === eventId);
-  const data = await fetchJson(`/events/${encodeURIComponent(eventId)}/timeline`, {
-    ttl: isTerminal(owner) ? FOREVER : 30_000,
-    optional: true,
-  });
+  const ttl = isTerminal(owner) ? FOREVER : 30_000;
+  const [data, journal] = await Promise.all([
+    fetchJson(`/events/${encodeURIComponent(eventId)}/timeline`, { ttl, optional: true }),
+    fetchJson(`/events/${encodeURIComponent(eventId)}/journal`, { ttl, optional: true }),
+  ]);
   if (disposed) return () => {};
 
-  items = data || [];
+  // Merge the G7 queue journal into the interaction timeline: ideas and
+  // interactions are the content, journal rows are the work — claimed,
+  // completed, failed, reset. A failed task leaves no interaction row, so
+  // without the journal the replay would show nothing where the work died.
+  items = [...(data || []), ...(journal || []).map((row) => ({
+    ...row,
+    ts: row.ts || row.created_at,
+    kind: "queue",
+    actor_id: row.agent_id,
+    content: null,
+  }))].sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
   if (!items.length) {
     render(body, html`<div class="arena-state">No interactions recorded yet for this event.</div>`);
     return () => { disposed = true; stop(); };
@@ -121,6 +143,17 @@ export async function mount(el, params) {
 
   render(body, html`${items.map((item) => {
     const label = COLLAB_LABELS[item.type] || item.type;
+    if (item.kind === "queue") {
+      const failed = item.to_status === "failed";
+      return html`
+        <div class="arena-card v-replay__item v-replay__item--queue ${failed ? "v-replay__item--failed" : ""}">
+          <div class="v-replay__kind">queue · ${(item.ts || "").slice(0, 16)}</div>
+          <div class="v-replay__title">${store.agentName(item.agent_id)} — ${item.task_type} ${queueLabel(item)}</div>
+          ${failed && item.error_message
+            ? html`<div class="v-replay__text">${item.error_message}</div>`
+            : ""}
+        </div>`;
+    }
     const kind = item.kind === "idea" ? "Idea submitted" : label;
     const title = item.kind === "idea" ? item.title : `${store.agentName(item.actor_id)} — ${label}`;
     const text = item.kind === "idea" ? item.one_liner : summarize(item);

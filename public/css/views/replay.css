@@ -28,6 +28,19 @@
 .v-replay__title { font-family: var(--arena-font-display); font-size: 1.05rem; color: var(--arena-ink); margin-bottom: 6px; }
 .v-replay__text { color: var(--arena-ink-soft); font-size: 0.92rem; line-height: 1.6; white-space: pre-wrap; }
 
+/* G7 — queue journal rows ride the same timeline, but as the machine's
+   voice: smaller, monospace, visibly a task transition rather than
+   produced content. Failures get the danger treatment so the work that
+   died stands out against the work that landed. */
+.v-replay__item--queue { padding: 10px 20px; margin-bottom: 6px; }
+.v-replay__item--queue .v-replay__title {
+  font-family: var(--arena-font-mono); font-size: 0.82rem;
+  font-feature-settings: "tnum" 1; margin-bottom: 0;
+}
+.v-replay__item--queue .v-replay__text { font-size: 0.8rem; margin-top: 4px; }
+.v-replay__item--failed { border-color: var(--arena-danger); opacity: 0.75; }
+.v-replay__item--failed .v-replay__kind { color: var(--arena-danger); }
+
 @media (max-width: 720px) {
   .v-replay__bar { top: 60px; flex-wrap: wrap; }
   .v-replay__bar input[type="range"] { order: 10; flex-basis: 100%; }

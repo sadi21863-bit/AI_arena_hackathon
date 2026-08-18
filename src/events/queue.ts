@@ -37,9 +37,12 @@ export async function enqueue(
   env: Env,
   item: { eventId: string; agentId?: string; taskType: TaskType; payload?: unknown; priority?: number; scheduledFor?: Date }
 ): Promise<void> {
-  await env.DB.prepare(
+  // RETURNING id so the creation itself can be journaled (queue_journal,
+  // G7): a row's birth is the first entry in its life story.
+  const inserted = await env.DB.prepare(
     `INSERT INTO event_queue (event_id, agent_id, task_type, payload, priority, scheduled_for)
-     VALUES (?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?)
+     RETURNING id`
   ).bind(
     item.eventId,
     item.agentId ?? null,
@@ -47,7 +50,17 @@ export async function enqueue(
     item.payload !== undefined ? JSON.stringify(item.payload) : null,
     item.priority ?? 5,
     (item.scheduledFor ?? new Date()).toISOString().replace("T", " ").slice(0, 19)
-  ).run();
+  ).first<{ id: number }>();
+  if (inserted) {
+    await journal(env, {
+      itemId: inserted.id,
+      eventId: item.eventId,
+      agentId: item.agentId ?? null,
+      taskType: item.taskType,
+      fromStatus: null,
+      toStatus: "pending",
+    });
+  }
 }
 
 /** Claims and returns one pending, due item, or null if none are available. */
@@ -63,6 +76,16 @@ export async function claimNext(env: Env): Promise<QueueItem | null> {
      )
      RETURNING *`
   ).first<QueueItem>();
+  if (result) {
+    await journal(env, {
+      itemId: result.id,
+      eventId: result.event_id,
+      agentId: result.agent_id,
+      taskType: result.task_type,
+      fromStatus: "pending",
+      toStatus: "in_progress",
+    });
+  }
   return result ?? null;
 }
 
@@ -74,13 +97,23 @@ export async function markCompleted(env: Env, id: number, eventId: string): Prom
     // on every claim/failure, so a pure failure-retry loop still reads as
     // stalled instead of looking active.
     env.DB.prepare(`UPDATE archive_events SET last_progress_at = datetime('now') WHERE id = ?`).bind(eventId),
+    env.DB.prepare(
+      `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status)
+       SELECT id, event_id, agent_id, task_type, 'in_progress', 'completed' FROM event_queue WHERE id = ?`
+    ).bind(id),
   ]);
 }
 
 export async function markFailed(env: Env, id: number, errorMessage: string): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE event_queue SET status = 'failed', completed_at = datetime('now'), error_message = ? WHERE id = ?`
-  ).bind(errorMessage.slice(0, 2000), id).run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE event_queue SET status = 'failed', completed_at = datetime('now'), error_message = ? WHERE id = ?`
+    ).bind(errorMessage.slice(0, 2000), id),
+    env.DB.prepare(
+      `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status, error_message)
+       SELECT id, event_id, agent_id, task_type, 'in_progress', 'failed', ? FROM event_queue WHERE id = ?`
+    ).bind(errorMessage.slice(0, 2000), id),
+  ]);
 }
 
 /**
@@ -90,11 +123,35 @@ export async function markFailed(env: Env, id: number, errorMessage: string): Pr
  * Ported from ideaconnect's resetStuckQueueItems().
  */
 export async function resetStuckItems(env: Env, staleAfterMinutes = 10): Promise<number> {
+  // RETURNING turns the bulk UPDATE into the list of rows actually reset, so
+  // each one gets a journal entry — the in-place flip back to 'pending' is
+  // exactly the kind of transition a replay would otherwise lose.
   const result = await env.DB.prepare(
     `UPDATE event_queue
      SET status = 'pending', claimed_at = NULL
      WHERE status = 'in_progress'
-       AND claimed_at <= datetime('now', ?)`
-  ).bind(`-${staleAfterMinutes} minutes`).run();
-  return result.meta.changes ?? 0;
+       AND claimed_at <= datetime('now', ?)
+     RETURNING id, event_id, agent_id, task_type`
+  ).bind(`-${staleAfterMinutes} minutes`).all();
+  const rows = result.results ?? [];
+  if (rows.length) {
+    await env.DB.batch(rows.map((r: any) =>
+      env.DB.prepare(
+        `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status)
+         VALUES (?, ?, ?, ?, 'in_progress', 'pending')`
+      ).bind(r.id, r.event_id, r.agent_id, r.task_type)
+    ));
+  }
+  return rows.length;
+}
+
+/** One append-only queue_journal row — G7's history record for replay. */
+async function journal(
+  env: Env,
+  e: { itemId: number; eventId: string; agentId: string | null; taskType: TaskType; fromStatus: QueueStatus | null; toStatus: QueueStatus }
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status, error_message)
+     VALUES (?, ?, ?, ?, ?, ?, NULL)`
+  ).bind(e.itemId, e.eventId, e.agentId, e.taskType, e.fromStatus, e.toStatus).run();
 }

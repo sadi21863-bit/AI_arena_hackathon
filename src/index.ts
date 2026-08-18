@@ -710,6 +710,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(merged);
     }
 
+    // G7 queue journal (docs/OFFICE_INVESTIGATION_2026-07-31.md) — every
+    // event_queue state transition for one event, in order. The timeline
+    // above only sees successes that produced content; failures, resets and
+    // dead claims live only here. Same public/no-auth trust level as
+    // timeline/teams: read-only archive data, no secrets.
+    const journalMatch = url.pathname.match(/^\/events\/([^/]+)\/journal$/);
+    if (journalMatch && request.method === "GET") {
+      const rows = await env.DB.prepare(
+        `SELECT id, item_id, event_id, agent_id, task_type, from_status, to_status, error_message, created_at as ts
+         FROM queue_journal WHERE event_id = ? ORDER BY created_at ASC, id ASC`
+      ).bind(journalMatch[1]).all();
+      return Response.json(rows.results);
+    }
+
     // Observatory Diff Viewer (spec §11) needs each team's repo_url to pull
     // real commits from GitHub's public API client-side. The existing
     // per-team data lives behind /admin/events/:id/build-status (admin-
