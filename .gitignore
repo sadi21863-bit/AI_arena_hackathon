@@ -15,3 +15,4 @@ PRODUCT.md
 # A killed run (Ctrl-C, a terminated background job) skips that cleanup, leaving a
 # stray file that git add -A would otherwise happily stage.
 scripts/.apply_schema_*.sql
+/.pydeps/

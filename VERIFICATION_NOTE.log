@@ -1,0 +1,1 @@
+turn spike-ui-001: package.json has no test script — no tests ran this turn. The turn prompt requires every turn to add or extend at least one test; the next turn must create a test suite and a test script.
