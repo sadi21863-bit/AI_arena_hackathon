@@ -132,7 +132,7 @@ jobs:
           http_port 3128
           acl allowed_ssl_ports port 443
           acl CONNECT method CONNECT
-          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org
+          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org .opencode.ai
           http_access allow CONNECT allowed_domains allowed_ssl_ports
           http_access allow allowed_domains
           http_access deny all
@@ -297,6 +297,7 @@ jobs:
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e ARENA_AI_BASE_URL=http://host.docker.internal:3129/v1 \
             -e ARENA_AI_API_KEY=shim-injects-the-real-credential \
+            -e OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
             -e GIT_AUTHOR_EMAIL=arena-turn-agent@users.noreply.github.com \
@@ -305,10 +306,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            opencode run "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" \
-              --model workers-ai/@cf/openai/gpt-oss-120b \
-              --auto \
-              --format json > opencode-turn.log 2> opencode-turn.err.log &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$OPENCODE_API_KEY" "$OPENCODE_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model opencode/nemotron-3-ultra-free --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
