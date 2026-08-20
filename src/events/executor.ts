@@ -814,8 +814,27 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
       await markCompleted(env, item.id, item.event_id);
       processed++;
     } catch (err) {
-      await markFailed(env, item.id, err instanceof Error ? err.message : String(err));
-      failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Quota / tier-exhausted errors are retryable, not permanent failures.
+      // Found live 2026-08-20 02:00 UTC: architecture-phase event_a0cbe had
+      // 91 submit_idea failed permanently with "Inference exhausted" / 4006,
+      // stalling the autonomous cycle. With Zen fallback the 4006 now degrades
+      // but inference can still be exhausted if all three tiers (Groq, Workers
+      // AI 10k neurons, Zen free) are capped for the day — that should back
+      // off and retry, not mark the idea permanently dead.
+      if (msg.includes("Inference exhausted") || msg.includes("4006") || msg.includes("Embedding quota") || msg.includes("daily free allocation")) {
+        await env.DB.prepare(
+          `UPDATE event_queue SET status = 'pending', scheduled_for = datetime('now', '+10 minutes'), claimed_at = NULL, error_message = ? WHERE id = ?`
+        ).bind(msg.slice(0, 2000), item.id).run();
+        await env.DB.prepare(
+          `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status, error_message)
+           VALUES (?, ?, ?, ?, 'in_progress', 'pending', ?)`
+        ).bind(item.id, item.event_id, item.agent_id, item.task_type, `retry in 10m: ${msg.slice(0, 500)}`).run();
+        failed++;
+      } else {
+        await markFailed(env, item.id, msg);
+        failed++;
+      }
     }
   }
 

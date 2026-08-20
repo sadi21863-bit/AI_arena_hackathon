@@ -34,26 +34,57 @@ export interface MemoryRecord {
 }
 
 export async function embed(env: Env, text: string): Promise<number[]> {
-  const result: any = await env.AI.run(EMBEDDING_MODEL, { text: [text] });
-  const vector = result?.data?.[0];
-  if (!vector) throw new Error("Embedding call returned no vector");
+  try {
+    const result: any = await env.AI.run(EMBEDDING_MODEL, { text: [text] });
+    const vector = result?.data?.[0];
+    if (!vector) throw new Error("Embedding call returned no vector");
 
-  // No result.usage.neurons on this model (see NEURONS_PER_INPUT_TOKEN
-  // above) — derive real cost from the real prompt_tokens this specific
-  // call reports, times Cloudflare's published per-token rate, rather than
-  // a flat guess that wouldn't scale with actual text length. Math.ceil,
-  // same as tryWorkersAI in router.ts and for the same reason: units_used
-  // is INTEGER, and summing many calls should never under-count against
-  // DAILY_CAPS just because a single short embed() call's real cost rounds
-  // to a fraction of a Neuron.
-  const promptTokens = result?.usage?.prompt_tokens ?? 0;
-  const neurons = Math.ceil(promptTokens * NEURONS_PER_INPUT_TOKEN);
-  await recordUsage(env, "workers_ai", EMBEDDING_MODEL, "embed", neurons);
-  return vector;
+    // No result.usage.neurons on this model (see NEURONS_PER_INPUT_TOKEN
+    // above) — derive real cost from the real prompt_tokens this specific
+    // call reports, times Cloudflare's published per-token rate, rather than
+    // a flat guess that wouldn't scale with actual text length. Math.ceil,
+    // same as tryWorkersAI in router.ts and for the same reason: units_used
+    // is INTEGER, and summing many calls should never under-count against
+    // DAILY_CAPS just because a single short embed() call's real cost rounds
+    // to a fraction of a Neuron.
+    const promptTokens = result?.usage?.prompt_tokens ?? 0;
+    const neurons = Math.ceil(promptTokens * NEURONS_PER_INPUT_TOKEN);
+    await recordUsage(env, "workers_ai", EMBEDDING_MODEL, "embed", neurons);
+    return vector;
+  } catch (err) {
+    // 4006 daily free allocation exhausted — don't bubble as hard failure.
+    // Found live 2026-08-20 02:00 UTC on architecture-phase event_a0cbe:
+    // every submit_idea failed at the first recallMemory (embed) before even
+    // reaching callAgent, so the Zen fallback in router.ts never got a chance.
+    // Embed is best-effort context; the idea can still be generated from the
+    // prompt alone. Re-throw as a retryable signal that callers can catch
+    // and degrade to empty context, rather than marking the whole queue item
+    // as permanently failed.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("4006") || msg.includes("daily free allocation")) {
+      throw new Error(`Embedding quota exhausted (4006) — caller should degrade to empty context`);
+    }
+    throw err;
+  }
 }
 
 export async function rememberMemory(env: Env, record: MemoryRecord, vector?: number[]): Promise<void> {
-  const values = vector ?? await embed(env, record.text);
+  let values: number[];
+  if (vector) {
+    values = vector;
+  } else {
+    try {
+      values = await embed(env, record.text);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("4006") || msg.includes("Embedding quota") || msg.includes("daily free allocation")) {
+        // Quota exhausted — skip vector upsert, don't fail the task that produced the memory.
+        // The idea/interaction is already persisted in D1; the vector is best-effort.
+        return;
+      }
+      throw err;
+    }
+  }
   await env.ARCHIVE_VECTORS.upsert([
     {
       id: record.id,
@@ -102,7 +133,18 @@ export async function queryArchive(
   filter?: ArchiveQueryFilter,
   topK = 10
 ): Promise<RecalledMemory[]> {
-  const values = await embed(env, queryText);
+  let values: number[];
+  try {
+    values = await embed(env, queryText);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("4006") || msg.includes("Embedding quota") || msg.includes("daily free allocation")) {
+      // Quota exhausted — degrade to empty context, don't fail the whole task.
+      // The idea can still be generated from the prompt alone (see handleSubmitIdea).
+      return [];
+    }
+    throw err;
+  }
   const vectorizeFilter: Record<string, string> = {};
   if (filter?.agentId) vectorizeFilter.agent_id = filter.agentId;
   if (filter?.eventId) vectorizeFilter.event_id = filter.eventId;
