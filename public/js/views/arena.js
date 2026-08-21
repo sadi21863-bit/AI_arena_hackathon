@@ -174,8 +174,8 @@ export async function mount(el, params) {
   render(el, html`
     <header class="arena-page-header">
       <div class="arena-eyebrow">Observatory · Arena ${(all.findIndex((e) => e.id === eventId) + 1) || ""}</div>
-      <h1>Arena — interactions, read two ways</h1>
-      <p>Constellation groups agents by how much they actually interacted, then colours every edge by its kind. Replay re-animates the same map moment by moment.</p>
+      <h1>The Arena</h1>
+      <p>Each dot is an idea. Lines show critiques and merges. <b>Constellation</b> shows who worked together; <b>Replay</b> tells the story day by day.</p>
     </header>
     <div id="ar-strip"></div>
     <div class="v-arena__tabs" role="tablist" aria-label="Arena views">

@@ -26,6 +26,10 @@ import { shortId } from "../core/fmt.js";
 import { mountArenaStrip } from "../core/arena-strip.js";
 import { utcTime } from "../core/player.js";
 
+function isAdmin() {
+  try { return localStorage.getItem("arena_admin") === "1" || new URLSearchParams(location.search).has("admin"); } catch { return false; }
+}
+
 /* Row order must match scripts/generate_office_pixel.js. */
 const ROW = { idle: 0, walk_down: 1, walk_left: 2, walk_right: 3, walk_up: 4 };
 const SHEET_COLS = 6, SHEET_ROWS = 5;
@@ -950,9 +954,12 @@ export async function mount(el, params) {
       zEl.classList.toggle("is-active", z.id !== "break" && (perZone[z.id] || []).length > 0);
       const turn = zEl.querySelector(".v-office__zone-turn");
       if (turn) {
-        const t = turnByTeam[zEl.dataset.teamId];
-        turn.textContent = t ? ciLabel(t) : "";
-        turn.className = `v-office__zone-turn ${t ? `is-${ciState(t)}` : ""}`;
+        if (!isAdmin()) { turn.textContent = ""; turn.className = "v-office__zone-turn"; }
+        else {
+          const t = turnByTeam[zEl.dataset.teamId];
+          turn.textContent = t ? ciLabel(t) : "";
+          turn.className = `v-office__zone-turn ${t ? `is-${ciState(t)}` : ""}`;
+        }
       }
     });
 
@@ -1064,6 +1071,16 @@ export async function mount(el, params) {
     turnFingerprint = fp;
 
     if (!hasRoster || !allTurns.length || !teams.length) { section.hidden = true; return; }
+    // Public spectators don't need the per-turn CI strip — hide behind admin.
+    // Research: public dashboards fork the view (A) + show a one-line health pill (C).
+    if (!isAdmin()) {
+      section.hidden = false;
+      const running = allTurns.filter((t) => ciState(t) === "running").length;
+      const passed = allTurns.filter((t) => ciState(t) === "success").length;
+      const total = allTurns.length;
+      render(stripEl, html`<div class="v-office__health-pill">Arena live · ${total} turns · ${passed} passed${running ? ` · ${running} running` : ""} <button class="arena-link" onclick="localStorage.setItem('arena_admin','1'); location.reload()">Admin: builds</button></div>`);
+      return;
+    }
     section.hidden = false;
 
     if (!changed) return;

@@ -33,3 +33,8 @@
 :root[data-theme="dark"] .d2h-code-linenumber, :root[data-theme="dark"] .d2h-code-side-linenumber {
   background: var(--arena-bg-sunken); color: var(--arena-ink-faint); border-color: var(--arena-line);
 }
+.v-diff__summary { padding: 16px 20px; background: var(--arena-bg-raised); border: 1px solid var(--arena-line); border-radius: var(--arena-radius); margin-bottom: 18px; }
+.v-diff__summary h3 { margin: 0 0 4px; font-size: 1.06rem; color: var(--arena-ink); font-family: var(--arena-font-display); }
+.v-diff__summary p { margin: 0; font-size: 0.76rem; color: var(--arena-ink-soft); font-family: var(--arena-font-mono); }
+.v-diff__summary code { font-size: 0.7rem; background: var(--arena-bg-sunken); padding: 1px 6px; border-radius: 4px; }
+.v-diff__summary a { color: var(--arena-clay-deep); }

@@ -4,7 +4,8 @@
   position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 440px;
   border-radius: var(--arena-radius); overflow: hidden;
   border: 1px solid var(--arena-line-strong);
-  background: var(--office-floor, #cbbda6);
+  background: var(--office-floor, #d8cbb0);
+  box-shadow: inset 0 0 80px rgba(0,0,0,0.08), 0 8px 32px rgba(0,0,0,0.08);
   /* Character size lives here as a fallback only — draw() overwrites it with
      a measured pixel value (see office.js). It is NOT a container query.
      `8.5cqw` was tried first and is subtly unreliable here: the agents are
@@ -394,6 +395,13 @@
 .v-office__turns-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
 .v-office__turns-note { margin: 0; font-size: 0.8rem; color: var(--arena-ink-soft); max-width: 56ch; }
 .v-office__build-strip { display: grid; gap: 10px; }
+.v-office__health-pill {
+  display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 14px; border-radius: 999px; font-family: var(--arena-font-mono); font-size: 0.72rem;
+  background: color-mix(in srgb, var(--arena-clay) 14%, var(--arena-bg)); border: 1px solid var(--arena-line-strong);
+  color: var(--arena-ink-soft);
+}
+.v-office__health-pill .arena-link { background: none; border: none; color: var(--arena-clay-deep); cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
 .v-office__strip-row {
   display: grid; grid-template-columns: 16ch 1fr; gap: 14px; align-items: center;
 }

@@ -93,12 +93,16 @@ export async function mount(el, params) {
     return () => { disposed = true; };
   }
 
+  // Human-friendly commit pills: 7-char SHA + plain title, no technical hash wall
   render(commitsEl, html`${commits.map((c) => html`
     <a class="v-diff__commit ${params.sha === c.sha ? "is-active" : ""}"
-       href="${href(`/diff/${eventId}/${team.team_name}/${c.sha}`)}">
+       href="${href(`/diff/${eventId}/${team.team_name}/${c.sha}`)}" title="${c.sha}">
       <code>${c.sha.slice(0, 7)}</code>
-      <span>${(c.commit && c.commit.message || "").split("\n")[0].slice(0, 62)}</span>
+      <span>${(c.commit && c.commit.message || "").split("\n")[0].slice(0, 52)}</span>
     </a>`)}`);
+  // Summary header above the diff — plain language, not git porcelain
+  const activeCommit = commits.find((c) => c.sha === sha) || commits[0];
+  const summaryText = activeCommit ? (activeCommit.commit && activeCommit.commit.message || "").split("\n")[0] : "";
 
   const sha = params.sha || commits[0].sha;
   render(body, html`<div class="arena-state">Loading diff…</div>`);
@@ -130,17 +134,23 @@ export async function mount(el, params) {
     return () => { disposed = true; };
   }
 
+  // Plain-language summary — spectators read this, not the raw diff
+  const fileCount = (text.match(/^diff --git /gm) || []).length;
+  const summary = html`<div class="v-diff__summary"><h3>${summaryText || "Changes"}</h3><p>${fileCount} file${fileCount===1?"":"s"} · <code>${sha.slice(0,7)}</code> · <a href="https://github.com/${team.repo_url}/commit/${sha}" target="_blank" rel="noopener">View on GitHub</a></p></div>`;
   // escapeHtml: true — the diff text is commit CONTENT from a third party
   // (GitHub) and lands in the page via innerHTML; without explicit escaping,
   // a committed line like <img src=x onerror=...> would execute in this
   // view. Diff2Html's default has varied across versions — set it, don't
   // rely on it.
-  body.innerHTML = window.Diff2Html.html(text, {
+  const diffHtml = window.Diff2Html.html(text, {
     drawFileList: true,
     matching: "lines",
     outputFormat: "line-by-line",
     escapeHtml: true,
   });
+  render(body, html`${summary}<div class="v-diff__body">${html.raw ? html.raw(diffHtml) : diffHtml}</div>`);
+  // Fallback for html.raw-less env: if render didn't inject, use innerHTML
+  if (!body.querySelector(".d2h-wrapper")) body.innerHTML = summary + diffHtml;
 
   return () => { disposed = true; };
 }
