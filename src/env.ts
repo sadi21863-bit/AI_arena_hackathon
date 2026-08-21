@@ -53,12 +53,4 @@ export interface Env {
   // own secrets, just also readable here for that one purpose).
   CF_ACCOUNT_ID: string;
   CF_API_TOKEN: string;
-  // Zen free models (user is on Zen, 2026-08-20) — build-turn already switched
-  // to opencode/nemotron-3-ultra-free via Squid allowlist + auth.json. The
-  // ideathon queue was still Groq->Workers AI only and stalled with 91
-  // "Inference exhausted" on the live architecture-phase event (08-15).
-  // Adding Zen as third tier here keeps the same free-model path for agent
-  // tasks without touching Groq/Workers AI caps. Explicit per user ask
-  // (CLAUDE.md third-provider rule).
-  OPENCODE_API_KEY?: string;
 }
