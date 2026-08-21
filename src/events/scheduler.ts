@@ -1071,15 +1071,17 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
     return;
   }
 
-  // abandoned_at IS NULL on both clauses: checkForStalledEvents (below) is
-  // the last-resort backstop for a stall MAX_ITEM_ATTEMPTS didn't anticipate
-  // — without excluding it here, an abandoned event whose status never
-  // reaches judged/complete would keep this returning early forever, which
-  // is exactly the failure mode both mechanisms exist to prevent.
+  // abandoned_at IS NULL: checkForStalledEvents is the last-resort backstop
+  // — without excluding it, an abandoned event would keep this returning
+  // forever. FIX 2026-08-21: was checking only the *latest* ideathon + its
+  // child — that allowed a second concurrent arena (a0/b6 both architecture,
+  // 2026-08-15/16) to slip through when the latest's status check should have
+  // blocked it (likely via manual POST /admin/events bypassing cadence).
+  // Now checks *any* running ideathon/hackathon, so one arena at a time.
   const stillRunning = await env.DB.prepare(
-    `SELECT 1 FROM archive_events WHERE (id = ? AND status != 'judged' AND abandoned_at IS NULL)
-        OR (parent_event_id = ? AND status != 'complete' AND abandoned_at IS NULL)`
-  ).bind(latest.id, latest.id).first();
+    `SELECT 1 FROM archive_events WHERE (type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL)
+        OR (type = 'hackathon' AND status != 'complete' AND abandoned_at IS NULL) LIMIT 1`
+  ).first();
   if (stillRunning) return;
 
   if (Date.now() >= computeNextArenaStart(latest.start_date).getTime()) {
