@@ -69,15 +69,25 @@ const MAX_BUILD_TURNS_PER_DAY = 6;
 export const MAX_ITEM_ATTEMPTS = 6;
 
 /**
- * All-time (not just recent, unlike the backoff checks above/below) failure
- * counts per payload key for one event+task_type, so the caller can tell a
- * genuinely permanent failure (count >= MAX_ITEM_ATTEMPTS) from an ordinary
- * one still within its backoff window.
+ * CURRENT-CYCLE (not all-time) failure counts per payload key for one
+ * event+task_type, so the caller can tell a genuinely permanent failure
+ * (count >= MAX_ITEM_ATTEMPTS) from an ordinary one still within its backoff
+ * window.
+ *
+ * Cycle-scoped (2026-08-22): "all-time" poisoned revived events — arena 5's
+ * previous incarnation left 91 failed submit_idea rows; after revival those
+ * ~7-8 failures per agent all exceeded MAX_ITEM_ATTEMPTS (6), so ideation
+ * would skip every agent and the fresh cycle would stall silently. The
+ * epoch marker is the event's own start_date: revival resets it, so
+ * failures older than the current start_date belong to a dead incarnation
+ * and must not count.
  */
 async function failedAttemptCounts(env: Env, eventId: string, taskType: string, field: string): Promise<Map<string, number>> {
   const rows = await env.DB.prepare(
-    `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = ? AND status = 'failed'`
-  ).bind(eventId, taskType).all<{ payload: string | null }>();
+    `SELECT q.payload FROM event_queue q
+     WHERE q.event_id = ? AND q.task_type = ? AND q.status = 'failed'
+       AND q.completed_at >= (SELECT start_date FROM archive_events WHERE id = ?)`
+  ).bind(eventId, taskType, eventId).all<{ payload: string | null }>();
   return payloadFieldCounts(rows.results, field);
 }
 
@@ -644,16 +654,20 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
   ).bind(eventId, agentId, taskType).first<{ n: number }>();
   if ((nonFailed?.n ?? 0) > 0) return false; // already covered by a pending/in_progress/completed item
 
-  // Stall watchdog (MAX_ITEM_ATTEMPTS) â€” an agent whose Tribunal item has
-  // failed this many times (all-time, unlike the recency check below) is
-  // permanently abandoned rather than retried forever. isStageComplete
-  // (below) treats this same threshold as satisfying the stage for this
-  // agent, so this doesn't reintroduce the stall it's meant to prevent â€”
-  // it just stops the otherwise-endless 30-minute retry loop for an item
-  // that isStageComplete has already decided not to keep waiting on.
+  // Stall watchdog (MAX_ITEM_ATTEMPTS) - an agent whose Tribunal item has
+  // failed this many times in the CURRENT CYCLE is permanently abandoned
+  // rather than retried forever. isStageComplete (below) treats this same
+  // threshold as satisfying the stage for this agent, so this does not
+  // reintroduce the stall it is meant to prevent - it just stops the
+  // otherwise-endless 30-minute retry loop for an item that
+  // isStageComplete has already decided not to keep waiting on.
+  // Cycle-scoped like every other failure count (see failedAttemptCounts):
+  // pre-revival failures belong to a dead incarnation and must not count.
   const totalFailures = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed'`
-  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+    `SELECT COUNT(*) as n FROM event_queue q
+     WHERE q.event_id = ? AND q.agent_id = ? AND q.task_type = ? AND q.status = 'failed'
+       AND q.completed_at >= (SELECT start_date FROM archive_events WHERE id = ?)`
+  ).bind(eventId, agentId, taskType, eventId).first<{ n: number }>();
   if ((totalFailures?.n ?? 0) >= MAX_ITEM_ATTEMPTS) return false;
 
   const recentFailure = await env.DB.prepare(
@@ -689,9 +703,14 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
  * agent's contribution, rather than never advancing, is the point.
  */
 async function isStageComplete(env: Env, eventId: string, taskType: string): Promise<boolean> {
+  // Current-cycle rows only: a revived event's pre-revival failures must not
+  // satisfy the MAX_ITEM_ATTEMPTS threshold for the fresh incarnation (same
+  // poisoning shape failedAttemptCounts fixed).
   const rows = await env.DB.prepare(
-    `SELECT agent_id, status FROM event_queue WHERE event_id = ? AND task_type = ? AND agent_id IS NOT NULL`
-  ).bind(eventId, taskType).all<{ agent_id: string; status: string }>();
+    `SELECT agent_id, status FROM event_queue
+     WHERE event_id = ? AND task_type = ? AND agent_id IS NOT NULL
+       AND (status != 'failed' OR completed_at >= (SELECT start_date FROM archive_events WHERE id = ?))`
+  ).bind(eventId, taskType, eventId).all<{ agent_id: string; status: string }>();
 
   const completedAgents = new Set<string>();
   const failedCounts = new Map<string, number>();
@@ -730,9 +749,13 @@ async function nonFailedCountForAgent(env: Env, eventId: string, agentId: string
  * phase; the phase itself still completes when its day-boundary rolls over.
  */
 async function failedCountForAgent(env: Env, eventId: string, agentId: string, taskType: string): Promise<number> {
+  // Current-cycle only — see failedAttemptCounts for the revival-poisoning
+  // incident that makes all-time counting unsafe.
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status = 'failed'`
-  ).bind(eventId, agentId, taskType).first<{ n: number }>();
+    `SELECT COUNT(*) as n FROM event_queue q
+     WHERE q.event_id = ? AND q.agent_id = ? AND q.task_type = ? AND q.status = 'failed'
+       AND q.completed_at >= (SELECT start_date FROM archive_events WHERE id = ?)`
+  ).bind(eventId, agentId, taskType, eventId).first<{ n: number }>();
   return row?.n ?? 0;
 }
 
