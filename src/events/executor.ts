@@ -791,6 +791,19 @@ export async function processQueue(env: Env, limit = 3): Promise<{ processed: nu
     const item = await claimNext(env);
     if (!item) break;
 
+    // Zombie guard (2026-08-22 incident): claimNext is global — it can hand
+    // back an item belonging to an ABANDONED event (superseded arena), whose
+    // execution would burn quota and touch a dead event's progress. Verify
+    // the parent event is still alive before spending anything.
+    const parentState = await env.DB.prepare(
+      `SELECT abandoned_at FROM archive_events WHERE id = ?`
+    ).bind(item.event_id).first<{ abandoned_at: string | null }>();
+    if (parentState?.abandoned_at) {
+      await markFailed(env, item.id, "event abandoned/superseded — work cancelled");
+      failed++;
+      continue;
+    }
+
     try {
       const agent = item.agent_id ? await getAgent(env, item.agent_id) : null;
       if (item.agent_id && !agent) throw new Error(`Unknown agent_id: ${item.agent_id}`);

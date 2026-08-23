@@ -14,7 +14,7 @@ import { listAgents, getAgent, isAgentId, AGENTS } from "./agents/personas";
 import { postIdea, critiqueIdea, type PostIdeaInput, type CritiqueInput } from "./agents/interactions";
 import { recallMemory, queryArchive, type MemoryType } from "./agents/memory";
 import { deepResearch, type DeepResearchInput } from "./agents/research";
-import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, reconcileAbandonedEvents, createEvent, MAX_ITEM_ATTEMPTS, type EventRow } from "./events/scheduler";
+import { ensurePhaseWorkQueued, ensureArenaCadence, checkForStalledEvents, reconcileAbandonedEvents, createEvent, enforceSingleActiveArena, MAX_ITEM_ATTEMPTS, type EventRow } from "./events/scheduler";
 import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
@@ -127,12 +127,19 @@ export default {
     // so Cloudflare's own dashboard/logs keep seeing the exception too —
     // this adds visibility, it doesn't swallow the error.
     try {
-      // Self-heal first, before the drive loop: reverse abandonments that
+      // SINGLE-FLIGHT GUARD first (2026-08-22 concurrent-arena incident):
+      // exactly one ideathon may be active. Consolidates any duplicates
+      // before revival/cadence/drive can compound them. See
+      // enforceSingleActiveArena in scheduler.ts.
+      await enforceSingleActiveArena(env);
+
+      // Self-heal second, before the drive loop: reverse abandonments that
       // were provably wrong (day-gated phase with no unfinished work — the
       // 2026-08-02 false-positive shape), so a revived event is picked up
       // by the loop below in this same tick. See reconcileAbandonedEvents
       // in scheduler.ts for the guards that keep this from resurrecting
-      // genuinely dead events.
+      // genuinely dead events — including the rule that revival never runs
+      // while another arena is active.
       await reconcileAbandonedEvents(env);
 
       // abandoned_at IS NULL: an event the stall watchdog (below) has given

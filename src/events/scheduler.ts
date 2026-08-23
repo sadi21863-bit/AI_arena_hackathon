@@ -1,25 +1,25 @@
-/**
- * Event phase scheduler — spec §3.1 (ideathon), §3.2 (hackathon), §13
- * (judging), §14 (Tribunal). Decides what work is due and writes it to
+﻿/**
+ * Event phase scheduler â€” spec Â§3.1 (ideathon), Â§3.2 (hackathon), Â§13
+ * (judging), Â§14 (Tribunal). Decides what work is due and writes it to
  * event_queue; never calls an LLM (or GitHub API) itself, EXCEPT judge
  * calibration (see ensureIdeathonJudging below) which runs inline rather
- * than through the queue — a deliberate one-off exception, not a pattern
+ * than through the queue â€” a deliberate one-off exception, not a pattern
  * to repeat (ported split from ideaconnect's scheduler.ts / executor.ts).
  *
  * Ideathon phase boundaries are day-offsets from archive_events.start_date:
  *   Day 0-1 (elapsed): Deep Research
  *   Day 2:             Ideation + Critique
  *   Day 3-4:            Architecture (top 6 ideas by interaction signal)
- *   Day 5+:             ready_for_judging -> judged (Week 5, §13)
+ *   Day 5+:             ready_for_judging -> judged (Week 5, Â§13)
  *
- * Hackathon phase boundaries (spec §3.2, 3-day event):
- *   Day 0:   team_formation — create both team repos, dispatch each team's
+ * Hackathon phase boundaries (spec Â§3.2, 3-day event):
+ *   Day 0:   team_formation â€” create both team repos, dispatch each team's
  *            first build turn same day ("First build turns begin same day")
- *   Day 1-2: building — one additional build-turn dispatch per team per
+ *   Day 1-2: building â€” one additional build-turn dispatch per team per
  *            calendar day
  *   Day 3+:  ready_for_judging -> judged -> tribunal -> complete (Week 5)
  *
- * Past ready_for_judging, progression is STATUS-driven, not day-driven —
+ * Past ready_for_judging, progression is STATUS-driven, not day-driven â€”
  * the day-offset formulas below have no further day boundaries and would
  * otherwise pin status at ready_for_judging forever (that was Week 3's
  * design, back when ready_for_judging really was terminal; Week 5 does
@@ -32,6 +32,7 @@ import { runCalibration } from "../judges/calibration";
 import { pickCrossExamineTarget } from "../tribunal/reflection";
 import { queuedPayloadValues, payloadFieldCounts } from "./payload-utils";
 import { enqueue } from "./queue";
+import { cancelPendingForEvent } from "./queue";
 import { pairwiseSimilarities } from "../agents/memory";
 import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
@@ -41,7 +42,7 @@ import { finalizeWithPartialScores } from "../judges/scoring";
  * Ceiling on build turns per team per day. Turns are gated on the previous
  * one COMPLETING rather than on the calendar, so without a ceiling a turn
  * that fails in seconds would loop against the GitHub Actions quota. Spec
- * §3.2's shape (a few turns a day) is preserved; what changes is that a team
+ * Â§3.2's shape (a few turns a day) is preserved; what changes is that a team
  * finishing early moves on instead of idling until midnight.
  */
 const MAX_BUILD_TURNS_PER_DAY = 6;
@@ -52,16 +53,16 @@ const MAX_BUILD_TURNS_PER_DAY = 6;
  * below is self-healing per item, but the phase-COMPLETION checks
  * (ensureIdeathonJudging/ensureHackathonJudging waiting for every idea/team to
  * be judged; isStageComplete waiting for all 12 agents) all require every
- * item to eventually SUCCEED — there was no cap anywhere, just the existing
+ * item to eventually SUCCEED â€” there was no cap anywhere, just the existing
  * time-based backoff. A single permanently-malformed judge response or a
  * Workers-AI-only task type (Tribunal's `reflect`, no Groq fallback per
  * router.ts) hitting a real quota wall pins its event below judged/complete
  * forever, and since ensureArenaCadence's stillRunning guard checks exactly
- * that status, one stuck event silently stops every future Arena cycle too —
+ * that status, one stuck event silently stops every future Arena cycle too â€”
  * not just its own.
  *
  * 6, not something smaller: the existing 2-minute (judging) / 30-minute
- * (Tribunal) backoffs already absorb ordinary transient failures — this cap
+ * (Tribunal) backoffs already absorb ordinary transient failures â€” this cap
  * only needs to catch a failure mode that repeats identically every retry,
  * so it can afford to be generous rather than fast.
  */
@@ -83,10 +84,10 @@ async function failedAttemptCounts(env: Env, eventId: string, taskType: string, 
 export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged";
 export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete";
 
-// N-1 (spec §4 collaboration, ARENA_BACKLOG.md): inserting a real day-bounded
+// N-1 (spec Â§4 collaboration, ARENA_BACKLOG.md): inserting a real day-bounded
 // `collaboration` phase between ideation_critique and architecture extends
 // the ideathon from 5 days to 6 (architecture shifts to day 4-5, judging to
-// day 6+) rather than compressing architecture's existing 2-day window —
+// day 6+) rather than compressing architecture's existing 2-day window â€”
 // a real, visible change to the event's actual timeline, not just an
 // internal refactor. Flagged here since it's easy to miss reading the code
 // alone.
@@ -119,7 +120,7 @@ function daysElapsed(startDate: string): number {
 }
 
 /**
- * Self-healing catchup — ported from ideaconnect's ensureDailyWorkQueued().
+ * Self-healing catchup â€” ported from ideaconnect's ensureDailyWorkQueued().
  * Idempotent: checks whether this phase's work for this event is already
  * queued or done before adding more, so a missed cron tick doesn't stall
  * the event and a double-fired tick doesn't duplicate work.
@@ -142,7 +143,7 @@ async function chronicleTransition(env: Env, eventId: string, endedPhase: string
 export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<Phase | HackathonPhase> {
   if (event.type === "hackathon") return ensureHackathonWorkQueued(env, event);
 
-  if (event.status === "judged") return "judged"; // terminal — day formula would otherwise re-pin ready_for_judging
+  if (event.status === "judged") return "judged"; // terminal â€” day formula would otherwise re-pin ready_for_judging
 
   const phase = phaseForDay(daysElapsed(event.start_date));
 
@@ -157,7 +158,7 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
 
   // Each queueX below is independently idempotent per-item (per-agent or
   // per-idea, filtering status != 'failed') rather than gated by one coarse
-  // "does any item of this task_type exist for this event" check — found
+  // "does any item of this task_type exist for this event" check â€” found
   // live (2026-07-22 code review): that coarse check counted 'failed' rows
   // as "already covered," so a single permanently-failed item (one agent's
   // research, one idea's architecture, ...) silently and permanently
@@ -176,10 +177,10 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
     case "architecture":
       // Revision round first: every top-8 idea gets one post-critique
       // revision pass before any architecture item is queued. Gate, not
-      // parallel step — architecture reads the idea's problem/solution and
+      // parallel step â€” architecture reads the idea's problem/solution and
       // writes build_scope from it, so if architecture ran while revisions
       // were still outstanding, the build plans (and therefore the judged
-      // content, spec §13) would be written against unrevised ideas.
+      // content, spec Â§13) would be written against unrevised ideas.
       if (await ensureRevisionRound(env, event.id)) {
         await queueArchitecture(env, event.id);
       }
@@ -189,14 +190,14 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
 }
 
 /**
- * Spec §13: judges evaluate ideas and the top 2 advance by ideathon_score
+ * Spec Â§13: judges evaluate ideas and the top 2 advance by ideathon_score
  * (handleTeamFormation in executor.ts reads it once this hits 'judged').
  * Judging covers every eligible idea of the event when Groq is pinned and
- * the finalist-only architecture_complete set otherwise — see the gate
- * comment inline for the token-budget reasoning. Calibration (spec §13/§16:
+ * the finalist-only architecture_complete set otherwise â€” see the gate
+ * comment inline for the token-budget reasoning. Calibration (spec Â§13/Â§16:
  * "before every event... if inter-judge correlation falls below 0.6...")
  * runs once per event, before any real judging, inline rather than via the
- * queue — it's a fixed, bounded 21-call batch (7 judges x 3 anchors,
+ * queue â€” it's a fixed, bounded 21-call batch (7 judges x 3 anchors,
  * parallelized in calibration.ts) unlike the open-ended per-idea/per-agent
  * work everything else here queues.
  */
@@ -206,24 +207,24 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
     await runCalibration(env, eventId);
     return "ready_for_judging";
   }
-  // calibration.passed is deliberately NOT a hard gate on judging — found
+  // calibration.passed is deliberately NOT a hard gate on judging â€” found
   // live (2026-07-22 code review) that it was computed and stored but never
-  // actually read anywhere, silently defeating the spec §13/§16 intent.
+  // actually read anywhere, silently defeating the spec Â§13/Â§16 intent.
   // Fixed to at least be VISIBLE (GET /events/:id surfaces it, index.ts) so
   // a human can act on spec's "adjust weights or provide clearer anchor
-  // examples" — but not auto-blocking, since with no human reliably
+  // examples" â€” but not auto-blocking, since with no human reliably
   // watching a live event, a hard block risks permanently stalling a real
   // event over a single low-n (3 anchors) correlation dip, which is a worse
   // failure mode than proceeding with a flagged low-confidence judging pass.
 
   // Score-every-idea gate: judging every submitted idea (not just the
-  // architecture_complete top 6) costs 6x the judge traffic — 36 ideas x 7
+  // architecture_complete top 6) costs 6x the judge traffic â€” 36 ideas x 7
   // judges = 252 calls instead of 42. That fits comfortably inside Groq's
   // request-based daily cap (gpt-oss-120b: 1,000/day; ~25% for one ideathon's
   // judging pass), but NOT inside Workers AI's measured neuron budget: the
   // llama-3.3-70b fallback costs ~0.1 neurons/token (94-token exchange = 9.99
-  // neurons, verified 2026-07-21), so 252 calls x ~1.5k tokens ≈ 25-30k
-  // neurons against the measured 9,500/day app cap — three-plus days of
+  // neurons, verified 2026-07-21), so 252 calls x ~1.5k tokens â‰ˆ 25-30k
+  // neurons against the measured 9,500/day app cap â€” three-plus days of
   // judging, a duration ready_for_judging was never designed to survive (the
   // stall watchdog abandons non-day-gated progress stalls), and the exact
   // retry-storm shape that burned quota in Week 7's closed beta. So: score
@@ -236,7 +237,7 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   const scoreAllIdeas = event?.judging_provider === "groq";
 
   // 'merged' excluded either way: an idea absorbed by a collaboration (the
-  // non-primary side) doesn't compete as a separate scored entity — its
+  // non-primary side) doesn't compete as a separate scored entity â€” its
   // content is already carried forward inside the primary via co_agent_id,
   // same semantics as queueArchitecture/queueCollaboration above.
   // 'blocked' (Code of Conduct v3.1) excluded too: suspended or hard-
@@ -266,36 +267,36 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
 
   if (unjudged.length === 0) {
     // Nothing left mid-judging (either all judged, or nothing ever reached
-    // architecture_complete) — either way there's nothing more to queue.
+    // architecture_complete) â€” either way there's nothing more to queue.
     await env.DB.prepare(`UPDATE archive_events SET status = 'judged' WHERE id = ?`).bind(eventId).run();
     return "judged";
   }
 
   // Per-idea check (not a coarse "does judge_idea exist for this event"
   // count) so a FAILED judging attempt self-heals next tick instead of
-  // silently stalling that idea forever — status != 'failed' means a
+  // silently stalling that idea forever â€” status != 'failed' means a
   // pending/in_progress/completed item for this idea already covers it.
   const existingJudgeItems = await env.DB.prepare(
     `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_idea' AND status != 'failed'`
   ).bind(eventId).all<{ payload: string | null }>();
   const alreadyQueued = queuedPayloadValues(existingJudgeItems.results, "ideaId");
 
-  // Backoff — found live (2026-07-26, Week 7 closed beta): this had NO
+  // Backoff â€” found live (2026-07-26, Week 7 closed beta): this had NO
   // backoff at all, unlike Tribunal's shouldEnqueueForAgent (2026-07-23
   // fix). Confirmed live: with Workers AI genuinely over its daily cap,
   // every tick re-queued and re-failed all 6 ideas x 7 judges, every 5
   // minutes, accumulating 1-8 failed attempts per idea/judge pair within
-  // an hour with zero recovery — the exact same retry-storm pathology
+  // an hour with zero recovery â€” the exact same retry-storm pathology
   // already diagnosed for Tribunal, just never ported to ideathon judging
   // since this path hadn't been exercised at this intensity before.
   //
-  // 2 minutes, not Tribunal's 30 — found live (2026-07-27): 30 min was
+  // 2 minutes, not Tribunal's 30 â€” found live (2026-07-27): 30 min was
   // calibrated for genuine multi-hour daily-quota exhaustion (Tribunal's
   // actual failure mode), but judge_idea/judge_team failures are usually a
   // single transient blip (one judge's call, one bad response), not the
   // whole event being blocked for hours. The real cron only ticks every 5
   // minutes anyway, so anything shorter than that doesn't change
-  // production retry cadence at all — this just needs to be longer than
+  // production retry cadence at all â€” this just needs to be longer than
   // aggressive manual test-tick cadence (the actual retry-storm trigger),
   // not longer than the real failure's recovery time.
   const recentJudgeFailures = await env.DB.prepare(
@@ -328,23 +329,23 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
   }
 
   if (phase === "team_formation") {
-    // status != 'failed' — found live (2026-07-22 code review): without this
+    // status != 'failed' â€” found live (2026-07-22 code review): without this
     // filter, a single failed team_formation attempt (e.g. a transient
     // GitHub 5xx during createTeamRepo) permanently stalls the whole
     // hackathon, since this coarse count would forever see the failed row
     // and never re-queue. handleTeamFormation itself is already idempotent
-    // per-team (see its own header comment) — it just needs to actually
+    // per-team (see its own header comment) â€” it just needs to actually
     // get re-invoked to use that.
     const existing = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation' AND status != 'failed'`)
       .bind(event.id).first<{ n: number }>();
     if ((existing?.n ?? 0) === 0) {
       // team_formation's executor handler also dispatches each team's
-      // first build turn — "First build turns begin same day" (spec §3.2)
-      // — so nothing else needs queuing here on formation day.
+      // first build turn â€” "First build turns begin same day" (spec Â§3.2)
+      // â€” so nothing else needs queuing here on formation day.
       await enqueue(env, { eventId: event.id, taskType: "team_formation", priority: 1 });
     }
   } else if (phase === "building") {
-    // Pull CI outcomes first — everything below depends on knowing whether
+    // Pull CI outcomes first â€” everything below depends on knowing whether
     // the previous turn actually finished.
     await reconcileBuildTurns(env, event.id);
 
@@ -354,7 +355,7 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // A team's next turn is gated on its previous turn COMPLETING, not on the
     // calendar rolling over. The old rule was one dispatch per team per UTC
     // day, which meant a turn finishing in ten minutes left the team idle for
-    // the rest of the day — the agents were waiting on a date, not on work.
+    // the rest of the day â€” the agents were waiting on a date, not on work.
     // A per-day ceiling still applies so a fast-failing turn can't spin the
     // GitHub Actions quota, and the queue-level guard below keeps a dispatch
     // from being enqueued twice while one is still pending.
@@ -370,7 +371,7 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // never once fired.
     //
     // What that cost: the real hackathon dispatched 101+ turns per team in a
-    // single day — one every 5 minutes, for ~14 hours — against a ceiling of
+    // single day â€” one every 5 minutes, for ~14 hours â€” against a ceiling of
     // 6. Everything past turn ~22 came back `cancelled`, because
     // team-build-turn.yml's concurrency group only lets one run per team
     // proceed and GitHub cancels the superseded ones. So the guard whose
@@ -378,11 +379,11 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // quota" was inert while precisely that happened.
     //
     // payload-utils.ts's own comment on countPayloadFieldMatches spells the
-    // trap out — "a Set would collapse repeats, losing the count" — which is
+    // trap out â€” "a Set would collapse repeats, losing the count" â€” which is
     // exactly the mistake made here.
     const dispatchedTodayCount = payloadFieldCounts(todaysDispatches.results, "teamId");
 
-    // Anything already queued but not yet executed — don't stack a second.
+    // Anything already queued but not yet executed â€” don't stack a second.
     const pending = await env.DB.prepare(
       `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn'
          AND status IN ('pending', 'in_progress')`
@@ -400,7 +401,7 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       if (alreadyQueued.has(team.id)) continue;
       if ((dispatchedTodayCount.get(team.id) ?? 0) >= MAX_BUILD_TURNS_PER_DAY) continue;
       if ((dispatchFailures.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
-      // Still working — let it finish rather than dispatching over the top.
+      // Still working â€” let it finish rather than dispatching over the top.
       if (await teamHasOpenTurn(env, team.id)) continue;
 
       await enqueue(env, {
@@ -417,8 +418,8 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
 }
 
 /**
- * Everything past building: hackathon judging (spec §13, weighted 70% vs.
- * the ideathon's 30% per spec §3.2) -> Tribunal (spec §14, three stages,
+ * Everything past building: hackathon judging (spec Â§13, weighted 70% vs.
+ * the ideathon's 30% per spec Â§3.2) -> Tribunal (spec Â§14, three stages,
  * each gated on the previous fully completing) -> complete. One function
  * driven entirely by event.status rather than day-offset, since none of
  * this has a fixed day boundary the way team_formation/building do.
@@ -442,20 +443,20 @@ async function ensurePostBuildWork(env: Env, event: EventRow): Promise<Hackathon
  * Carry the parent ideathon's pinned judging model onto the hackathon.
  *
  * P0-2 pins a judging model so a mid-event provider swap cannot mix model
- * families into one weighted ranking. That pin is written by runCalibration —
+ * families into one weighted ranking. That pin is written by runCalibration â€”
  * and runCalibration is only ever called from ensureIdeathonJudging, so a
  * hackathon has never had one. Found live 2026-08-01 on the first real
  * autonomous judging run: `judging_provider` was null on the hackathon, so
  * scoreTarget passed `pinned_provider: undefined` and every judge was free to
  * land on whatever tier the router picked. That run happened to stay on one
- * Groq model throughout, so nothing was corrupted — the guard was simply
+ * Groq model throughout, so nothing was corrupted â€” the guard was simply
  * absent for the phase that decides the winner.
  *
  * Inheriting rather than re-calibrating is deliberate. The parent ideathon
  * calibrated days earlier and pinned a model; the hackathon is the second half
  * of that same cycle, and P0-2's intent is one judge contract per cycle. A
  * fresh calibration would cost 21 LLM calls to re-derive an answer that
- * already exists, and could legitimately land on a DIFFERENT model — which is
+ * already exists, and could legitimately land on a DIFFERENT model â€” which is
  * the exact inconsistency the pin exists to prevent.
  *
  * No-ops when the hackathon already has a pin, or when the parent has none.
@@ -477,12 +478,12 @@ async function inheritJudgingPin(env: Env, event: EventRow): Promise<void> {
 async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
   // Eligibility gate: a team whose turns never actually RAN cannot win,
   // however well its idea scored. executed_turns counts turns whose CI run
-  // reached a real conclusion ('success' OR 'failure' — 'cancelled' runs
+  // reached a real conclusion ('success' OR 'failure' â€” 'cancelled' runs
   // never executed, and a turn stuck at 'dispatched' with no run is a
   // dispatch fault, not team work). Zero executed turns means the team
   // produced nothing verifiable: every turn cancelled before running (the
   // 344-cancelled-turns shape), or wedged by a dispatch failure. Such a team
-  // is finalized as judged with NULL scores — never scored, never in the
+  // is finalized as judged with NULL scores â€” never scored, never in the
   // winner query (final_score IS NOT NULL below). A run that concludes
   // AFTER this finalization can't retroactively change eligibility; the
   // reconcile sweep (build-turns.ts) still records the truth for evidence.
@@ -493,13 +494,13 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
      FROM hackathon_teams ht WHERE ht.event_id = ? AND ht.status != 'judged'`
   ).bind(eventId).all<{ id: string; idea_id: string; executed_turns: number }>();
 
-  // Stall watchdog (MAX_ITEM_ATTEMPTS) — same reasoning as
+  // Stall watchdog (MAX_ITEM_ATTEMPTS) â€” same reasoning as
   // ensureIdeathonJudging above: a team whose judging has failed this many
   // times is finalized from whatever judge_scores rows already exist rather
   // than blocking status='judged' (and Tribunal, and every future Arena
   // cycle) on a judge that will never succeed. finalScore uses the same
   // ideathon 30% / hackathon 70% weights as handleJudgeTeam's success path
-  // (executor.ts) — this only changes how the hackathon-side number was
+  // (executor.ts) â€” this only changes how the hackathon-side number was
   // obtained, not the blend.
   const judgeFailureCounts = await failedAttemptCounts(env, eventId, "judge_team", "teamId");
   const unjudged: { id: string; idea_id: string }[] = [];
@@ -524,7 +525,7 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   if (unjudged.length === 0) {
     // final_score IS NOT NULL: an ineligible team (finalized above with null
     // scores) must never be picked as winner. If NO team was eligible at
-    // all, the winner stays null — an honest "this cycle produced no
+    // all, the winner stays null â€” an honest "this cycle produced no
     // buildable outcome" rather than crowning a team that never built.
     const winner = await env.DB.prepare(
       `SELECT id, idea_id FROM hackathon_teams WHERE event_id = ? AND final_score IS NOT NULL ORDER BY final_score DESC LIMIT 1`
@@ -535,7 +536,7 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
 
     // N-5: rate the agents now that both sides have final scores. Guarded
     // against replay by its own marker (agents/ratings.ts), which matters
-    // because this branch is reachable on any later tick — everything else
+    // because this branch is reachable on any later tick â€” everything else
     // here is safely idempotent, Elo is not.
     // Also skipped when there's no winner at all: rating two zero-score
     // sides against each other would manufacture a draw from a non-event.
@@ -554,8 +555,8 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
   const alreadyQueued = queuedPayloadValues(existingJudgeItems.results, "teamId");
 
   // Same backoff fix as ensureIdeathonJudging above (found live 2026-07-26,
-  // Week 7 closed beta) — judge_team had the identical no-backoff gap.
-  // 2 minutes, not 30 — same reasoning as ensureIdeathonJudging's comment.
+  // Week 7 closed beta) â€” judge_team had the identical no-backoff gap.
+  // 2 minutes, not 30 â€” same reasoning as ensureIdeathonJudging's comment.
   const recentJudgeFailures = await env.DB.prepare(
     `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'judge_team' AND status = 'failed' AND completed_at >= datetime('now', '-2 minutes')`
   ).bind(eventId).all<{ payload: string | null }>();
@@ -576,7 +577,7 @@ async function ensureTribunalReflections(env: Env, event: EventRow): Promise<"ju
     }
   }
 
-  // isStageComplete, not a hand-rolled count — matches the pattern the
+  // isStageComplete, not a hand-rolled count â€” matches the pattern the
   // other two Tribunal stages already use below (2026-07-23 code-quality
   // pass: this stage was the odd one out).
   const reflectDone = await isStageComplete(env, event.id, "tribunal_reflect");
@@ -590,7 +591,7 @@ async function ensureTribunalReflections(env: Env, event: EventRow): Promise<"ju
  * Restructured (2026-07-23, live bug found alongside isStageComplete's
  * fix above): the previous `if (!allQueued) { ...retry loop...; return }`
  * shape meant the per-agent retry loop stopped running entirely once every
- * agent had been queued AT LEAST ONCE — so a failed cross-examine or
+ * agent had been queued AT LEAST ONCE â€” so a failed cross-examine or
  * synthesize item would never be retried at all once the initial batch of
  * 12 existed, a permanent stall via a different path than tribunal_
  * reflect's retry-storm (which at least kept retrying, just wastefully).
@@ -627,11 +628,11 @@ async function ensureTribunalCrossExamAndSynthesis(env: Env, event: EventRow): P
 }
 
 /**
- * Per-agent retry gate with backoff — enqueue only if there's no non-failed
+ * Per-agent retry gate with backoff â€” enqueue only if there's no non-failed
  * item AND the most recent failure (if any) is older than the backoff
  * window. Found live (2026-07-23): tribunal_reflect routes to Workers AI
  * only (no Groq fallback, router.ts's "reflect" task type), so when Workers
- * AI's daily quota is exhausted every attempt fails instantly — retrying
+ * AI's daily quota is exhausted every attempt fails instantly â€” retrying
  * every single 5-minute cron tick with no backoff produced 676 wasted
  * attempts (all the identical "used up your daily free allocation" error)
  * before quota finally reset. A 30-minute backoff cuts that ~6x without
@@ -643,11 +644,11 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
   ).bind(eventId, agentId, taskType).first<{ n: number }>();
   if ((nonFailed?.n ?? 0) > 0) return false; // already covered by a pending/in_progress/completed item
 
-  // Stall watchdog (MAX_ITEM_ATTEMPTS) — an agent whose Tribunal item has
+  // Stall watchdog (MAX_ITEM_ATTEMPTS) â€” an agent whose Tribunal item has
   // failed this many times (all-time, unlike the recency check below) is
   // permanently abandoned rather than retried forever. isStageComplete
   // (below) treats this same threshold as satisfying the stage for this
-  // agent, so this doesn't reintroduce the stall it's meant to prevent —
+  // agent, so this doesn't reintroduce the stall it's meant to prevent â€”
   // it just stops the otherwise-endless 30-minute retry loop for an item
   // that isStageComplete has already decided not to keep waiting on.
   const totalFailures = await env.DB.prepare(
@@ -664,14 +665,14 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
 /**
  * Per-DISTINCT-AGENT completion, not a raw row count. Found live
  * (2026-07-23): `reflect` (Tribunal's task_type, router.ts) routes to
- * Workers AI only, no Groq fallback — when Workers AI's daily quota is
+ * Workers AI only, no Groq fallback â€” when Workers AI's daily quota is
  * exhausted, every attempt fails instantly, and the per-agent retry-safety
  * fix (scheduler.ts, 2026-07-22) re-queues a fresh one every single 5-
  * minute cron tick. Over enough hours that piles up hundreds of failed
  * rows for the SAME already-eventually-successful agents. The original
  * `allCompleted = COUNT(status != 'completed') === 0` check counted that
  * entire failure history forever, permanently blocking the stage from
- * ever completing even once every agent genuinely had a completed item —
+ * ever completing even once every agent genuinely had a completed item â€”
  * confirmed live: 676 accumulated failures blocked event_cd9644ef... at
  * status='judged' indefinitely despite all 12 tribunal_reflect agents
  * having succeeded. Counting DISTINCT agent_id with status='completed'
@@ -680,11 +681,11 @@ async function shouldEnqueueForAgent(env: Env, eventId: string, agentId: string,
  * Stall watchdog addition (2026-07-30, MAX_ITEM_ATTEMPTS): an agent whose
  * item has failed >= MAX_ITEM_ATTEMPTS times counts toward the threshold too,
  * same as a completed one, because shouldEnqueueForAgent stops retrying that
- * exact agent at that exact threshold — without this, such an agent would be
+ * exact agent at that exact threshold â€” without this, such an agent would be
  * neither retried nor ever counted, permanently pinning the stage one agent
  * short of AGENTS.length. Tribunal reflections/cross-exams/syntheses have no
  * partial-credit concept the way judge scoring does (there's no separate
- * "whatever succeeded" table to fall back to) — advancing without that
+ * "whatever succeeded" table to fall back to) â€” advancing without that
  * agent's contribution, rather than never advancing, is the point.
  */
 async function isStageComplete(env: Env, eventId: string, taskType: string): Promise<boolean> {
@@ -706,7 +707,7 @@ async function isStageComplete(env: Env, eventId: string, taskType: string): Pro
   return doneCount >= AGENTS.length;
 }
 
-/** Non-failed count of a task_type queued for one agent in this event — the per-agent idempotency primitive used below. */
+/** Non-failed count of a task_type queued for one agent in this event â€” the per-agent idempotency primitive used below. */
 async function nonFailedCountForAgent(env: Env, eventId: string, agentId: string, taskType: string): Promise<number> {
   const row = await env.DB.prepare(
     `SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND agent_id = ? AND task_type = ? AND status != 'failed'`
@@ -721,8 +722,8 @@ async function nonFailedCountForAgent(env: Env, eventId: string, agentId: string
  * MAX_ITEM_ATTEMPTS handling (failedAttemptCounts / shouldEnqueueForAgent),
  * but research/submit_idea/architecture re-queue a fresh item on every tick
  * after a failure (the queueX functions below only look at non-failed
- * counts), so a persistently-failing item — one agent's research hitting a
- * hard Tavily outage, an LLM that keeps returning malformed idea JSON —
+ * counts), so a persistently-failing item â€” one agent's research hitting a
+ * hard Tavily outage, an LLM that keeps returning malformed idea JSON â€”
  * retried forever, once per 5-minute tick, with no cap. Same pathology the
  * backlog diagnosed for judging, unguarded on every other phase. At
  * MAX_ITEM_ATTEMPTS the agent's slot is treated as abandoned for the
@@ -739,7 +740,7 @@ async function queueDeepResearch(env: Env, eventId: string): Promise<void> {
   for (const agent of AGENTS) {
     if ((await nonFailedCountForAgent(env, eventId, agent.id, "research")) > 0) continue;
     // Generic stall cap (MAX_ITEM_ATTEMPTS): a research item that keeps
-    // failing — a hard Tavily outage, a persisted 5xx — must not re-enqueue
+    // failing â€” a hard Tavily outage, a persisted 5xx â€” must not re-enqueue
     // every tick forever. At the cap the agent goes without research this
     // phase rather than the queue accumulating failures without bound.
     if ((await failedCountForAgent(env, eventId, agent.id, "research")) >= MAX_ITEM_ATTEMPTS) continue;
@@ -747,22 +748,22 @@ async function queueDeepResearch(env: Env, eventId: string): Promise<void> {
       eventId, agentId: agent.id, taskType: "research",
       payload: { lens: agent.lens },
       priority: 7,
-      scheduledFor: new Date(Date.now() + Math.random() * 9 * 60 * 1000), // spec §3.1 "stagger" precedent (ideaconnect) — spread across ~9 min
+      scheduledFor: new Date(Date.now() + Math.random() * 9 * 60 * 1000), // spec Â§3.1 "stagger" precedent (ideaconnect) â€” spread across ~9 min
     });
   }
 }
 
 async function queueIdeationAndCritique(env: Env, eventId: string): Promise<void> {
-  // Ideas first (max 3 each per spec §4) — critiques get queued once ideas
+  // Ideas first (max 3 each per spec Â§4) â€” critiques get queued once ideas
   // exist, by the executor after each idea completes (see executor.ts),
   // since critique targets need real idea IDs that don't exist yet here.
-  // Per-agent top-up to 3, not a single "does one exist" check — an agent
+  // Per-agent top-up to 3, not a single "does one exist" check â€” an agent
   // whose 2nd submit_idea attempt failed should get a replacement queued
   // for just that slot, not be silently capped at whatever succeeded.
   for (const agent of AGENTS) {
     // Same generic stall cap as queueDeepResearch: a submit_idea item whose
     // LLM call keeps failing (persistent quota, malformed JSON) retried
-    // once per tick forever otherwise — at the cap the agent simply ends
+    // once per tick forever otherwise â€” at the cap the agent simply ends
     // the phase with the ideas it has.
     if ((await failedCountForAgent(env, eventId, agent.id, "submit_idea")) >= MAX_ITEM_ATTEMPTS) continue;
     const existing = await nonFailedCountForAgent(env, eventId, agent.id, "submit_idea");
@@ -783,19 +784,19 @@ async function queueIdeationAndCritique(env: Env, eventId: string): Promise<void
 // identical resubmission scored 0.990. executor.ts's DUPLICATE_SIMILARITY_
 // THRESHOLD (0.90) rejects the reworded/identical band as "same idea, not
 // a collaboration." COLLABORATION_SIMILARITY_FLOOR sits just above the
-// highest measured "different" pair (0.742) — real ideas above this floor
+// highest measured "different" pair (0.742) â€” real ideas above this floor
 // are more related than anything confirmed unrelated so far, even though
 // the upper part of this band (0.75-0.90) hasn't had a real example pair
 // fall into it yet and should be re-calibrated from real accept/refuse
 // outcomes once this phase has run against a few live events.
 const COLLABORATION_SIMILARITY_FLOOR = 0.75;
-const COLLABORATION_SIMILARITY_CEILING = 0.90; // matches executor.ts's duplicate cutoff — same-idea pairs go through P0-0b's filter, not this one
+const COLLABORATION_SIMILARITY_CEILING = 0.90; // matches executor.ts's duplicate cutoff â€” same-idea pairs go through P0-0b's filter, not this one
 
 /**
- * N-1 (spec §4 collaboration): proposes merging idea pairs that are related
+ * N-1 (spec Â§4 collaboration): proposes merging idea pairs that are related
  * enough to be worth combining without being the same idea (that's P0-0b's
  * job, at team-selection time). Self-healing per-pair, same pattern as
- * ensureIdeathonJudging above — runs every tick during the `collaboration`
+ * ensureIdeathonJudging above â€” runs every tick during the `collaboration`
  * phase, but a pair with a non-failed `propose_collaboration` item already
  * queued is skipped, so re-running doesn't duplicate proposals. Bounded to
  * the top 5 (or fewer, for small events) qualifying pairs per event rather
@@ -803,13 +804,13 @@ const COLLABORATION_SIMILARITY_CEILING = 0.90; // matches executor.ts's duplicat
  * doesn't spam every agent with simultaneous proposals.
  */
 async function queueCollaboration(env: Env, eventId: string): Promise<void> {
-  // Only ideas still independently eligible — already-merged ideas (either
+  // Only ideas still independently eligible â€” already-merged ideas (either
   // side of a prior merge) are excluded from further pairing, as are
   // 'blocked' ideas (Code of Conduct v3.1: suspended/hard-violation
   // submissions never merge). ORDER BY created_at: pairwiseSimilarities
   // preserves input order into {a, b}, and executor.ts's
   // handleProposeCollaboration treats `a` as the earlier (proposing/
-  // primary-if-merged) idea — this ordering is what makes that assumption
+  // primary-if-merged) idea â€” this ordering is what makes that assumption
   // hold, not an arbitrary convenience.
   const ideas = await env.DB.prepare(
     `SELECT id, agent_id FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'blocked' AND co_agent_id IS NULL ORDER BY created_at ASC`
@@ -827,7 +828,7 @@ async function queueCollaboration(env: Env, eventId: string): Promise<void> {
   // Generic stall cap (MAX_ITEM_ATTEMPTS): a pair whose proposal keeps
   // failing (one side's LLM call persistently down, malformed decision
   // JSON) would otherwise be re-proposed on every tick of the 1-day
-  // collaboration phase — ~288 identical failed rows. Failed counts are
+  // collaboration phase â€” ~288 identical failed rows. Failed counts are
   // merged across both fields since a pair is re-proposed when EITHER side
   // is eligible again.
   const [proposalFailA, proposalFailB] = await Promise.all([
@@ -846,11 +847,11 @@ async function queueCollaboration(env: Env, eventId: string): Promise<void> {
 
   const ideaIds = eligible.map((i) => i.id);
   const pairs = await pairwiseSimilarities(env, ideaIds);
-  // Same-agent pairs excluded — found live checking this against event
+  // Same-agent pairs excluded â€” found live checking this against event
   // e5415c58's real embeddings (docs/INVESTIGATION_2026-07-28.md): the
   // highest-scoring pairs in this exact band were an agent's OWN
   // near-duplicate ideas (e.g. gale's ForensicLens/ForensicForge, 0.895),
-  // not a genuine cross-agent overlap — "collaboration" between an agent
+  // not a genuine cross-agent overlap â€” "collaboration" between an agent
   // and itself isn't a coherent proposal. Real duplicate-batch problem is
   // NEW-2's upstream ideation-diversity gap, not this phase's job to fix.
   const qualifying = pairs
@@ -882,21 +883,21 @@ async function queueCollaboration(env: Env, eventId: string): Promise<void> {
  * architecture item is queued, the top 8 ideas by critique count (one wider
  * than the top-6 architecture cut so every architecture candidate is
  * covered) each get exactly one post-critique revision pass by their own
- * author. Gate — architecture runs only once every qualifying idea has a
+ * author. Gate â€” architecture runs only once every qualifying idea has a
  * completed revise_idea item or has exhausted MAX_ITEM_ATTEMPTS (same
  * stall-watchdog shape as judging/Tribunal), so the gate can never pin an
  * event forever.
  *
  * Idempotency: a revise_idea item with status != 'failed' already covering
- * the ideaId means it's queued/in-progress/completed — nothing more to add.
+ * the ideaId means it's queued/in-progress/completed â€” nothing more to add.
  * Status-only-completed ideas are excluded (only one revision per idea;
  * ideas that made it into the round and got revised stay revised even if
  * their critique count would later rank them lower).
  */
 async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> {
   // Same ranking query shape as queueArchitecture (critique count, spec
-  // §3.1's "top ideas by interaction signal" proxy), widened to 8 and
-  // requiring at least one critique — an idea nobody critiqued has nothing
+  // Â§3.1's "top ideas by interaction signal" proxy), widened to 8 and
+  // requiring at least one critique â€” an idea nobody critiqued has nothing
   // to revise against.
   const top = await env.DB.prepare(
     `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
@@ -909,7 +910,7 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
      LIMIT 8`
   ).bind(eventId).all<{ id: string; agent_id: string; critique_count: number }>();
 
-  if (top.results.length === 0) return true; // nothing to revise — gate open
+  if (top.results.length === 0) return true; // nothing to revise â€” gate open
 
   const existingItems = await env.DB.prepare(
     `SELECT payload, status FROM event_queue WHERE event_id = ? AND task_type = 'revise_idea'`
@@ -919,7 +920,7 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
 
   // Stall watchdog: an idea whose revisions have failed MAX_ITEM_ATTEMPTS
   // times stops blocking the round (same rationale as ensureIdeathonJudging)
-  // — the idea proceeds to architecture unrevised rather than stalling the
+  // â€” the idea proceeds to architecture unrevised rather than stalling the
   // whole event on a revise call that will never succeed.
   const reviseFailures = await failedAttemptCounts(env, eventId, "revise_idea", "ideaId");
 
@@ -928,7 +929,7 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
     if (completed.has(idea.id)) continue;
     if ((reviseFailures.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
     roundOpen = false;
-    if (covered.has(idea.id)) continue; // already queued/in-progress — wait for it
+    if (covered.has(idea.id)) continue; // already queued/in-progress â€” wait for it
     await enqueue(env, {
       eventId, agentId: idea.agent_id, taskType: "revise_idea",
       payload: { ideaId: idea.id },
@@ -939,11 +940,11 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
 }
 
 async function queueArchitecture(env: Env, eventId: string): Promise<void> {
-  // "Top 6 ideas" (spec §3.1) — ranked by critique count as a proxy signal.
+  // "Top 6 ideas" (spec Â§3.1) â€” ranked by critique count as a proxy signal.
   // This one stays a proxy even after Week 5: architecture happens Day 3-4,
   // BEFORE judging (Day 5+) even exists, so there's no real judge score
   // available yet at this point in the event to rank by.
-  // status != 'merged' — N-1 (spec §4 collaboration): a merged-away idea
+  // status != 'merged' â€” N-1 (spec Â§4 collaboration): a merged-away idea
   // (the non-primary side of an accepted collaboration, collaboration
   // phase above) shouldn't compete for an architecture slot as a separate
   // idea; the primary idea it merged into already carries both agent_ids
@@ -965,7 +966,7 @@ async function queueArchitecture(env: Env, eventId: string): Promise<void> {
 
   // Generic stall cap (MAX_ITEM_ATTEMPTS): an architecture call that keeps
   // failing must not be re-enqueued every tick for the whole phase. At the
-  // cap the idea stays at 'submitted' — it simply doesn't advance to
+  // cap the idea stays at 'submitted' â€” it simply doesn't advance to
   // architecture_complete, so it also doesn't get judged (judging only
   // looks at architecture_complete ideas). That's the honest outcome for
   // an idea the system couldn't build a plan for, rather than an endless
@@ -1028,7 +1029,7 @@ export function computeNextArenaStart(latestIdeathonStartDate: string): Date {
 }
 
 /**
- * Spec §1: "The Arena is a monthly autonomous AI competition." Everything
+ * Spec Â§1: "The Arena is a monthly autonomous AI competition." Everything
  * above this point drives an event that already exists -- nothing actually
  * created the NEXT one automatically. Found live (2026-07-29) checking
  * production: both real judged ideathons only got a hackathon because one
@@ -1072,15 +1073,22 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
   }
 
   // abandoned_at IS NULL: checkForStalledEvents is the last-resort backstop
-  // — without excluding it, an abandoned event would keep this returning
-  // forever. FIX 2026-08-21: was checking only the *latest* ideathon + its
-  // child — that allowed a second concurrent arena (a0/b6 both architecture,
-  // 2026-08-15/16) to slip through when the latest's status check should have
-  // blocked it (likely via manual POST /admin/events bypassing cadence).
-  // Now checks *any* running ideathon/hackathon, so one arena at a time.
+  // -- without excluding it, an abandoned event would keep this returning
+  // forever. FIX 2026-08-22 (concurrent-arena incident, round 2): an
+  // ABANDONED but still-revivable event (revival_count < cap) must ALSO
+  // block cadence. Found live: the watchdog abandoned arena 6 during the
+  // quota freeze (retry backoff reads as silence), cadence saw "nothing
+  // running" 4 minutes later and minted arena 7 -- then revival
+  // resurrected arena 5, leaving multiple cycles alive at once. An
+  // abandoned event that reconcileAbandonedEvents may still revive is not
+  // finished; do not replace it.
   const stillRunning = await env.DB.prepare(
-    `SELECT 1 FROM archive_events WHERE (type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL)
-        OR (type = 'hackathon' AND status != 'complete' AND abandoned_at IS NULL) LIMIT 1`
+    `SELECT 1 FROM archive_events WHERE (
+        (type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL)
+     OR (type = 'hackathon' AND status != 'complete' AND abandoned_at IS NULL)
+     OR (type = 'ideathon' AND abandoned_at IS NOT NULL AND revival_count < ${MAX_EVENT_REVIVALS})
+     OR (type = 'hackathon' AND abandoned_at IS NOT NULL AND revival_count < ${MAX_EVENT_REVIVALS})
+     ) LIMIT 1`
   ).first();
   if (stillRunning) return;
 
@@ -1089,14 +1097,62 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
   }
 }
 
+/**
+ * Single-flight guard (2026-08-22, concurrent-arena incident): exactly ONE
+ * ideathon may be active at a time. Runs first in every cron tick, before
+ * revival/cadence/drive, so even if a creation path ever slips a duplicate
+ * through, the very next tick consolidates.
+ *
+ * Canonical = the OLDEST-CREATED active ideathon (created_at, not
+ * start_date -- revival rewrites start_date, creation is immutable). Every
+ * other active ideathon is superseded: abandoned with an explicit reason
+ * and its live queue quarantined so zombie work stops burning quota.
+ * Non-complete hackathon children of a superseded parent are superseded
+ * with it -- a build phase without its selection lineage is meaningless.
+ */
+export async function enforceSingleActiveArena(env: Env): Promise<string | null> {
+  const canonical = await env.DB.prepare(
+    `SELECT id FROM archive_events
+     WHERE type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL
+     ORDER BY created_at ASC LIMIT 1`
+  ).first<{ id: string }>();
+  const canonId = canonical?.id ?? null;
+
+  const strays = await env.DB.prepare(
+    `SELECT id FROM archive_events
+     WHERE type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL AND id != ?`
+  ).bind(canonId ?? "").all<{ id: string }>();
+
+  for (const stray of strays.results) {
+    await env.DB.prepare(
+      `UPDATE archive_events SET abandoned_at = datetime('now'),
+         abandoned_reason = 'superseded: only one arena may run at a time' WHERE id = ?`
+    ).bind(stray.id).run();
+    await cancelPendingForEvent(env, stray.id, "superseded: arena consolidated into the single active cycle");
+
+    const kids = await env.DB.prepare(
+      `SELECT id FROM archive_events WHERE parent_event_id = ? AND type = 'hackathon'
+         AND status != 'complete' AND abandoned_at IS NULL`
+    ).bind(stray.id).all<{ id: string }>();
+    for (const kid of kids.results) {
+      await env.DB.prepare(
+        `UPDATE archive_events SET abandoned_at = datetime('now'),
+           abandoned_reason = 'parent ideathon superseded' WHERE id = ?`
+      ).bind(kid.id).run();
+      await cancelPendingForEvent(env, kid.id, "parent arena superseded");
+    }
+  }
+  return canonId;
+}
+
 // Generous on purpose: MAX_ITEM_ATTEMPTS above already closes the two known
 // infinite-stall causes (judging, Tribunal). This is the backstop for a stall
-// shaped some OTHER way — team_formation wedged, a phase handler throwing on
-// every tick before it reaches the queue, anything not anticipated here — so
+// shaped some OTHER way â€” team_formation wedged, a phase handler throwing on
+// every tick before it reaches the queue, anything not anticipated here â€” so
 // it needs to outlast legitimate slow recovery (a Workers AI daily quota
 // exhaustion can take most of a day to clear) rather than fire fast. Getting
-// this wrong in the aggressive direction — abandoning an event that would
-// have recovered on its own — is worse than a slow safety net; the day-gated
+// this wrong in the aggressive direction â€” abandoning an event that would
+// have recovered on its own â€” is worse than a slow safety net; the day-gated
 // false-positive shape has an automated undo now (reconcileAbandonedEvents
 // below), but a genuine abandonment should still be rare.
 const STALL_ABANDON_HOURS = 25;
@@ -1105,7 +1161,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Day-gated phases (phaseForDay at line 93, hackathonPhaseForDay at line
 // 101) drive work on a day-offset calendar, so an event that finishes a
 // phase's work early legitimately goes quiet until the NEXT phase's start
-// day — that wait is not a stall, but it can exceed STALL_ABANDON_HOURS.
+// day â€” that wait is not a stall, but it can exceed STALL_ABANDON_HOURS.
 // Value = day (from start_date) at which the next phase begins; phases not
 // listed here (building, ready_for_judging) are driven continuously and
 // stay anchored to last_progress_at. Keep in sync with the two phaseForDay
@@ -1121,7 +1177,7 @@ const DAY_GATED_PHASE_STARTS_AT_DAY: Record<string, number> = {
 /**
  * Marks an event abandoned once it's gone STALL_ABANDON_HOURS with zero real
  * progress (last_progress_at, touched only by queue.ts's markCompleted on an
- * actual success — see its comment). Deliberately does not try to route
+ * actual success â€” see its comment). Deliberately does not try to route
  * around whatever's actually stuck; it just stops that ONE event from
  * blocking every future Arena cycle behind it (ensureArenaCadence's
  * stillRunning check above), which is the actual harm a silent stall causes.
@@ -1137,7 +1193,7 @@ export async function checkForStalledEvents(env: Env): Promise<void> {
 
   // Production incident (2026-08-02): a healthy ideathon whose deep_research
   // finished 26 minutes after start (all 12 agents done 08-01 14:21) was
-  // abandoned at 08-02 15:25 — last_progress + exactly 25h — while the
+  // abandoned at 08-02 15:25 â€” last_progress + exactly 25h â€” while the
   // calendar's ideation_critique phase wasn't due until day 2 (08-03 13:55).
   // The watchdog punished the event for finishing its phase work fast. For
   // day-gated phases the staleness clock must start at the phase boundary,
@@ -1159,14 +1215,14 @@ export async function checkForStalledEvents(env: Env): Promise<void> {
 
     await env.DB.prepare(
       `UPDATE archive_events SET abandoned_at = datetime('now'), abandoned_reason = ? WHERE id = ?`
-    ).bind(`No progress for over ${STALL_ABANDON_HOURS}h — stuck at status '${event.status}'`, event.id).run();
+    ).bind(`No progress for over ${STALL_ABANDON_HOURS}h â€” stuck at status '${event.status}'`, event.id).run();
   }
 }
 
 // Self-healing cap: an event may be revived this many times after a false
 // abandonment before revival stops. A genuinely dead event (phase handler
 // throwing before the queue is ever touched) looks identical to a healthy
-// waiting one from the queue's perspective — empty of unfinished work — so
+// waiting one from the queue's perspective â€” empty of unfinished work â€” so
 // revival can't be unlimited, or a zombie would be resurrected forever and
 // keep blocking arena cadence (ensureArenaCadence's stillRunning check).
 const MAX_EVENT_REVIVALS = 3;
@@ -1175,14 +1231,14 @@ const MAX_EVENT_REVIVALS = 3;
  * The automated undo for checkForStalledEvents' one false-positive shape: a
  * day-gated phase (DAY_GATED_PHASE_STARTS_AT_DAY) whose work all completed,
  * leaving the event in a legitimate calendar wait. Production incident
- * 2026-08-02 — deep_research finished 26 minutes after event start, ideation
+ * 2026-08-02 â€” deep_research finished 26 minutes after event start, ideation
  * wasn't due until day 2, and the (then last_progress_at-anchored) watchdog
  * abandoned the healthy event at +25h. Revival is strictly guarded so it only
  * undoes provably-wrong abandonments:
- *   1. Status must be day-gated — continuous phases (building,
+ *   1. Status must be day-gated â€” continuous phases (building,
  *      ready_for_judging) are trusted, their abandonment means the work
  *      itself is stuck.
- *   2. The event's queue must hold no pending/in_progress items — live work
+ *   2. The event's queue must hold no pending/in_progress items â€” live work
  *      means a real stall.
  *   3. revival_count < MAX_EVENT_REVIVALS (schema_week8c_self_heal.sql).
  * If the calendar has drifted past the event's current phase (it sat
@@ -1200,6 +1256,17 @@ export async function reconcileAbandonedEvents(env: Env): Promise<void> {
 
   for (const event of abandoned.results) {
     if (DAY_GATED_PHASE_STARTS_AT_DAY[event.status] === undefined) continue;
+
+    // Concurrency gate (2026-08-22 incident): never revive while ANOTHER
+    // arena is active — revival is what turned one consolidated arena back
+    // into two. The event stays abandoned; if the other arena later
+    // finishes, the next tick's revival (or cadence) handles it.
+    const otherActive = await env.DB.prepare(
+      `SELECT 1 FROM archive_events
+       WHERE id != ? AND type = 'ideathon'
+         AND status != 'judged' AND abandoned_at IS NULL LIMIT 1`
+    ).bind(event.id).first();
+    if (otherActive) continue;
 
     const unfinished = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM event_queue WHERE event_id = ? AND status IN ('pending', 'in_progress')`

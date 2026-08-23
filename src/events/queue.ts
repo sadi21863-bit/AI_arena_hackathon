@@ -145,6 +145,33 @@ export async function resetStuckItems(env: Env, staleAfterMinutes = 10): Promise
   return rows.length;
 }
 
+/**
+ * Cancels every live (pending/in_progress) item of one event — used when an
+ * event is superseded/abandoned so its zombie work stops executing. Found
+ * live (2026-08-22): an abandoned event's items were still claimed by
+ * processQueue (global claim, no event filter) and kept burning inference
+ * quota hours after the event itself was marked abandoned. Every cancel is
+ * journaled so replay shows exactly what was cut.
+ */
+export async function cancelPendingForEvent(env: Env, eventId: string, reason: string): Promise<number> {
+  const result = await env.DB.prepare(
+    `UPDATE event_queue
+     SET status = 'failed', completed_at = datetime('now'), error_message = ?
+     WHERE event_id = ? AND status IN ('pending', 'in_progress')
+     RETURNING id, agent_id, task_type`
+  ).bind(reason.slice(0, 2000), eventId).all<{ id: number; agent_id: string | null; task_type: string }>();
+  const rows = result.results ?? [];
+  if (rows.length) {
+    await env.DB.batch(rows.map((r) =>
+      env.DB.prepare(
+        `INSERT INTO queue_journal (item_id, event_id, agent_id, task_type, from_status, to_status, error_message)
+         VALUES (?, ?, ?, ?, 'pending', 'failed', ?)`
+      ).bind(r.id, eventId, r.agent_id, r.task_type, `cancelled: ${reason.slice(0, 500)}`)
+    ));
+  }
+  return rows.length;
+}
+
 /** One append-only queue_journal row — G7's history record for replay. */
 async function journal(
   env: Env,
