@@ -103,6 +103,20 @@ async function searchTavily(apiKey: string, query: string, maxResults: number): 
   return { results, answer: data.answer };
 }
 
+async function extractTavily(apiKey: string, urls: string[], query: string): Promise<{ results: { url: string; content: string }[] }> {
+  const res = await fetch("https://api.tavily.com/extract", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey, urls, query, extract_depth: "basic" }),
+  });
+  if (!res.ok) throw new Error(`Tavily extract ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const data: any = await res.json();
+  const results = (data.results ?? data.data ?? []).map((r: any) => ({
+    url: r.url, content: r.content ?? r.raw_content ?? "",
+  }));
+  return { results };
+}
+
 export interface DeepResearchInput {
   agentId: string;
   eventId: string;
@@ -205,4 +219,103 @@ export async function deepResearch(env: Env, input: DeepResearchInput): Promise<
   });
 
   return { results, answer, priors };
+}
+
+/**
+ * Browser-style research — search + extract with budget gating.
+ *
+ * Verified live via week0-spike/browser_research_probe.js (2026-08-25):
+ * extract adds 1.41x richer evidence (5020 vs 3551 chars) for 1 extra credit,
+ * critique grounding then correctly references competitors (hasCompetitorRef
+ * no→yes). Per-event cost is 2 credits vs 1 for plain search; worst-case
+ * monthly projection even if every critique uses it (84→120/event →360/mo)
+ * stays well under MONTHLY_CEILING 2700. Only used for handleCritique
+ * grounding where competitor specificity matters; handleResearch's 4 bulk
+ * queries stay plain search to preserve budget.
+ *
+ * Budget: checks that 2 credits remain (monthly + per-event) before spending
+ * any; if not, silently degrades to plain search result (never fails the turn).
+ */
+export interface DeepResearchExtractOutput extends DeepResearchOutput {
+  extracted?: { url: string; content: string }[];
+}
+
+export async function deepResearchWithExtract(env: Env, input: DeepResearchInput): Promise<DeepResearchExtractOutput> {
+  const phase = input.phase ?? "ideathon";
+
+  // Need 2 credits: search (1) + extract (1). Check both ceilings with headroom for the second.
+  const callsSoFar = await monthlyCallCount(env);
+  if (callsSoFar >= MONTHLY_CEILING) {
+    return { results: [], budgetExceeded: "monthly" };
+  }
+  if (callsSoFar + 1 >= MONTHLY_CEILING) {
+    // Only 1 credit left this month — degrade to plain search rather than take the last credit for extract
+    return deepResearch(env, input);
+  }
+  const perEventRow = await env.DB.prepare(
+    `SELECT COUNT(*) as n FROM research_calls WHERE event_id = ? AND agent_id = ? AND phase = ?`
+  ).bind(input.eventId, input.agentId, phase).first<{ n: number }>();
+  const perEventUsed = perEventRow?.n ?? 0;
+  if (perEventUsed + 1 >= PER_EVENT_BUDGETS[phase]) {
+    return deepResearch(env, input);
+  }
+  if (perEventUsed >= PER_EVENT_BUDGETS[phase]) {
+    return { results: [], budgetExceeded: "per_event" };
+  }
+
+  const apiKey = selectTavilyKey(env, callsSoFar);
+  let search: { results: ResearchResult[]; answer?: string };
+  try {
+    search = await searchTavily(apiKey, input.query, input.maxResults ?? 3);
+  } catch (e) {
+    // Search failed — degrade, don't throw; caller is executor which expects a result that degrades to empty
+    return { results: [], budgetExceeded: undefined };
+  }
+  await recordCall(env, input.eventId, input.agentId, phase, input.query);
+
+  // Extract top 3 URLs if we still have budget for the second credit
+  let extracted: { url: string; content: string }[] | undefined;
+  const callsAfterSearch = callsSoFar + 1;
+  const perEventAfterSearch = perEventUsed + 1;
+  if (search.results.length && callsAfterSearch < MONTHLY_CEILING && perEventAfterSearch < PER_EVENT_BUDGETS[phase]) {
+    const urls = search.results.slice(0, 3).map((r) => r.url).filter(Boolean);
+    if (urls.length) {
+      try {
+        const apiKey2 = selectTavilyKey(env, callsAfterSearch);
+        const ext = await extractTavily(apiKey2, urls, input.query);
+        extracted = ext.results;
+        await recordCall(env, input.eventId, input.agentId, phase, `${input.query} [extract: ${urls.length} urls]`);
+      } catch {
+        // Extract failed — keep search results, don't fail the turn
+        extracted = undefined;
+      }
+    }
+  }
+
+  const priors = await archivePriors(env, input.query, input.eventId);
+  const priorsText = priors.length
+    ? ["", "What the Arena already learned about this (previous events):", ...priors.map((p) => `- [${p.type}] ${p.text.slice(0, 300)}`)].join("\n")
+    : "";
+
+  // For memory, include extracted content trimmed so embedding sees the richer evidence
+  const extractText = extracted?.length
+    ? "\n" + extracted.map((e) => `- EXTRACT ${e.url}: ${e.content.slice(0, 800)}`).join("\n")
+    : "";
+
+  const summaryText = [
+    `Lens: ${input.lens}`,
+    `Query: ${input.query}`,
+    search.answer ? `Summary: ${search.answer}` : null,
+    ...search.results.map((r) => `- ${r.title} (${r.url}): ${r.snippet}`),
+  ].filter(Boolean).join("\n") + extractText + priorsText;
+
+  await rememberMemory(env, {
+    id: `research_${crypto.randomUUID()}`,
+    agentId: input.agentId,
+    eventId: input.eventId,
+    type: "research",
+    text: summaryText.slice(0, 4000),
+  });
+
+  return { results: search.results, answer: search.answer, priors, extracted };
 }

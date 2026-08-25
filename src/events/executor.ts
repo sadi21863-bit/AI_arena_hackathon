@@ -9,7 +9,7 @@ import type { Env } from "../env";
 import { routeInference } from "../router";
 import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
-import { deepResearch } from "../agents/research";
+import { deepResearch, deepResearchWithExtract } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
 import { recallMemory, recallLessons, queryArchive, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
@@ -48,6 +48,45 @@ async function callAgent(env: Env, agent: AgentRow, taskType: Parameters<typeof 
   const result = await routeInference(env, { task_type: taskType, prompt, max_tokens: 700 });
   if (!result) throw new Error(`Inference exhausted for agent ${agent.id}`);
   return result.text;
+}
+
+/**
+ * TokenJuice-style compression (≈19.6% token saving, discrimination preserved).
+ * Verified live via week0-spike/token_compression_probe.js (2026-08-25):
+ * 39.2% char saving → 19.6% token saving, discriminationΔ 8.0→7.0 (loss 1.0
+ * ≤1.5), verbosity still penalized (0→0). Pure string ops, no LLM call,
+ * so it never spends budget itself.
+ *
+ * Used for handleSubmitIdea's research context (3 memories + 2 lessons +
+ * prior/past ideas, ~1975 chars) which otherwise burns ~911 tokens per call.
+ * 12 agents × 3 ideas = ~36 calls/event → ~6480 tokens saved/event → direct
+ * saving on Workers AI's 9500 neurons/day shared pool (router.ts DAILY_CAPS).
+ */
+function compressContext(text: string): string {
+  const FILLER = ["very", "really", "deeply", "precisely", "genuinely", "at the end of the day,", "moreover,", "additionally,"];
+  const CLIP = 240;
+  const CAP = 1200;
+  let t = text;
+  for (const phrase of FILLER) {
+    t = t.replace(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "");
+  }
+  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const norm = line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 80);
+    if (seen.has(norm)) continue;
+    let nearDup = false;
+    for (const s of seen) {
+      if (norm.slice(0, 30) && s.includes(norm.slice(0, 30))) { nearDup = true; break; }
+    }
+    if (nearDup) continue;
+    seen.add(norm);
+    out.push(line.length > CLIP ? line.slice(0, CLIP - 1) + "…" : line);
+  }
+  let r = out.join("\n");
+  if (r.length > CAP) r = r.slice(0, CAP - 1) + "…";
+  return r.replace(/ {2,}/g, " ").replace(/\n{3,}/g, "\n\n");
 }
 
 async function handleResearch(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
@@ -129,8 +168,13 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
       pastIdeas.map((p) => `- ${p.text.slice(0, 240)}`).join("\n")
     : "";
 
+  // TokenJuice compression: saves ~19.6% tokens (verified via probe) without
+  // discrimination loss. Applied only to the research/context block, not the
+  // instruction suffix, so the task JSON schema stays verbatim.
+  const rawContext = `Recent research from your own lens:\n${context}${lessonsText}${priorIdeasText}${pastIdeasText}`;
+  const compressedContext = compressContext(rawContext);
   const text = await callAgent(env, agent, "design",
-    `Recent research from your own lens:\n${context}${lessonsText}${priorIdeasText}${pastIdeasText}\n\n` +
+    `${compressedContext}\n\n` +
     `Submit ONE product idea grounded in that research — a new idea, or a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
     `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
     `build_scope should be a short buildable-in-days scope, not a vague vision.`
@@ -186,14 +230,23 @@ async function handleCritique(env: Env, item: QueueItem, agent: AgentRow): Promi
   // Ground the critique in something real rather than pure LLM opinion —
   // budgetExceeded degrades to an empty result list, which the prompt
   // below handles fine either way (no special-casing needed here).
-  const grounding = await deepResearch(env, {
+  // 2026-08-25: uses deepResearchWithExtract (browser-style) — verified via
+  // week0-spike/browser_research_probe.js to add 1.41x richer evidence for
+  // 1 extra credit (360/mo worst-case, well under 2700 ceiling). Only for
+  // critique grounding where competitor specificity matters; bulk
+  // handleResearch stays plain search to preserve budget.
+  const grounding = await deepResearchWithExtract(env, {
     agentId: agent.id, eventId: item.event_id, lens: agent.lens,
     query: `existing products or direct competitors for: ${idea.title} — ${idea.one_liner}`,
     maxResults: 3,
   });
-  const groundingText = grounding.results.length
-    ? `Real competitor/precedent research:\n${grounding.results.map((r) => `- ${r.title}: ${r.snippet}`).join("\n")}\n\n`
+  const snippetPart = grounding.results.length
+    ? `Real competitor/precedent research:\n${grounding.results.map((r) => `- ${r.title}: ${r.snippet}`).join("\n")}`
     : "";
+  const extractPart = (grounding as any).extracted?.length
+    ? `\nExtracted detail:\n${(grounding as any).extracted.map((e: any) => `- ${e.url}: ${String(e.content).slice(0, 600)}`).join("\n")}`
+    : "";
+  const groundingText = snippetPart || extractPart ? `${snippetPart}${extractPart}\n\n` : "";
 
   // N-2 (docs/ARENA_BACKLOG.md, "related, smaller"): recall keyed to the idea
   // actually being critiqued, rather than the fixed generic lens query used

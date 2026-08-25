@@ -1,0 +1,78 @@
+{
+  "idea": {
+    "title": "Invoice Tone Ladder",
+    "one_liner": "Auto-generating escalating payment reminder emails based on days-overdue via Stripe/QuickBooks webhooks",
+    "problem": "freelancers spend 4-6 hours/month manually escalating overdue-payment emails, existing tools only send flat reminders",
+    "solution": "webhook listener + 3-tier template engine (polite→firm→final) + scheduler + dashboard, 2-person team 4 days"
+  },
+  "query": "existing products or direct competitors for: Invoice Tone Ladder — Auto-generating escalating payment reminder emails based on days-overdue via Stripe/QuickBooks webhooks",
+  "tavilyKeys": 3,
+  "snippet": {
+    "results": 3,
+    "chars": 3551,
+    "credits": 1,
+    "latencyMs": 7068
+  },
+  "extract": {
+    "results": 3,
+    "chars": 5020,
+    "credits": 1,
+    "latencyMs": 731
+  },
+  "ratio": 1.4136862855533652,
+  "critiques": [
+    {
+      "label": "baseline (no research)",
+      "groundingChars": 0,
+      "credits": 0,
+      "provider": "workers_ai",
+      "total_tokens": 195,
+      "prompt_tokens": 139,
+      "parsed": {
+        "strength": "addresses a specific pain point for freelancers with a potentially scalable solution",
+        "weakness": "may not account for varying client relationships or communication preferences",
+        "suggestion": "consider integrating personalization options and client feedback mechanisms to enhance effectiveness and user adoption"
+      },
+      "raw": "{\"strength\": \"addresses a specific pain point for freelancers with a potentially scalable solution\", \"weakness\": \"may not account for varying client relationships or communication preferences\", \"suggestion\": \"consider integrating personalization options and client feedback mechanisms to enhance effectiveness and user adoption\"}",
+      "hasCompetitorRef": "no"
+    },
+    {
+      "label": "snippet (basic search)",
+      "groundingChars": 1838,
+      "credits": 1,
+      "provider": "workers_ai",
+      "total_tokens": 614,
+      "prompt_tokens": 555,
+      "parsed": {
+        "strength": "addresses a specific pain point for freelancers with a tailored solution",
+        "weakness": "may not be scalable or adaptable to larger businesses or more complex invoicing needs",
+        "suggestion": "consider integrating with existing invoicing tools and platforms to expand reach and compatibility"
+      },
+      "raw": "{\"strength\": \"addresses a specific pain point for freelancers with a tailored solution\", \"weakness\": \"may not be scalable or adaptable to larger businesses or more complex invoicing needs\", \"suggestion\": \"consider integrating with existing invoicing tools and platforms to expand reach and compatibility\"}",
+      "hasCompetitorRef": "yes"
+    },
+    {
+      "label": "extract (browser-style)",
+      "groundingChars": 1838,
+      "credits": 2,
+      "provider": "workers_ai",
+      "total_tokens": 572,
+      "prompt_tokens": 516,
+      "parsed": {
+        "strength": "addresses a specific pain point for freelancers with a scalable solution",
+        "weakness": "may not integrate seamlessly with existing invoicing systems and workflows",
+        "suggestion": "consider developing strategic partnerships with popular invoicing platforms to expand reach and improve compatibility"
+      },
+      "raw": "{\"strength\": \"addresses a specific pain point for freelancers with a scalable solution\", \"weakness\": \"may not integrate seamlessly with existing invoicing systems and workflows\", \"suggestion\": \"consider developing strategic partnerships with popular invoicing platforms to expand reach and improve compatibility\"}",
+      "hasCompetitorRef": "yes"
+    }
+  ],
+  "checks": [
+    "extract-richer",
+    "credit-budget (max 2 ≤ 5)",
+    "monthly-ceiling (worst-case 360 < 2700)",
+    "critique-liveness"
+  ],
+  "verdict": "PASS",
+  "startedAt": "2026-08-25T19:20:30.114Z"
+}

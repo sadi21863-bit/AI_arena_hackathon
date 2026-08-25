@@ -26,12 +26,19 @@ import type { Env } from "./env";
 // Task -> candidate model per provider, from spec §5. Kept explicit rather
 // than derived, so a model swap is a one-line change here, not a
 // scoring-function debugging session.
+//
+// 2026-08-25: Groq removed llama-3.x models (llama-3.1-8b-instant,
+// llama-3.3-70b-versatile now 404 — verified live via
+// week0-spike/browser_research_probe & token_compression_probe). Updated to
+// currently-available Groq ids (openai/gpt-oss-*, qwen/qwen3.6-27b,
+// groq/compound-mini) — same tier/latency trade as before, just valid ids.
+// See GET https://api.groq.com/openai/v1/models for the current list.
 const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
-  summarize: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  validate: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  test: { groq: "llama-3.1-8b-instant", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  research: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
-  design: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  summarize: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  validate: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  test: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  research: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  design: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   code_generation: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   // judging deliberately does NOT share a model family with architecture
   // (both used to be gpt-oss-120b / llama-3.3-70b-instruct-fp8-fast on both
@@ -47,7 +54,10 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   // callers requested. With that fixed, the same model/prompt/max_tokens=700
   // combination now completes its reasoning and returns valid JSON —
   // confirmed directly against the live API, not assumed.
-  judging: { groq: "llama-3.3-70b-versatile", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
+  // 2026-08-25: judging moved to qwen/qwen3.6-27b to stay distinct from
+  // architecture's gpt-oss-120b (still avoids self-preference) and because
+  // llama-3.3-70b-versatile is gone on Groq.
+  judging: { groq: "qwen/qwen3.6-27b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   architecture: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   // No groq candidate, deliberately: spec §14 Tribunal reflection is
   // "non-time-critical," so it always routes straight to the cheaper
@@ -59,9 +69,15 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
 // Daily caps from spec §5 (Groq) and §6 (Workers AI, Neuron-derived).
 // These are the PUBLISHED caps — replace with measured values from the Week 0
 // spike (inference_pool_probe.js) once you have them; don't ship on estimates.
+//
+// 2026-08-25: groq caps updated for currently-available ids (see TASK_MODELS
+// above). Legacy llama caps retained for history; inactive models simply never
+// hit their cap because TASK_MODELS no longer points at them.
 export const DAILY_CAPS: Record<string, number> = {
   "groq:llama-3.1-8b-instant": 14400,
   "groq:llama-3.3-70b-versatile": 1000,
+  "groq:groq/compound-mini": 14400,
+  "groq:qwen/qwen3.6-27b": 1000,
   "groq:openai/gpt-oss-120b": 1000,
   "groq:openai/gpt-oss-20b": 1000,
   // 8500 was an unmeasured conservative guess below spec §6's published

@@ -10,7 +10,7 @@
  */
 
 import { fetchJson, FOREVER } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, raw } from "../core/html.js";
 import { href, navigate } from "../core/router.js";
 import { loadScript, loadCss } from "../core/assets.js";
 import * as store from "../core/store.js";
@@ -94,37 +94,42 @@ export async function mount(el, params) {
   }
 
   // Human-friendly commit pills: 7-char SHA + plain title, no technical hash wall
+  const sha = params.sha || commits[0].sha;
+  const activeCommit = commits.find((c) => c.sha === sha) || commits[0];
+  const summaryText = activeCommit ? (activeCommit.commit && activeCommit.commit.message || "").split("\n")[0] : "";
+
   render(commitsEl, html`${commits.map((c) => html`
-    <a class="v-diff__commit ${params.sha === c.sha ? "is-active" : ""}"
+    <a class="v-diff__commit ${c.sha === sha ? "is-active" : ""}"
        href="${href(`/diff/${eventId}/${team.team_name}/${c.sha}`)}" title="${c.sha}">
       <code>${c.sha.slice(0, 7)}</code>
       <span>${(c.commit && c.commit.message || "").split("\n")[0].slice(0, 52)}</span>
     </a>`)}`);
   // Summary header above the diff — plain language, not git porcelain
-  const activeCommit = commits.find((c) => c.sha === sha) || commits[0];
-  const summaryText = activeCommit ? (activeCommit.commit && activeCommit.commit.message || "").split("\n")[0] : "";
 
-  const sha = params.sha || commits[0].sha;
   render(body, html`<div class="arena-state">Loading diff…</div>`);
 
   // A sha's diff is immutable — cache it forever. This is also what keeps
   // back-navigation from re-spending GitHub quota.
-  const patch = await fetchJson(`${GH}/repos/${team.repo_url}/commits/${sha}`, {
-    ttl: FOREVER,
-    optional: true,
-    headers: { Accept: "application/vnd.github.diff" },
-  }).catch(() => null);
-  if (disposed) return () => {};
-
-  // The diff endpoint returns text, not JSON, so fetchJson's parse fails —
-  // fall back to a direct text read rather than pretending it's JSON.
-  let text = typeof patch === "string" ? patch : null;
+  // Use a dedicated text cache (not fetchJson's JSON cache) because the diff
+  // endpoint returns text/vnd.github.diff, not JSON — fetchJson's res.json()
+  // parse would fail and defeat the FOREVER cache. A local FOREVER Map keeps
+  // back-navigation free and avoids burning the 60/hr anonymous GitHub quota.
+  const diffCache = (globalThis.__arenaDiffCache ||= new Map());
+  let text = diffCache.get(`${team.repo_url}:${sha}`) || null;
   if (!text) {
     try {
       const res = await fetch(`${GH}/repos/${team.repo_url}/commits/${sha}`, {
         headers: { Accept: "application/vnd.github.diff" },
       });
-      text = res.ok ? await res.text() : null;
+      if (res.ok) {
+        text = await res.text();
+        if (text) diffCache.set(`${team.repo_url}:${sha}`, text);
+      } else if (res.status === 403) {
+        render(body, html`<div class="arena-state arena-state--error">GitHub rate limit hit (60/hr anonymous). Try again in a few minutes or view on GitHub directly: <a href="https://github.com/${team.repo_url}/commit/${sha}" target="_blank" rel="noopener">github.com/${team.repo_url}/commit/${sha.slice(0,7)}</a></div>`);
+        return () => { disposed = true; };
+      } else {
+        text = null;
+      }
     } catch { text = null; }
   }
   if (disposed) return () => {};
@@ -148,9 +153,9 @@ export async function mount(el, params) {
     outputFormat: "line-by-line",
     escapeHtml: true,
   });
-  render(body, html`${summary}<div class="v-diff__body">${html.raw ? html.raw(diffHtml) : diffHtml}</div>`);
-  // Fallback for html.raw-less env: if render didn't inject, use innerHTML
-  if (!body.querySelector(".d2h-wrapper")) body.innerHTML = summary + diffHtml;
+  render(body, html`${summary}<div class="v-diff__body">${raw(diffHtml)}</div>`);
+  // Fallback if Diff2Html produced no wrapper (e.g., empty diff) — ensure something renders
+  if (!body.querySelector(".d2h-wrapper")) body.innerHTML = summary.value + diffHtml;
 
   return () => { disposed = true; };
 }
