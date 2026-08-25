@@ -132,7 +132,13 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
   // budget is proven-working and this is additional headroom, not a
   // replacement for it. Not sent for non-gpt-oss models (llama-3.x) since
   // they don't support it and an unrecognized param risks a hard API error.
+  // 2026-08-25: qwen/qwen3.6-27b is also a reasoning model (qwen3 docs) but
+  // with a different param value — needs "none" to disable hidden reasoning
+  // that otherwise burns the 700-token budget on <think> and never reaches
+  // the visible JSON (verified live: 3223-char think, no JSON, vs 284-char
+  // valid JSON with reasoning_effort:"none").
   const isReasoningModel = model.includes("gpt-oss");
+  const isQwen = model.includes("qwen");
   // Split randomly across 2 Groq accounts when the second is configured —
   // added live (2026-07-26, Week 7 closed beta) after individual judge
   // calls intermittently failed under concurrent load (7 judges' calls
@@ -146,7 +152,7 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model, messages: [{ role: "user", content: req.prompt }], max_completion_tokens: req.max_tokens ?? 500,
-      ...(isReasoningModel ? { reasoning_effort: "low" } : {}),
+      ...(isReasoningModel ? { reasoning_effort: "low" } : isQwen ? { reasoning_effort: "none" } : {}),
     }),
   });
   if (!res.ok) return null; // real code should distinguish rate-limit (retry next tier) from hard error (log + alert)
