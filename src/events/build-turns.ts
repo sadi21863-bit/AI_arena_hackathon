@@ -336,8 +336,14 @@ export function describeBuildEvidence(e: BuildEvidence): string {
   ];
   if (e.logOnly) {
     lines.push(
-      "WARNING: every committed file is scaffold or the agent's own turn log — no product code was written despite the runs above."
+      "WARNING: every committed file is scaffold or the agent's own turn log — no product code was written despite the runs above. Score Code Quality and Feasibility at most 3/10."
     );
+  }
+  if (e.sourceFiles === 0 && e.turnsSucceeded + e.turnsFailed > 0) {
+    lines.push("WARNING: zero product source files despite executed turns — the team produced no shippable code. Cap overall score at 4/10.");
+  }
+  if (e.filesChanged > 0 && e.sourceFiles > 0 && e.sourceFiles < 3 && e.additions < 200) {
+    lines.push("WARNING: minimal product change (few files, <200 additions) — likely a stub, not a product. Penalize completeness.");
   }
   return lines.join("\n");
 }

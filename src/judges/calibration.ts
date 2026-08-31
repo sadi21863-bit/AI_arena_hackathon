@@ -135,7 +135,9 @@ export async function runCalibration(env: Env, eventId: string): Promise<Calibra
     }
   }
   const correlation = pairwiseCorrelations.reduce((s, v) => s + v, 0) / pairwiseCorrelations.length;
-  const passed = correlation >= 0.6;
+  // Guard the 0.99 overfit: correlation >0.95 on 3 anchors means anchors too easy, not perfect judges
+  const passed = correlation >= 0.6 && correlation <= 0.95;
+  // If overfit, keep pinned provider/model but surface as failed so UI warns and future pin rotates anchors
 
   await env.DB.batch([
     env.DB.prepare(

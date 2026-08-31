@@ -521,6 +521,18 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
       await env.DB.prepare(`UPDATE hackathon_teams SET status = 'judged' WHERE id = ?`).bind(team.id).run();
       continue;
     }
+    // N-4 grounded: a team whose turns all share the identical head_sha
+    // never progressed beyond its scaffold — the agent recommitted the same
+    // file (verified live 3fc1cb03 20× failure same SHA). Treating such a
+    // team as judged with NULL scores makes the failure honest instead of
+    // crowning a 9.0 for a stub.
+    const shaRows = await env.DB.prepare(
+      `SELECT DISTINCT head_sha FROM build_turns WHERE team_id = ? AND conclusion IN ('success','failure') AND head_sha IS NOT NULL`
+    ).bind(team.id).all<{ head_sha: string }>();
+    if (shaRows.results.length === 1 && team.executed_turns >= 3) {
+      await env.DB.prepare(`UPDATE hackathon_teams SET status = 'judged' WHERE id = ?`).bind(team.id).run();
+      continue;
+    }
     if ((judgeFailureCounts.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
       const hackathonScore = await finalizeWithPartialScores(env, { targetType: "team", targetId: team.id, phase: "hackathon" });
       const idea = await env.DB.prepare(`SELECT ideathon_score FROM archive_ideas WHERE id = ?`).bind(team.idea_id).first<{ ideathon_score: number | null }>();
@@ -963,22 +975,19 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
 }
 
 async function queueArchitecture(env: Env, eventId: string): Promise<void> {
-  // "Top 6 ideas" (spec Â§3.1) â€” ranked by critique count as a proxy signal.
-  // This one stays a proxy even after Week 5: architecture happens Day 3-4,
-  // BEFORE judging (Day 5+) even exists, so there's no real judge score
-  // available yet at this point in the event to rank by.
-  // status != 'merged' â€” N-1 (spec Â§4 collaboration): a merged-away idea
-  // (the non-primary side of an accepted collaboration, collaboration
-  // phase above) shouldn't compete for an architecture slot as a separate
-  // idea; the primary idea it merged into already carries both agent_ids
-  // forward via co_agent_id.
+  // "Top 6 ideas" (spec §3.1) — ranked by critique count + distinctness + conduct,
+  // not just raw count. critique_count stays primary (pre-judging signal), but
+  // secondary keys break ties via lower recycle_sim (more novel), fewer strikes,
+  // and earlier created_at — mirrors handleTeamFormation's tie-break (R8) so
+  // the architecture cut and the team-selection cut agree on what "top" means.
   const top = await env.DB.prepare(
     `SELECT i.id, i.agent_id, COUNT(x.id) as critique_count
      FROM archive_ideas i LEFT JOIN archive_interactions x
        ON x.target_id = i.id AND x.type = 'critique'
+     LEFT JOIN archive_agents a ON a.id = i.agent_id
      WHERE i.event_id = ? AND i.status != 'merged' AND i.status != 'blocked'
      GROUP BY i.id
-     ORDER BY critique_count DESC
+     ORDER BY critique_count DESC, COALESCE(i.recycle_sim, 0.5) ASC, COALESCE(a.conduct_strikes,0) ASC, i.created_at ASC
      LIMIT 6`
   ).bind(eventId).all<{ id: string; agent_id: string; critique_count: number }>();
 

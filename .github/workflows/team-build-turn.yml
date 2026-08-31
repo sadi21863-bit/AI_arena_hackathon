@@ -409,6 +409,19 @@ jobs:
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
           fi
+          # Same-SHA guard (3fc1cb03 live: 20 turns same head_sha loop) — if
+          # git HEAD was not advanced beyond START_HEAD and the only changes
+          # are re-edits of the same content, surface it; scheduler's
+          # same-SHA check will also mark the team ineligible.
+          if [ "$NOW_HEAD" = "$START_HEAD" ] && [ -n "$CHANGED" ]; then
+            echo "::warning::Turn produced file changes but no commit — will be committed below, but repeated same-SHA turns indicate a stuck loop."
+          fi
+          # Detect repeated identical commits: if last 3 commits have identical diff stat (same file list), warn.
+          if [ "$NOW_HEAD" != "$START_HEAD" ]; then
+            if [ "$(git diff --name-only $START_HEAD..$NOW_HEAD | wc -l)" -eq 0 ]; then
+              echo "::warning::Commits made but diff is empty vs START_HEAD — possible same-SHA recommits."
+            fi
+          fi
           echo "Files changed this turn (uncommitted):"
           echo "$CHANGED"
           if [ "$NOW_HEAD" != "$START_HEAD" ]; then

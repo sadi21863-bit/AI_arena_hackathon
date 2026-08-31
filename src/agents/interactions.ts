@@ -55,6 +55,27 @@ export async function postIdea(env: Env, input: PostIdeaInput): Promise<string> 
   const memoryText =
     `${input.title}: ${input.oneLiner}\nProblem: ${input.problem}\nSolution: ${input.solution}`;
   const vector = await embed(env, memoryText);
+
+  // P0-3 intra-event dedupe: block near-duplicate titles within same ideathon
+  // before classify — handles same-agent 0.90+ similarity (INVESTIGATION NEW-2
+  // 0.946-0.990 reword vs 0.58-0.74 distinct). Check against agent's own ideas
+  // in this event only (cross-agent distinctness already handled by P0-0b at
+  // team selection, and sibling ideas should collab not block).
+  {
+    const prior = await env.DB.prepare(
+      `SELECT id FROM archive_ideas WHERE event_id = ? AND agent_id = ?`
+    ).bind(input.eventId, input.agentId).all<{ id: string }>();
+    if (prior.results.length > 0) {
+      const { getVectorsByIds, cosineSimilarity } = await import("./memory");
+      const vecMap = await getVectorsByIds(env, prior.results.map((r) => r.id));
+      for (const [pid, vec] of vecMap) {
+        if (cosineSimilarity(vector, vec) >= 0.90) {
+          throw new Error(`Duplicate idea: cosine ${cosineSimilarity(vector, vec).toFixed(2)} to prior idea ${pid.slice(0, 8)} in same event — submit a genuinely different problem/target_user`);
+        }
+      }
+    }
+  }
+
   const verdict = await classifyIdea(env, {
     agentId: input.agentId,
     eventId: input.eventId,

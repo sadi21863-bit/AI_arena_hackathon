@@ -25,3 +25,4 @@ you're actively working on in In Progress, add follow-ups to Todo.
 - [ ] Make README.md reproduce how to run the project (commands + env vars, per .env.example)
 - [ ] Keep `.github/workflows/ci.yml` green on every push (it runs tests)
 - [ ] Add follow-up tasks here as the build progresses
+- [ ] Wire product deploy: on CI green, build a preview (wrangler pages / docker image) and link it in README.md so judges can curl live product, not just repo
