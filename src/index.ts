@@ -313,11 +313,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       // usage query results — a model with zero calls today should still
       // show as "full headroom," not be silently absent from the dashboard.
       const tiers = Object.entries(DAILY_CAPS).map(([key, cap]) => {
+        const used = key === "workers_ai"
+          ? workersAiUsed
+          : usedByGroqModel.get(key.slice("groq:".length)) ?? 0;
         if (key === "workers_ai") {
-          return { provider: "workers_ai", model_id: "(shared across all Workers AI models)", cap, used: workersAiUsed };
+          return { provider: "workers_ai", model_id: "(shared across all Workers AI models)", cap, used, near_cap: used >= cap * 0.8, exhausted: used >= cap };
         }
         const model = key.slice("groq:".length);
-        return { provider: "groq", model_id: model, cap, used: usedByGroqModel.get(model) ?? 0 };
+        return { provider: "groq", model_id: model, cap, used, near_cap: used >= cap * 0.8, exhausted: used >= cap };
       });
 
       // P2-8: cron heartbeat, so a silently-broken scheduled() tick shows up

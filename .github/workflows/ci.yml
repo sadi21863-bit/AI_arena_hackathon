@@ -1,0 +1,45 @@
+name: Main Repo CI
+
+# Product CI for the arena itself (not team repos — those use
+# repo-scaffold/.github/workflows/ci.yml, synced by syncTeamHarness).
+# Runs typecheck + smoke test on every push/PR. Never pushes, so it
+# cannot loop with deploy-pages.yml / deploy-worker.yml.
+# The 120-min team-build-turn.yml and spike-turn.yml are excluded by
+# path filter — touching them still runs this (cheap), but this
+# workflow never dispatches them.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "public/**"
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "public/**"
+      - "**.md"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npx tsc --noEmit -p .
+      - name: Install Chromium for smoke test
+        # tiny_test.js drives a real headless browser via Playwright;
+        # the npm package alone is not enough without the browser binary.
+        run: npx playwright install --with-deps chromium
+      - name: Smoke test
+        run: node scripts/tiny_test.js
