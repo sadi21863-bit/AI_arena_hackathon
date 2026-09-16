@@ -57,7 +57,15 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   // 2026-08-25: judging moved to qwen/qwen3.6-27b to stay distinct from
   // architecture's gpt-oss-120b (still avoids self-preference) and because
   // llama-3.3-70b-versatile is gone on Groq.
-  judging: { groq: "qwen/qwen3.6-27b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
+  // 2026-09-16: qwen3.6-27b itself verified DEAD live (model_not_found on a
+  // real call; absent from GET /models catalog of 13 ids) — today's
+  // provider_usage_log proves it: 21 judging calls fell through to Workers
+  // AI deepseek burning 4768 neurons. Moved to qwen/qwen3.8-27b (present in
+  // catalog, returns valid {"score": N} JSON with reasoning_effort:"none"
+  // verified live). Still a different family from gpt-oss, so the
+  // anti-self-preference design holds. qwen3.8 is current-best, not
+  // permanent — re-check console.groq.com/docs/models before trusting it.
+  judging: { groq: "qwen/qwen3.8-27b", workers_ai: "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" },
   architecture: { groq: "openai/gpt-oss-120b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   // No groq candidate, deliberately: spec §14 Tribunal reflection is
   // "non-time-critical," so it always routes straight to the cheaper
@@ -73,11 +81,14 @@ const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
 // 2026-08-25: groq caps updated for currently-available ids (see TASK_MODELS
 // above). Legacy llama caps retained for history; inactive models simply never
 // hit their cap because TASK_MODELS no longer points at them.
+// 2026-09-16: dead-model caps REMOVED, not retained — DAILY_CAPS drives the
+// public /headroom dashboard, and phantom tiers with full headroom mislead.
+// llama-3.1-8b-instant + llama-3.3-70b-versatile (decommissioned 2026-08-16,
+// model_not_found verified live) and qwen3.6-27b (same fate) are gone;
+// qwen3.8-27b takes the 1000 RPD slot (same 30/1K/8K/200K free tier).
 export const DAILY_CAPS: Record<string, number> = {
-  "groq:llama-3.1-8b-instant": 14400,
-  "groq:llama-3.3-70b-versatile": 1000,
   "groq:groq/compound-mini": 14400,
-  "groq:qwen/qwen3.6-27b": 1000,
+  "groq:qwen/qwen3.8-27b": 1000,
   "groq:openai/gpt-oss-120b": 1000,
   "groq:openai/gpt-oss-20b": 1000,
   // 8500 was an unmeasured conservative guess below spec §6's published
@@ -132,11 +143,12 @@ async function tryGroq(env: Env, model: string, req: InferenceRequest): Promise<
   // budget is proven-working and this is additional headroom, not a
   // replacement for it. Not sent for non-gpt-oss models (llama-3.x) since
   // they don't support it and an unrecognized param risks a hard API error.
-  // 2026-08-25: qwen/qwen3.6-27b is also a reasoning model (qwen3 docs) but
-  // with a different param value — needs "none" to disable hidden reasoning
-  // that otherwise burns the 700-token budget on <think> and never reaches
-  // the visible JSON (verified live: 3223-char think, no JSON, vs 284-char
-  // valid JSON with reasoning_effort:"none").
+// 2026-08-25: qwen/qwen3.6-27b is also a reasoning model (qwen3 docs) but
+// with a different param value — needs "none" to disable hidden reasoning
+// that otherwise burns the 700-token budget on <think> and never reaches
+// the visible JSON (verified live: 3223-char think, no JSON, vs 284-char
+// valid JSON with reasoning_effort:"none"). Applies to qwen3.8-27b too
+// (verified live 2026-09-16: valid {"score": 9} with "none").
   const isReasoningModel = model.includes("gpt-oss");
   const isQwen = model.includes("qwen");
   // Split randomly across 2 Groq accounts when the second is configured —
