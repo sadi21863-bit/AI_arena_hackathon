@@ -13,9 +13,9 @@
 
 /observatory/live.html      /observatory/#/live      301
 /observatory/office.html    /observatory/#/office    301
-/observatory/agents.html    /observatory/#/graph     301
+/observatory/agents.html    /observatory/#/arena    301
 /observatory/headroom.html  /observatory/#/headroom  301
 /observatory/ideas.html     /observatory/#/live      301
-/observatory/replay.html    /observatory/#/live      301
+/observatory/replay.html    /observatory/#/arena     301
 /observatory/diff.html      /observatory/#/live      301
 /observatory/tribunal.html  /observatory/#/live      301

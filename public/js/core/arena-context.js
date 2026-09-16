@@ -9,13 +9,14 @@
  *
  * It replaces the per-view ideathon pickers with one app-level selector
  * (each view's picker re-derived the same list), and its instrument row is
- * the cross-navigation between Live / Replay / Ideas / Graph / Diff /
+ * the cross-navigation between Live / Arena / Ideas / Diff /
  * Tribunal / Office / Archive / Headroom, each scoped link carrying the
- * current arena along.
+ * current arena along (the old standalone Graph/Replay views were removed;
+ * both live as tabs inside Arena).
  *
  * The bar navigates through the router like any link would. On this router
  * every resolve() tears down and remounts the view, so a scoped view
- * (graph, ideas, replay, …) re-reads its event id from the new URL.
+ * (arena, ideas, diff, …) re-reads its event id from the new URL.
  */
 
 import { html, render } from "./html.js";
@@ -100,8 +101,8 @@ export function mountArenaContext(host) {
     if (sel) sel.addEventListener("change", () => {
       const next = toCycles(store.events.get().data || []).find((c) => c.id === sel.value);
       if (!next) return;
-      // Stay in the current instrument when it is arena-scoped (graph →
-      // graph of the new arena); otherwise land on that arena's Live view.
+      // Stay in the current instrument when it is arena-scoped (arena →
+      // arena of the new cycle); otherwise land on that arena's Live view.
       const current = INSTRUMENTS.find((i) => i.id === (activeView() === "cycle" ? "live" : activeView()));
       navigate(current && current.scoped ? current.url(next) : `/cycle/${next.ideathon.id}`);
     });
