@@ -858,13 +858,55 @@ export async function mount(el, params) {
       const perRow = Math.max(1, Math.min(4, group.length, fitPerRow));
       const rowCount = Math.ceil(group.length / perRow);
 
+      // Shift each row as a group to fit inside the walls instead of
+      // clamping members individually: per-member clamp collapses edge-side
+      // members onto the same padding value (Reading Nook x=12: the two
+      // leftmost of 4 both land on padX and render as one clump; same shape
+      // on the right for break x=84-86). fitPerRow guarantees the row fits,
+      // so a pure shift always exists — spacing is preserved, nothing stacks.
+      const rowShift = [];
+      for (let r = 0; r < rowCount; r++) {
+        const inRow = Math.min(perRow, group.length - r * perRow);
+        const raw = [];
+        for (let c = 0; c < inRow; c++) raw.push(zone.x + (c - (inRow - 1) / 2) * colPitch);
+        const lo = Math.min(...raw), hi = Math.max(...raw);
+        if (hi - lo > 100 - 2 * padX) { rowShift.push(null); continue; }
+        let s = 0;
+        if (lo < padX) s = padX - lo;
+        if (hi + s > 100 - padX) s = 100 - padX - hi;
+        rowShift.push(s);
+      }
+      // Same collapse exists vertically for zones near the top/bottom walls.
+      const rawYs = [];
+      for (let r = 0; r < rowCount; r++) rawYs.push(zone.y + r * rowPitch - ((rowCount - 1) * rowPitch) / 2);
+      let yShift = 0;
+      {
+        const lo = Math.min(...rawYs), hi = Math.max(...rawYs);
+        if (hi - lo > 100 - padTop - padBottom) yShift = null;
+        else {
+          if (lo < padTop) yShift = padTop - lo;
+          if (hi + yShift > 100 - padBottom) yShift = 100 - padBottom - hi;
+        }
+      }
+
       group.forEach((a, i) => {
         const node = nodes[a.agent_id];
         if (!node) return;
         const r = Math.floor(i / perRow), c = i % perRow;
         const inRow = Math.min(perRow, group.length - r * perRow);
-        let x = clamp(zone.x + (c - (inRow - 1) / 2) * colPitch, padX, 100 - padX);
-        let y = clamp(zone.y + r * rowPitch - (rowCount - 1) * (rowPitch / 2), padTop, 100 - padBottom);
+        let x, y;
+        if (rowShift[r] === null) {
+          // Defensive only (fitPerRow says this cannot happen): spread across
+          // the room rather than stacking on the padding value.
+          x = inRow === 1 ? 50 : padX + (c / (inRow - 1)) * (100 - 2 * padX);
+        } else {
+          x = zone.x + (c - (inRow - 1) / 2) * colPitch + rowShift[r];
+        }
+        if (yShift === null) {
+          y = rowCount === 1 ? 50 : padTop + (r / (rowCount - 1)) * (100 - padTop - padBottom);
+        } else {
+          y = zone.y + r * rowPitch - ((rowCount - 1) * rowPitch) / 2 + yShift;
+        }
 
         // P6: a genuinely idle agent loiters by the furniture instead of
         // standing in a parade-ground row. A quiet room should read as calm;
