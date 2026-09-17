@@ -128,9 +128,27 @@ export async function mount(el, params) {
 
   function draw() {
     const selected = params.ideaId && ideas.find((i) => i.id === params.ideaId);
+    const ideaById = new Map((ideas || []).map((i) => [i.id, i]));
+    // Harshest judge per idea: the lowest score's rationale explains the gap
+    // better than the average does. Scores are one row per judge sharing one
+    // criterion each, so the minimum is simply the least convinced judge.
+    const worstByIdea = new Map();
+    for (const s of scores || []) {
+      if (s.target_type !== "idea") continue;
+      const cur = worstByIdea.get(s.target_id);
+      if (!cur || s.score < cur.score) worstByIdea.set(s.target_id, s);
+    }
+    const excerpt = (t) => {
+      const s = String(t || "").trim();
+      return s.length > 140 ? s.slice(0, 139) + "…" : s;
+    };
     render(body, html`
       <div class="v-ideas__grid">
-        ${ideas.map((idea) => html`
+        ${ideas.map((idea) => {
+          const worst = worstByIdea.get(idea.id);
+          const recycle = idea.recycle_class && idea.recycle_class !== "fresh" ? idea : null;
+          const recycleSrc = recycle && ideaById.get(idea.recycle_of);
+          return html`
           <a class="arena-card v-ideas__card ${selected && selected.id === idea.id ? "is-selected" : ""}"
              href="${href(`/ideas/${eventId}/${idea.id}`)}">
             <div class="v-ideas__card-title">${idea.title}</div>
@@ -139,9 +157,11 @@ export async function mount(el, params) {
               <span class="arena-pill arena-pill--muted">${idea.status}</span>
               ${idea.ideathon_score != null ? html`<span class="arena-pill arena-pill--score">${score(idea.ideathon_score)}</span>` : ""}
               ${idea.co_agent_id ? html`<span class="arena-pill arena-pill--warn">merged w/ ${store.agentName(idea.co_agent_id)}</span>` : ""}
+              ${recycle ? html`<span class="arena-pill arena-pill--warn" title="Conduct record: classified ${recycle.recycle_class} (similarity ${typeof recycle.recycle_sim === "number" ? recycle.recycle_sim.toFixed(2) : "n/a"} to ${recycleSrc ? `“${recycleSrc.title}”` : "an earlier idea"})">recycle: ${recycle.recycle_class}</span>` : ""}
             </div>
             <div class="v-ideas__one-liner">${idea.one_liner || ""}</div>
-          </a>`)}
+            ${worst && worst.rationale ? html`<div class="v-ideas__why"><b>${worst.judge_name} · ${score(worst.score, 1)}:</b> ${excerpt(worst.rationale)}</div>` : ""}
+          </a>`})}
       </div>
       ${selected ? detail(selected) : ""}`);
 

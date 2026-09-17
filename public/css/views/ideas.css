@@ -21,6 +21,16 @@
 
 .v-ideas__one-liner { margin-top: 10px; color: var(--arena-ink-soft); font-size: 0.9rem; line-height: 1.55; }
 
+/* One-line harshest-judge excerpt on the card — the full per-criterion
+   table lives in the detail view; this is what makes quality legible
+   without opening every idea. */
+.v-ideas__why {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed var(--arena-line);
+  color: var(--arena-ink-faint); font-size: 0.8rem; line-height: 1.5;
+}
+.v-ideas__why b { color: var(--arena-ink-soft); font-weight: 600; }
+
 .v-ideas__detail { padding: 26px 28px; margin-top: 20px; position: relative; }
 .v-ideas__detail-title { font-family: var(--arena-font-display); font-size: 1.5rem; color: var(--arena-ink); margin-bottom: 6px; padding-right: 90px; }
 .v-ideas__close {
