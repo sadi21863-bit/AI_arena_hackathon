@@ -12,7 +12,7 @@
  */
 
 import { fetchJson } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, wireReload } from "../core/html.js";
 import { utcDate, relativeTime } from "../core/fmt.js";
 
 const POLL_MS = 120_000;
@@ -204,7 +204,8 @@ export async function mount(el) {
     const arenas = await fetchJson("/events/summary", { ttl: 60_000, optional: true });
     if (disposed) return;
     if (!arenas || !arenas.length) {
-      render(body, html`<div class="arena-state arena-state--error">Couldn't load the archive.</div>`);
+      render(body, html`<div class="arena-state arena-state--error">Couldn't load the archive.<div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div></div>`);
+      wireReload(body);
       return;
     }
 

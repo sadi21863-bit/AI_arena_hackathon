@@ -10,7 +10,7 @@
  */
 
 import { fetchJson, FOREVER } from "../core/api.js";
-import { html, render, raw } from "../core/html.js";
+import { html, render, raw, wireReload } from "../core/html.js";
 import { href, navigate } from "../core/router.js";
 import { loadScript, loadCss } from "../core/assets.js";
 import * as store from "../core/store.js";
@@ -52,7 +52,7 @@ export async function mount(el, params) {
   eventPicker.addEventListener("change", () => navigate(`/diff/${eventPicker.value}`));
 
   if (!eventId) {
-    render(body, html`<div class="arena-state">No hackathon has run yet.</div>`);
+    render(body, html`<div class="arena-state">No hackathon has run yet.<br><small>Follow the current arena on the <a href="${href("/live")}">Live</a> view.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -60,7 +60,7 @@ export async function mount(el, params) {
   if (disposed) return () => {};
 
   if (!teams || !teams.length) {
-    render(body, html`<div class="arena-state">No teams formed for this hackathon yet.</div>`);
+    render(body, html`<div class="arena-state">No teams formed for this hackathon yet.<br><small>Teams form on day 0 of the hackathon — follow it on the <a href="${href("/live")}">Live</a> view.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -72,7 +72,7 @@ export async function mount(el, params) {
   teamPicker.addEventListener("change", () => navigate(`/diff/${eventId}/${teamPicker.value}`));
 
   if (!team.repo_url) {
-    render(body, html`<div class="arena-state">This team has no repository yet.</div>`);
+    render(body, html`<div class="arena-state">This team has no repository yet.<br><small>The repo is created during team formation — follow it on the <a href="${href("/live")}">Live</a> view.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -135,7 +135,8 @@ export async function mount(el, params) {
   if (disposed) return () => {};
 
   if (!text || !window.Diff2Html) {
-    render(body, html`<div class="arena-state arena-state--error">Couldn't render this diff.</div>`);
+    render(body, html`<div class="arena-state arena-state--error">Couldn't render this diff.<div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div></div>`);
+    wireReload(body);
     return () => { disposed = true; };
   }
 

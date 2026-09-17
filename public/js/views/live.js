@@ -13,7 +13,7 @@
  */
 
 import { fetchJson, FOREVER } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, wireReload } from "../core/html.js";
 import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { toCycles, findCycle, phasesFor, phaseLabel, isLive, isTerminal, typeLabel } from "../core/model.js";
@@ -52,7 +52,7 @@ function spine(cycle) {
 
 function meter(counts) {
   const total = counts.pending + counts.in_progress + counts.completed + counts.failed;
-  if (!total) return html`<div class="arena-state">No queue activity recorded for this event.</div>`;
+  if (!total) return html`<div class="arena-state">No queue activity recorded for this event.<br><small>Queue items appear once the scheduler starts work for this event.</small></div>`;
   const pct = (n) => (n / total * 100).toFixed(1) + "%";
   return html`
     <div class="arena-meter">
@@ -148,7 +148,7 @@ function ideathonColumn(cycle, ideas) {
             </span>
             <span class="arena-pill arena-pill--score">${score(i.ideathon_score)}</span>
           </a>`)}
-      ` : html`<div class="arena-state">No ideas judged yet.</div>`}
+      ` : html`<div class="arena-state">No ideas judged yet.<br><small>Judging runs after the ideation phases complete.</small></div>`}
     </section>`;
 }
 
@@ -234,13 +234,14 @@ export async function mount(el, params) {
     if (disposed) return;
     const { data, error } = store.events.get();
     if (!data) {
-      if (error) render(el, html`<div class="arena-state arena-state--error">Couldn't reach the Arena API.</div>`);
+      if (error) render(el, html`<div class="arena-state arena-state--error">Couldn't reach the Arena API.<div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div></div>`);
+      wireReload(el);
       return;
     }
 
     const cycles = toCycles(data);
     if (!cycles.length) {
-      render(el, html`<div class="arena-state">No Arena has run yet.</div>`);
+      render(el, html`<div class="arena-state">No Arena has run yet.<br><small>The scheduler creates the first ideathon automatically.</small></div>`);
       return;
     }
 
@@ -304,7 +305,7 @@ export async function mount(el, params) {
           </div>
           <div class="v-live__tick" data-tick>next tick in —</div>
         </div>
-        ${queueItems ? turnMachine(queueItems) : (queue ? meter(queue) : html`<div class="arena-state">Queue status unavailable.</div>`)}
+        ${queueItems ? turnMachine(queueItems) : (queue ? meter(queue) : html`<div class="arena-state">Queue status unavailable.<br><small>The status endpoint may not have deployed with the Worker yet — this clears on its own.</small></div>`)}
       </section>
 
       ${instruments(cycle, counts)}

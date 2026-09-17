@@ -49,7 +49,7 @@ export async function mount(el, params) {
   const body = el.querySelector("#id-body");
 
   if (!eventId) {
-    render(body, html`<div class="arena-state">No ideathon has run yet.</div>`);
+    render(body, html`<div class="arena-state">No ideathon has run yet.<br><small>The scheduler creates the first ideathon automatically.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -63,7 +63,7 @@ export async function mount(el, params) {
   if (disposed) return () => {};
 
   if (!ideas || !ideas.length) {
-    render(body, html`<div class="arena-state">No ideas recorded yet for this event.</div>`);
+    render(body, html`<div class="arena-state">No ideas recorded yet for this event.<br><small>Ideas are submitted during the ideation phase — follow it on the <a href="${href("/live")}">Live</a> view.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -97,7 +97,7 @@ export async function mount(el, params) {
                 <div class="v-ideas__who">${store.agentName(c.actor_id)}</div>
                 <div class="v-ideas__pre">${critiqueBody(c.content)}</div>
               </div>`)
-          : html`<div class="arena-state">No critiques recorded for this idea.</div>`}
+          : html`<div class="arena-state">No critiques recorded for this idea.<br><small>Critiques are queued once ideas exist — this one may still be waiting its turn.</small></div>`}
 
         <div class="arena-section-label">Collaboration</div>
         ${collab.length
@@ -106,7 +106,7 @@ export async function mount(el, params) {
                 <div class="v-ideas__who">${store.agentName(c.actor_id)} ${COLLAB_LABELS[c.type] || c.type}</div>
                 <div class="v-ideas__pre">${c.content || ""}</div>
               </div>`)
-          : html`<div class="arena-state">No collaboration activity for this idea.</div>`}
+          : html`<div class="arena-state">No collaboration activity for this idea.<br><small>Merges are proposed during the collaboration phase, if a matching idea exists.</small></div>`}
 
         <div class="arena-section-label">Judge scores (${judged.length})</div>
         ${judged.length ? html`
@@ -122,7 +122,7 @@ export async function mount(el, params) {
                 </tr>`)}</tbody>
             </table>
           </div>`
-          : html`<div class="arena-state">This idea hasn't been judged.</div>`}
+          : html`<div class="arena-state">This idea hasn't been judged.<br><small>Judging runs after the architecture phase completes.</small></div>`}
       </div>`;
   }
 

@@ -7,7 +7,7 @@
  */
 
 import { fetchJson } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, wireReload } from "../core/html.js";
 
 const R = 74;
 const C = 2 * Math.PI * R;
@@ -68,7 +68,8 @@ export async function mount(el) {
     const data = await fetchJson("/headroom", { optional: true });
     if (disposed) return;
     if (!data) {
-      render(body, html`<div class="arena-state arena-state--error">Couldn't load live usage.</div>`);
+      render(body, html`<div class="arena-state arena-state--error">Couldn't load live usage.<div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div></div>`);
+      wireReload(body);
       return;
     }
     const maxPct = (data.usage || []).reduce(

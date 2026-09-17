@@ -26,7 +26,7 @@
  */
 
 import { fetchJson, FOREVER } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, wireReload } from "../core/html.js";
 import { loadScript } from "../core/assets.js";
 import { mountArenaStrip } from "../core/arena-strip.js";
 import { parseUtc } from "../core/fmt.js";
@@ -158,7 +158,7 @@ export async function mount(el, params) {
   const all = store.events.get().data || (await store.refreshEvents()).data || [];
   const ideathons = all.filter((e) => e.type === "ideathon");
   if (!ideathons.length) {
-    render(el, html`<div class="arena-state">No arena has run yet.</div>`);
+    render(el, html`<div class="arena-state">No arena has run yet.<br><small>The scheduler creates the first ideathon automatically.</small></div>`);
     return () => {};
   }
 
@@ -229,7 +229,8 @@ export async function mount(el, params) {
   if (missing.length) {
     const layoutEl = el.querySelector(".v-arena__layout");
     render(layoutEl, html`
-      <div class="arena-state arena-state--error">Couldn't load ${missing.join(" and ")}. Reload to retry.</div>`);
+      <div class="arena-state arena-state--error">Couldn't load ${missing.join(" and ")}.<div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div></div>`);
+    wireReload(layoutEl);
     return teardown;
   }
 
@@ -238,7 +239,7 @@ export async function mount(el, params) {
   const edges = graphData.edges || [];
   if (!agentIds.length || !moments.length) {
     render(el.querySelector(".v-arena__layout"), html`
-      <div class="arena-state">No interactions recorded for this event yet.</div>`);
+      <div class="arena-state">No interactions recorded for this event yet.<br><small>Ideas and critiques appear once the ideathon reaches its ideation phase.</small></div>`);
     return teardown;
   }
 

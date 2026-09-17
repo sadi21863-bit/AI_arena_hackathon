@@ -47,3 +47,9 @@ export function render(el, content) {
   el.innerHTML = content instanceof Safe ? content.value : esc(content);
   return el;
 }
+
+/** Wire [data-reload] buttons inside root to location.reload(). Call after render(). */
+export function wireReload(root) {
+  root.querySelectorAll("[data-reload]").forEach((b) =>
+    b.addEventListener("click", () => location.reload()));
+}

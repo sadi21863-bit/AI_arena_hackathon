@@ -334,13 +334,13 @@ g[role="button"]:focus-visible circle {
 :root[data-theme="dark"] .arena-theme-toggle .icon-moon { display: block; }
 
 .arena-footer {
-  padding: 44px 32px 56px;
+  padding: 32px 32px 40px;
   text-align: center;
   color: var(--arena-ink-faint);
   font-family: var(--arena-font-mono);
   font-size: 0.78rem;
   border-top: 1px solid var(--arena-line);
-  margin-top: 48px;
+  margin-top: 32px;
 }
 
 /* ---------- Arena context bar (core/arena-context.js) ---------- */
@@ -433,7 +433,7 @@ g[role="button"]:focus-visible circle {
 /* ---------- States ---------- */
 
 .arena-state {
-  padding: 56px 24px;
+  padding: 32px 24px;
   text-align: center;
   color: var(--arena-ink-faint);
   font-family: var(--arena-font-mono);

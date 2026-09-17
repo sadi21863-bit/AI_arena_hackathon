@@ -18,7 +18,7 @@
  */
 
 import { fetchJson } from "../core/api.js";
-import { html, render } from "../core/html.js";
+import { html, render, wireReload } from "../core/html.js";
 import { href, navigate } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isLive, typeLabel, phaseLabel } from "../core/model.js";
@@ -1225,7 +1225,7 @@ export async function mount(el, params) {
   }
 
   if (!event) {
-    render(stage, html`<div class="arena-state">No events yet — nothing has run.</div>`);
+    render(stage, html`<div class="arena-state">No events yet — nothing has run.<br><small>The scheduler creates the first ideathon automatically.</small></div>`);
     return () => { disposed = true; };
   }
 
@@ -1338,7 +1338,9 @@ export async function mount(el, params) {
     render(stage, html`<div class="arena-state arena-state--error">
       Per-agent activity isn't available from the API yet.<br>
       <small>GET /events/:id/agent-activity returned no data — the Worker may not have been deployed.</small>
+      <div class="arena-state__action"><button class="arena-btn arena-btn--sm arena-btn--ghost" data-reload>Reload</button></div>
     </div>`);
+    wireReload(stage);
     return () => { disposed = true; };
   }
 

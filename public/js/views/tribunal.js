@@ -62,7 +62,7 @@ export async function mount(el, params) {
   if (picker) picker.addEventListener("change", () => navigate(`/tribunal/${picker.value}`));
 
   if (!eventId) {
-    render(body, html`<div class="arena-state">No hackathon has run yet.</div>`);
+    render(body, html`<div class="arena-state">No hackathon has run yet.<br><small>Follow the current arena on the <a href="${href("/live")}">Live</a> view.</small></div>`);
     return () => { disposed = true; };
   }
 
