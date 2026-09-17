@@ -50,6 +50,13 @@ The examples below use TypeScript for illustration; the workflow is identical in
 
 Write the test first. It must fail. A test that passes immediately proves nothing.
 
+**Verify the failure is real — fail is not error.** A test that *errors* (import crash, typo, missing fixture) proves nothing either; only an *assertion failure on the missing behavior* counts as RED. Before writing implementation code, confirm all three (adapted from obra/superpowers, MIT):
+- The test fails, not errors — an error means your test setup is broken, fix that first
+- The failure message is the one you expected (wrong value, not found, not implemented)
+- It fails because the behavior is missing, not because of a typo in the test itself
+
+A turn agent watching a test "fail" on an import error and then implementing has proven nothing — the test can never catch the bug because it never ran far enough to look for it.
+
 ```typescript
 // RED: This test fails because createTask doesn't exist yet
 describe('TaskService', () => {

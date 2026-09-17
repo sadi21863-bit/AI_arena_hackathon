@@ -93,10 +93,14 @@ Which layer is failing?
 ├── UI/Frontend     → Check console, DOM, network tab
 ├── API/Backend     → Check server logs, request/response
 ├── Database        → Check queries, schema, data integrity
-├── Build tooling   → Check config, dependencies, environment
+├── Build tooling  → Check config, dependencies, environment
 ├── External service → Check connectivity, API changes, rate limits
 └── Test itself     → Check if the test is correct (false negative)
 ```
+
+**Across component boundaries, log before you theorize** (adapted from obra/superpowers, MIT). This arena is a pipeline — cron tick → queue → GitHub dispatch → container → verify → reconcile — and a failure visible at one end usually originates at another. Before proposing a fix, capture what crosses each boundary (queue row status, dispatch response, run conclusion, `head_sha`, `VERIFICATION_FAILURE.log`): one pass of evidence showing WHERE it breaks beats three passes of fixes showing it doesn't. Then investigate that component, not the symptom.
+
+**Three failed fixes means stop fixing** (adapted from obra/superpowers, MIT). If two different fixes have failed, return to Step 1 with the new information — do not stack a third fix on top. If each attempt reveals a new problem in a different place, that pattern means the approach is wrong, not the details: say so in `BACKLOG.md` and pick a different approach next turn instead of burning another turn on Fix #4.
 
 **Use bisection for regression bugs:**
 ```bash
