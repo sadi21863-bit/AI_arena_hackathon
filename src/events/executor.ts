@@ -415,7 +415,18 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
   // v3.1) ideas never advance: recorded but never judged or built.
   if (idea.status === "architecture_complete" || idea.status === "judged" || idea.status === "blocked") return;
 
+  // Task-specific recall (not the lens-generic query ideation uses): ground
+  // the build plan in the author's own research on this exact problem. The
+  // idea's own fields above carry the substance; this only recovers the
+  // research context behind them. Bounded to 2 rows — same budget shape as
+  // the critique handler's prior-views recall.
+  const grounding = await recallMemory(env, idea.agent_id as string, `${idea.title} — ${idea.problem}`, 2);
+  const groundingText = grounding.length
+    ? `Your own earlier research relevant to this idea:\n${grounding.map((m) => `- ${m.text.slice(0, 240)}`).join("\n")}\n\n`
+    : "";
+
   const text = await callAgent(env, agent, "architecture",
+    `${groundingText}` +
     `Produce a build plan for this idea (spec §3.1 — Day 4-5 Architecture: tech stack, 3 components, top 2 risks, fallback scope), under 200 words:\n` +
     `Title: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\nBuild scope so far: ${idea.build_scope}`
   );
