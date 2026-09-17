@@ -55,6 +55,26 @@ function roundLabel(cycle) {
 }
 
 /**
+ * Instrument ids with nothing to show for this arena's current phase,
+ * mapped to the one-line reason shown as their title. Links stay clickable
+ * (deep links and mid-transition states must keep working) — they only lose
+ * visual weight via .is-dim. Driven by event.status, which already drives
+ * the office's own zone selection, so no new state is introduced.
+ */
+function dimmedIds(arena) {
+  const dim = new Map();
+  if (!arena || !arena.hackathon) {
+    dim.set("diff", "Available once the hackathon starts");
+    dim.set("tribunal", "Runs after hackathon judging completes");
+    return dim;
+  }
+  if (!["ready_for_judging", "judged", "tribunal", "complete"].includes(arena.hackathon.status)) {
+    dim.set("tribunal", "Runs after hackathon judging completes");
+  }
+  return dim;
+}
+
+/**
  * Mount the bar into `host`. Returns a teardown. The bar re-draws on every
  * hashchange (the router resolves the same events) and whenever store.events
  * changes (a fresh poll can add an arena or flip a phase).
@@ -68,6 +88,7 @@ export function mountArenaContext(host) {
     // /cycle/:cycleId is the live view — match it to the Live instrument.
     const view = activeView();
     const activeInstrument = view === "cycle" ? "live" : view;
+    const dim = dimmedIds(arena);
 
     render(host, html`
       <div class="arena-context__row">
@@ -85,7 +106,7 @@ export function mountArenaContext(host) {
             <select id="arena-context-select" class="arena-select">
               ${cycles.map((c) => html`
                 <option value="${c.ideathon.id}" ${arena && c.id === arena.id ? "selected" : ""}>
-                  Arena ${c.ordinal} · ${phaseLabel(c.activeEvent || c.ideathon)}
+                  Arena ${c.ordinal}
                 </option>`)}
             </select>
           </label>` : ""}
@@ -94,6 +115,7 @@ export function mountArenaContext(host) {
         ${INSTRUMENTS.filter((i) => arena || !i.scoped).map((i) => html`
           <a href="${href(i.url(arena))}"
              ${i.id === "live" ? html`data-nav="live"` : ""}
+             ${dim.has(i.id) ? html`class="is-dim" title="${dim.get(i.id)}"` : ""}
              ${activeInstrument === i.id ? html`aria-current="page"` : ""}>${i.label}</a>`)}
       </nav>`);
 

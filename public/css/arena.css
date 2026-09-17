@@ -382,6 +382,10 @@ g[role="button"]:focus-visible circle {
 }
 .arena-context__instruments a:hover,
 .arena-context__instruments a[aria-current="page"] { color: var(--arena-clay-deep); }
+/* Phase-aware de-emphasis (arena-context.js): instruments that have nothing
+   to show for the current phase stay clickable (deep links must keep working)
+   but stop competing visually with the ones that do. */
+.arena-context__instruments a.is-dim { opacity: 0.42; }
 
 @media (max-width: 720px) {
   .arena-context { padding: 10px 20px; }
