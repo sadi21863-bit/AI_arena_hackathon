@@ -39,6 +39,11 @@ on:
         description: "What this turn's agent should work on"
         required: true
         type: string
+      model:
+        description: "OpenCode model id for this turn (Zen free ids churn — config, not workflow edit)"
+        required: false
+        default: "opencode/nemotron-3-ultra-free"
+        type: string
   repository_dispatch:
     types: [team-build-turn]
 
@@ -58,15 +63,15 @@ jobs:
     runs-on: ubuntu-latest # 4 CPU / 16GB RAM / 14GB SSD on public repos, confirmed July 2026
     timeout-minutes: 120 # well under the 6-hour hard cap; a single turn should never need this long
     env:
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      # Workers AI, not Groq, runs the agent-work step below: OpenCode's own
-      # baseline request (system prompt + tool schemas) measures ~32-38K
-      # tokens, which exceeds every Groq free-tier model's TPM cap (max 12K,
-      # spec §5) on the very first call. Workers AI's 10K Neurons/day is a
-      # daily budget, not a per-minute token throttle, so it doesn't hit the
-      # same wall. GROQ_API_KEY above stays wired for whatever still uses it
-      # directly (§6 router, once Week 1 lands) — it's just not what
-      # opencode calls in this step anymore.
+      # Builds run on OpenCode Zen free tier (see Phase A --model flag), NOT
+      # on Groq or Workers AI: OpenCode's ~32-38K-token baseline request
+      # exceeds Groq free TPM caps on the first call, and the old Workers AI
+      # path is superseded (shim below pending removal — see its own note).
+      # No GROQ_API_KEY here: nothing in this job consumes it (verified
+      # 2026-09-17 — the old comment claiming otherwise was stale).
+      # CF_ACCOUNT_ID/CF_API_TOKEN stay: the shim holds them so the --auto
+      # container never receives the credential the egress filtering exists
+      # to protect. They go when the shim goes.
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
       CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
     steps:
@@ -147,6 +152,13 @@ jobs:
           sudo iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
 
       - name: Start Workers AI compatibility shim (P0-0a)
+        # REMOVAL PENDING one live-turn confirmation (2026-09-17): Phase A now
+        # runs --model opencode/* via auth.json's `opencode` provider, which
+        # bypasses this shim's workers-ai path entirely (turn14's 40 tool
+        # calls show zero shim traffic), but turn logs don't record the
+        # serving provider so a negative can't be proven statically. Do NOT
+        # remove until a real turn's $RUNNER_TEMP/shim.log shows zero
+        # requests — the health check below still hard-gates the job.
         # Fixes the crash that killed every build turn mid-run:
         # `AI_InvalidResponseDataError: Expected 'id' to be a string.`
         #
@@ -306,7 +318,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$OPENCODE_API_KEY" "$OPENCODE_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model opencode/nemotron-3-ultra-free --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$OPENCODE_API_KEY" "$OPENCODE_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
