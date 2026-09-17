@@ -6,8 +6,9 @@
  * real entries with (word-for-word copy of the scoring prompt in
  * src/judges/scoring.ts, anti-verbosity clause included) and the SAME
  * provider/model the arena actually pins for judging
- * (groq / llama-3.3-70b-versatile — see archive_events.judging_provider /
- * judging_model on the live DB).
+ * (groq / qwen/qwen3.8-27b — see archive_events.judging_provider /
+ * judging_model on the live DB; qwen3.8 replaced qwen3.6 on 2026-09-16
+ * after Groq decommissioned it, verified live with reasoning_effort none).
  *
  * Inspired by RANDCorporation/judge-reliability-harness: perturbation
  * (padding), label-flip (known weak vs known strong), and stability
@@ -38,9 +39,13 @@
 const fs = require("fs");
 const path = require("path");
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "qwen/qwen3.8-27b";
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const MAX_TOKENS = 700; // matches scoring.ts
+// qwen3 models are reasoning models: without this the 700-token budget burns
+// on hidden <think> and never reaches the visible JSON (same fix as the
+// router's isQwen branch — keep the two in sync).
+const REASONING_EFFORT = "none";
 const MIN_GAP_MS = 2500; // ~24 req/min, under Groq's 30 RPM; token budget below handles TPM
 const MINUTE_BUDGET_TOKENS = 8000; // safe margin under ~12K TPM published cap
 const MAX_RETRIES = 3;
@@ -180,6 +185,7 @@ async function callJudge(prompt) {
           model: MODEL,
           messages: [{ role: "user", content: prompt }],
           max_completion_tokens: MAX_TOKENS,
+          reasoning_effort: REASONING_EFFORT,
         }),
       });
       const remaining = res.headers.get("x-ratelimit-remaining-requests");
