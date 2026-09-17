@@ -27,6 +27,7 @@ node scripts/apply_schema.js --remote --status
 | 13 | `schema_week8_stall_tracking.sql` | #2, #3 |
 | 14 | `schema_week9_conduct.sql` | #2 (ALTERs `archive_ideas` + `archive_agents`) |
 | 15 | `schema_week10_queue_journal.sql` | #3 (references `event_queue.id` by value; creates `queue_journal`) |
+| 16 | `schema_week10_capacity_pause.sql` | #2 (ALTERs `archive_events`: `paused_from`/`paused_at`/`pause_reason`) |
 
 `seed_agents.sql` is **not** in the list. It is data, not schema — re-running it
 against a live archive would be a data change rather than a no-op. Apply it by

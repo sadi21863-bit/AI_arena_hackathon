@@ -273,7 +273,9 @@ const SETS = {
  * mid-judging into a hackathon set.
  */
 function setForEvent(event, hasRoster) {
-  const status = String(event.status || "");
+  // A paused event keeps its paused-from room so the furniture doesn't jump
+  // on pause and back on resume — the pause is a budget wait, not a phase.
+  const status = String(event.status === "paused_capacity" && event.paused_from ? event.paused_from : event.status || "");
   if (event.type === "hackathon") {
     if (status === "tribunal") return SETS.tribunal;
     if (status === "complete") return SETS.records;

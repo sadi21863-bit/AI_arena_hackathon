@@ -37,6 +37,7 @@ import { pairwiseSimilarities } from "../agents/memory";
 import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
 import { finalizeWithPartialScores } from "../judges/scoring";
+import { DAILY_CAPS, TASK_MODELS, unitsUsedToday } from "../router";
 
 /**
  * Ceiling on build turns per team per day. Turns are gated on the previous
@@ -91,8 +92,8 @@ async function failedAttemptCounts(env: Env, eventId: string, taskType: string, 
   return payloadFieldCounts(rows.results, field);
 }
 
-export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged";
-export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete";
+export type Phase = "deep_research" | "ideation_critique" | "collaboration" | "architecture" | "ready_for_judging" | "judged" | "paused_capacity";
+export type HackathonPhase = "team_formation" | "building" | "ready_for_judging" | "judged" | "tribunal" | "complete" | "paused_capacity";
 
 // N-1 (spec Â§4 collaboration, ARENA_BACKLOG.md): inserting a real day-bounded
 // `collaboration` phase between ideation_critique and architecture extends
@@ -101,6 +102,14 @@ export type HackathonPhase = "team_formation" | "building" | "ready_for_judging"
 // a real, visible change to the event's actual timeline, not just an
 // internal refactor. Flagged here since it's easy to miss reading the code
 // alone.
+// Schedule decision (2a, IMPROVEMENT_PLAN — deliberately NO change): the
+// day boundaries below were suspected of being rationing artifacts from when
+// every phase shared one inference pool. They are not worth moving: budget
+// pools are per-UTC-day while phases are multi-day, so serialization was
+// never the binding constraint, and the cadence is narrative pacing per
+// spec §3 (6-day ideathon + 3-day hackathon). If this ever changes,
+// phaseForDay, hackathonPhaseForDay, and DAY_GATED_PHASE_STARTS_AT_DAY must
+// move together — they encode the same schedule twice.
 export function phaseForDay(daysElapsed: number): Exclude<Phase, "judged"> {
   if (daysElapsed < 2) return "deep_research";
   if (daysElapsed < 3) return "ideation_critique";
@@ -122,6 +131,8 @@ export interface EventRow {
   end_date: string | null;
   status: string;
   parent_event_id?: string | null;
+  paused_from?: string | null;
+  pause_reason?: string | null;
 }
 
 function daysElapsed(startDate: string): number {
@@ -150,8 +161,159 @@ async function chronicleTransition(env: Env, eventId: string, endedPhase: string
   await enqueue(env, { eventId, taskType: "chronicle", payload: { phase: endedPhase }, priority: 8 });
 }
 
+/**
+ * Capacity pause (2a, IMPROVEMENT_PLAN) — predictive, per phase, not per call.
+ *
+ * The event_a0cbe12f shape: ideathon judging needs 252 Groq calls against a
+ * 1000 RPD pool already drained by ideation, every call fails with
+ * "Inference exhausted", retries burn all 6 MAX_ITEM_ATTEMPTS, and the event
+ * finalizes as judged-with-0-scores. Per-call fallthrough can't see this
+ * coming; a per-phase pre-check can. When NEITHER tier covers the phase's
+ * remaining work, the event parks in paused_capacity (attempts preserved)
+ * instead of failing its way forward, and resumes after the 00:00 UTC reset
+ * when usage counters roll over.
+ *
+ * Measured costs behind the numbers (not guesses): judging prompts run
+ * ~870 tokens/call (week0 probes); the Workers fallback burned 227
+ * neurons/call measured live 2026-09-17 (4768 over the 21-call calibration
+ * batch), so WORKERS_NEURONS_PER_CALL=250 is that measurement rounded up
+ * with margin. Groq caps are request-counted (router records 1/call).
+ * Only the two historically bursty phases are gated (36-submit ideation,
+ * 7-judges-per-target judging) — research/collaboration/architecture are
+ * inference-trivial and stay ungated rather than adding pause churn.
+ *
+ * Pin-aware: a Groq-pinned event must clear the Groq bar (fallthrough is
+ * disabled by design); a Workers-pinned event must clear the Workers bar;
+ * unpinned work passes if EITHER tier covers it, matching router cascade.
+ * Returns "ok" or the pause reason for the DB + UI.
+ */
+const WORKERS_NEURONS_PER_CALL = 250;
+
+async function capacityCheck(
+  env: Env, eventId: string, kind: "ideation" | "judging", target?: "idea" | "team"
+): Promise<"ok" | string> {
+  let groqModel: string | undefined;
+  let groqCalls = 0;
+  let workersNeurons = 0;
+  // Pinned work never falls through (router.ts), so a Groq-pinned event must
+  // clear the Groq bar even when Workers AI is flush, and vice versa.
+  // Ideation is never pinned — either tier covering it is enough.
+  let pinnedGroq = false;
+  let pinnedWorkers = false;
+
+  if (kind === "ideation") {
+    // Top-up shape (queueIdeationAndCritique): 3 submits per agent. Counted
+    // from ideas on the table — approximate by design, errs either way by a
+    // few calls against a 1000 RPD pool, which is noise at this scale.
+    const ideas = await env.DB.prepare(`SELECT COUNT(*) as n FROM archive_ideas WHERE event_id = ?`)
+      .bind(eventId).first<{ n: number }>();
+    const remaining = Math.max(0, 36 - (ideas?.n ?? 0));
+    if (remaining === 0) return "ok";
+    groqModel = TASK_MODELS.design.groq;
+    groqCalls = remaining;
+    workersNeurons = remaining * WORKERS_NEURONS_PER_CALL;
+  } else {
+    const pin = await env.DB.prepare(`SELECT judging_provider, judging_model FROM archive_events WHERE id = ?`)
+      .bind(eventId).first<{ judging_provider: string | null; judging_model: string | null }>();
+    let targets: number;
+    if (target === "team") {
+      const row = await env.DB.prepare(`SELECT COUNT(*) as n FROM hackathon_teams WHERE event_id = ? AND status != 'judged'`)
+        .bind(eventId).first<{ n: number }>();
+      targets = row?.n ?? 0;
+    } else {
+      // Same scope branches as ensureIdeathonJudging below: Groq-pinned
+      // scores every eligible idea, Workers-pinned only finalists.
+      const scopeAll = pin?.judging_provider === "groq";
+      const row = await env.DB.prepare(
+        scopeAll
+          ? `SELECT COUNT(*) as n FROM archive_ideas WHERE event_id = ? AND status != 'merged' AND status != 'judged' AND status != 'blocked'`
+          : `SELECT COUNT(*) as n FROM archive_ideas WHERE event_id = ? AND status = 'architecture_complete'`
+      ).bind(eventId).first<{ n: number }>();
+      targets = row?.n ?? 0;
+      if (!pin?.judging_provider) {
+        // Calibration runs inline before any judging: 7 judges x 3 anchors.
+        const cal = await env.DB.prepare(`SELECT 1 FROM calibration_runs WHERE event_id = ?`)
+          .bind(eventId).first();
+        if (!cal) targets += 3; // ×7 judges below
+      }
+    }
+    if (targets === 0) return "ok";
+    const calls = targets * 7;
+    pinnedGroq = pin?.judging_provider === "groq";
+    pinnedWorkers = pin?.judging_provider === "workers_ai";
+    if (!pinnedWorkers) {
+      groqModel = (pinnedGroq ? pin?.judging_model : TASK_MODELS.judging.groq) ?? undefined;
+      groqCalls = calls;
+    }
+    if (!pinnedGroq) {
+      workersNeurons = calls * WORKERS_NEURONS_PER_CALL;
+    }
+  }
+
+  // Groq bar (skipped when pinned-workers: nothing will try Groq).
+  let groqCovers = groqCalls === 0;
+  if (!groqCovers && groqModel) {
+    const cap = DAILY_CAPS[`groq:${groqModel}`];
+    // Unknown cap (model rotated without a caps update) counts as uncovered
+    // for this tier rather than assumed — the other tier still gets its say.
+    if (cap !== undefined) {
+      groqCovers = (await unitsUsedToday(env, "groq", groqModel)) + groqCalls <= cap;
+    }
+  }
+  if (pinnedGroq) return groqCovers ? "ok" : pauseReason();
+  // Workers bar (skipped when pinned-groq: fallthrough is disabled).
+  const wCap = DAILY_CAPS["workers_ai"];
+  const workersCovers = workersNeurons === 0 ||
+    (await unitsUsedToday(env, "workers_ai")) + workersNeurons <= wCap;
+  if (pinnedWorkers) return workersCovers ? "ok" : pauseReason();
+  if (groqCovers || workersCovers) return "ok";
+  return pauseReason();
+
+  function pauseReason(): string {
+    return `${kind} needs ~${groqCalls} Groq calls${groqModel ? ` on ${groqModel}` : ""} + ~${workersNeurons} Workers AI neurons; pools too low — resuming after 00:00 UTC reset`;
+  }
+}
+
+async function pauseForCapacity(env: Env, eventId: string, fromStatus: string, reason: string): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE archive_events SET paused_from = ?, status = 'paused_capacity', paused_at = datetime('now'), pause_reason = ? WHERE id = ?`
+  ).bind(fromStatus, reason, eventId).run();
+}
+
+/**
+ * Resume check for a paused event. Restores paused_from and lets the normal
+ * flow re-gate for the CURRENT phase (the calendar may have moved on while
+ * paused) — returns null when still short, leaving the pause untouched.
+ */
+async function maybeResumeCapacityPause(env: Env, event: EventRow): Promise<string | null> {
+  const row = await env.DB.prepare(`SELECT paused_from FROM archive_events WHERE id = ?`)
+    .bind(event.id).first<{ paused_from: string | null }>();
+  const from = row?.paused_from;
+  if (!from || (from !== "ideation_critique" && from !== "ready_for_judging")) {
+    // Unknown pause origin — fail open to pre-pause behavior rather than
+    // wedging the event on a status no gate understands.
+    await env.DB.prepare(`UPDATE archive_events SET status = COALESCE(paused_from, status), paused_from = NULL, paused_at = NULL, pause_reason = NULL WHERE id = ? AND status = 'paused_capacity'`).bind(event.id).run();
+    return from ?? event.status;
+  }
+  const kind = from === "ideation_critique" ? "ideation" : "judging";
+  const target = event.type === "hackathon" ? "team" as const : "idea" as const;
+  if ((await capacityCheck(env, event.id, kind, target)) === "ok") {
+    await env.DB.prepare(`UPDATE archive_events SET status = ?, paused_from = NULL, paused_at = NULL, pause_reason = NULL WHERE id = ?`).bind(from, event.id).run();
+    return from;
+  }
+  return null;
+}
+
 export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<Phase | HackathonPhase> {
   if (event.type === "hackathon") return ensureHackathonWorkQueued(env, event);
+
+  // Capacity pause (2a): resume check first — a paused event either picks up
+  // where it paused (pools recovered at the UTC reset) or stays parked.
+  if (event.status === "paused_capacity") {
+    const restored = await maybeResumeCapacityPause(env, event);
+    if (!restored) return "paused_capacity";
+    event = { ...event, status: restored };
+  }
 
   if (event.status === "judged") return "judged"; // terminal â€” day formula would otherwise re-pin ready_for_judging
 
@@ -160,6 +322,17 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
   if (phase !== event.status) {
     await env.DB.prepare(`UPDATE archive_events SET status = ? WHERE id = ?`).bind(phase, event.id).run();
     await chronicleTransition(env, event.id, event.status);
+  }
+
+  // Predictive gate for the bursty ideation phase (the event_a0cbe12f shape:
+  // 36 submits against a drained pool). Other pre-judging phases are
+  // inference-trivial and stay ungated.
+  if (phase === "ideation_critique") {
+    const verdict = await capacityCheck(env, event.id, "ideation");
+    if (verdict !== "ok") {
+      await pauseForCapacity(env, event.id, phase, verdict);
+      return "paused_capacity";
+    }
   }
 
   if (phase === "ready_for_judging") {
@@ -211,7 +384,14 @@ export async function ensurePhaseWorkQueued(env: Env, event: EventRow): Promise<
  * parallelized in calibration.ts) unlike the open-ended per-idea/per-agent
  * work everything else here queues.
  */
-async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
+async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged" | "paused_capacity"> {
+  // Predictive gate (2a): calibration + judging need ~21 + 7/target Groq
+  // calls — park before spending attempts, not after burning them.
+  const budget = await capacityCheck(env, eventId, "judging", "idea");
+  if (budget !== "ok") {
+    await pauseForCapacity(env, eventId, "ready_for_judging", budget);
+    return "paused_capacity";
+  }
   const calibration = await env.DB.prepare(`SELECT passed FROM calibration_runs WHERE event_id = ?`).bind(eventId).first<{ passed: number }>();
   if (!calibration) {
     await runCalibration(env, eventId);
@@ -337,6 +517,15 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
 }
 
 async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<HackathonPhase> {
+  // Capacity pause (2a): same resume check as the ideathon path — hackathon
+  // judging spends the same Groq pool, so a paused hackathon parks here too.
+  // Building (Zen turns) never pauses: it draws on no shared pool.
+  if (event.status === "paused_capacity") {
+    const restored = await maybeResumeCapacityPause(env, event);
+    if (!restored) return "paused_capacity";
+    event = { ...event, status: restored };
+  }
+
   if (event.status === "judged" || event.status === "tribunal" || event.status === "complete") {
     return ensurePostBuildWork(env, event);
   }
@@ -499,7 +688,13 @@ async function inheritJudgingPin(env: Env, event: EventRow): Promise<void> {
     .bind(parent.judging_provider, parent.judging_model, event.id).run();
 }
 
-async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged"> {
+async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready_for_judging" | "judged" | "paused_capacity"> {
+  // Predictive gate (2a): same shared Groq pool as ideathon judging.
+  const budget = await capacityCheck(env, eventId, "judging", "team");
+  if (budget !== "ok") {
+    await pauseForCapacity(env, eventId, "ready_for_judging", budget);
+    return "paused_capacity";
+  }
   // Eligibility gate: a team whose turns never actually RAN cannot win,
   // however well its idea scored. executed_turns counts turns whose CI run
   // reached a real conclusion ('success' OR 'failure' â€” 'cancelled' runs
@@ -1242,8 +1437,12 @@ export async function checkForStalledEvents(env: Env): Promise<void> {
   const active = await env.DB.prepare(
     `SELECT id, status, created_at, start_date, last_progress_at FROM archive_events
      WHERE abandoned_at IS NULL
+       AND status != 'paused_capacity'
        AND ((type = 'ideathon' AND status != 'judged') OR (type = 'hackathon' AND status != 'complete'))`
   ).all<{ id: string; status: string; created_at: string; start_date: string; last_progress_at: string | null }>();
+  // paused_capacity is excluded above on purpose: a paused event makes no
+  // progress by design while it waits for the UTC reset — abandoning it at
+  // +25h would recreate exactly the incident this pause exists to prevent.
 
   // Production incident (2026-08-02): a healthy ideathon whose deep_research
   // finished 26 minutes after start (all 12 agents done 08-01 14:21) was

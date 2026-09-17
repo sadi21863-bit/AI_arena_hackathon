@@ -55,11 +55,13 @@ export function renderStrip(el, event) {
   render(el, html`
     <div class="arena-strip">
       <span class="arena-pill ${terminal ? "arena-pill--muted" : "arena-pill--live"}">${typeLabel(event.type)} · ${phaseLabel(event)}</span>
-      ${boundary && next
-        ? html`<span class="arena-strip__boundary">${next} starts ${boundary}</span>`
-        : event.status === "abandoned"
-          ? html`<span class="arena-strip__boundary arena-strip__warn">abandoned</span>`
-          : ""}
+      ${event.status === "paused_capacity"
+        ? html`<span class="arena-strip__boundary arena-strip__warn" title="${event.pause_reason || ""}">paused until 00:00 UTC — resumes automatically</span>`
+        : boundary && next
+          ? html`<span class="arena-strip__boundary">${next} starts ${boundary}</span>`
+          : event.status === "abandoned"
+            ? html`<span class="arena-strip__boundary arena-strip__warn">abandoned</span>`
+            : ""}
       ${stat("ideas", c.ideas ?? 0)}
       ${stat("critiques", c.critiques ?? 0)}
       ${stat("judge scores", c.judgeScores ?? 0)}

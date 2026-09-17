@@ -71,6 +71,11 @@ export async function claimNext(env: Env): Promise<QueueItem | null> {
      WHERE id = (
        SELECT id FROM event_queue
        WHERE status = 'pending' AND scheduled_for <= datetime('now')
+         -- Capacity pause (2a): a paused event's items wait for the UTC reset
+         -- instead of burning attempts against an empty pool. In-flight items
+         -- already claimed still finish; resetStuckItems ages the rest back
+         -- to pending and they resume from there (idempotency anchors hold).
+         AND event_id NOT IN (SELECT id FROM archive_events WHERE status = 'paused_capacity')
        ORDER BY priority ASC, scheduled_for ASC
        LIMIT 1
      )

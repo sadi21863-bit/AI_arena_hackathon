@@ -33,7 +33,10 @@ import type { Env } from "./env";
 // currently-available Groq ids (openai/gpt-oss-*, qwen/qwen3.6-27b,
 // groq/compound-mini) — same tier/latency trade as before, just valid ids.
 // See GET https://api.groq.com/openai/v1/models for the current list.
-const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
+// Exported (not just used internally): scheduler.ts's capacity gate reads the
+// live model ids from here so a model rotation is a one-file change, not a
+// second hardcoded copy that drifts (the qwen3.6-27b decommission proved it will).
+export const TASK_MODELS: Record<TaskType, { groq?: string; workers_ai?: string }> = {
   summarize: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   validate: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
   test: { groq: "openai/gpt-oss-20b", workers_ai: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },

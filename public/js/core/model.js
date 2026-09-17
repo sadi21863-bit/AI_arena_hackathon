@@ -33,6 +33,9 @@ export function phasesFor(type) {
 
 export function phaseLabel(event) {
   if (!event) return "";
+  // paused_capacity is a scheduler overlay, not a phase: label it plainly
+  // rather than leaking the raw status id into pills and steppers.
+  if (event.status === "paused_capacity") return "Paused — capacity";
   const match = phasesFor(event.type).find((p) => p.id === event.status);
   return match ? match.label : event.status;
 }
