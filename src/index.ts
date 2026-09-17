@@ -734,6 +734,36 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json(rows.results);
     }
 
+    // Observatory "What's new" delta view (1c-4): one bounded fetch for a
+    // returning visitor — new ideas, new interactions, and queue transitions
+    // since a timestamp, instead of re-reading three full endpoints. Same
+    // public/no-auth trust level as timeline/journal above: read-only
+    // archive data, no payload internals beyond what those routes expose.
+    // `since` accepts ISO or "YYYY-MM-DD HH:MM:SS"; garbage falls back to
+    // the last 24h rather than erroring the view out.
+    const changesMatch = url.pathname.match(/^\/events\/([^/]+)\/changes$/);
+    if (changesMatch && request.method === "GET") {
+      const raw = (url.searchParams.get("since") || "").slice(0, 19).replace("T", " ");
+      const since = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(raw)
+        ? (raw.length === 16 ? `${raw}:00` : raw)
+        : new Date(Date.now() - 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+      const [ideas, interactions, journal] = await Promise.all([
+        env.DB.prepare(
+          `SELECT id, agent_id, title, one_liner, status, created_at as ts FROM archive_ideas
+           WHERE event_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 50`
+        ).bind(changesMatch[1], since).all(),
+        env.DB.prepare(
+          `SELECT id, actor_id, target_id, type, timestamp as ts FROM archive_interactions
+           WHERE event_id = ? AND timestamp >= ? ORDER BY timestamp DESC LIMIT 50`
+        ).bind(changesMatch[1], since).all(),
+        env.DB.prepare(
+          `SELECT task_type, to_status, COUNT(*) as n FROM queue_journal
+           WHERE event_id = ? AND created_at >= ? GROUP BY task_type, to_status`
+        ).bind(changesMatch[1], since).all(),
+      ]);
+      return Response.json({ since, ideas: ideas.results, interactions: interactions.results, journal: journal.results });
+    }
+
     // Observatory Diff Viewer (spec §11) needs each team's repo_url to pull
     // real commits from GitHub's public API client-side. The existing
     // per-team data lives behind /admin/events/:id/build-status (admin-

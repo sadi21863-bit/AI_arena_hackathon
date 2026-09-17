@@ -197,8 +197,9 @@ function instruments(cycle, counts) {
     { label: "Agent Office", to: `/office/${cycle.activeEvent.id}`, stat: 12,    unit: "agents" },
     h ? { label: "Diff", to: `/diff/${h.id}`, stat: counts.teams, unit: "teams" }
       : { label: "Diff", disabled: true, reason: "after the hackathon starts" },
-    h ? { label: "Tribunal", to: `/tribunal/${h.id}`, stat: counts.reflections, unit: "reflections" }
+    h ?     { label: "Tribunal", to: `/tribunal/${h.id}`, stat: counts.reflections, unit: "reflections" }
       : { label: "Tribunal", disabled: true, reason: "after hackathon judging" },
+    { label: "What's new", to: `/changes/${cycle.activeEvent.id}`, stat: counts.fresh, unit: "in 24h" },
   ];
   return html`
     <div class="arena-section-label">Instruments</div>
@@ -250,7 +251,7 @@ export async function mount(el, params) {
 
     // All optional: a missing endpoint must degrade a number to "—", never
     // take the hub down. Pages and the Worker deploy independently.
-    const [ideas, teams, queue, queueItems, timeline, reflections, summary] = await Promise.all([
+    const [ideas, teams, queue, queueItems, timeline, reflections, summary, changes] = await Promise.all([
       fetchJson(`/ideas?event_id=${encodeURIComponent(i.id)}`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/teams`, { optional: true }) : Promise.resolve([]),
       fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/queue-status`, { optional: true }),
@@ -258,6 +259,7 @@ export async function mount(el, params) {
       fetchJson(`/events/${encodeURIComponent(i.id)}/timeline`, { ttl: isTerminal(i) ? FOREVER : 30_000, optional: true }),
       h ? fetchJson(`/events/${encodeURIComponent(h.id)}/tribunal`, { optional: true }) : Promise.resolve([]),
       fetchJson("/events/summary", { ttl: 60_000, optional: true }),
+      fetchJson(`/events/${encodeURIComponent(cycle.activeEvent.id)}/changes`, { optional: true }),
     ]);
     if (disposed) return;
 
@@ -266,6 +268,7 @@ export async function mount(el, params) {
       teams: teams ? teams.length : null,
       moments: timeline ? timeline.length : null,
       reflections: reflections ? reflections.length : null,
+      fresh: changes ? changes.ideas.length + changes.interactions.length : null,
     };
 
     const calFailed = i.calibration && i.calibration.passed === false;

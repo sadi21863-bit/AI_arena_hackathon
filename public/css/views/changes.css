@@ -1,0 +1,21 @@
+/* What's new. Prefix: .v-changes__ */
+
+.v-changes__row {
+  padding: 12px 16px;
+  margin-bottom: 10px;
+}
+
+.v-changes__row small {
+  display: block;
+  font-family: var(--arena-font-mono);
+  font-size: 0.72rem;
+  color: var(--arena-ink-faint);
+  margin-top: 4px;
+}
+
+.v-changes__text {
+  margin-top: 6px;
+  color: var(--arena-ink-soft);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
