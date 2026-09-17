@@ -276,8 +276,22 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   }
 
   if (unjudged.length === 0) {
-    // Nothing left mid-judging (either all judged, or nothing ever reached
-    // architecture_complete) â€” either way there's nothing more to queue.
+    // Honest-terminal check (found live 2026-09-16): an empty unjudged set
+    // means two very different things — "everything scored" vs "nothing
+    // ever reached the judging set" (Workers-AI pin + zero
+    // architecture_complete after a wedged revision gate). Marking judged
+    // in the second case auto-spawns a doomed hackathon whose
+    // team_formation then fails every tick ("No judged ideas found").
+    // Only advance when at least one idea was actually scored; otherwise
+    // hold ready_for_judging so the stall watchdog — not a silent empty
+    // judged — owns the outcome.
+    const judgedCount = await env.DB.prepare(
+      `SELECT COUNT(*) as n FROM archive_ideas WHERE event_id = ? AND status = 'judged'`
+    ).bind(eventId).first<{ n: number }>();
+    if ((judgedCount?.n ?? 0) === 0) {
+      console.log(`ensureIdeathonJudging: ${eventId} has zero judged ideas — holding ready_for_judging instead of marking an empty judged`);
+      return "ready_for_judging";
+    }
     await env.DB.prepare(`UPDATE archive_events SET status = 'judged' WHERE id = ?`).bind(eventId).run();
     return "judged";
   }
@@ -947,8 +961,16 @@ async function ensureRevisionRound(env: Env, eventId: string): Promise<boolean> 
 
   if (top.results.length === 0) return true; // nothing to revise â€” gate open
 
+  // status != 'failed' — the per-item idempotency contract from the
+  // 2026-07-22 code review (see ensurePhaseWorkQueued above): a failed row
+  // must not count as "already covered", or a single permanently-failed
+  // item silently stalls its idea forever. Found live 2026-09-16: one
+  // malformed revise_idea output (agent_ellis) wedged this gate closed
+  // through the whole architecture window — failure count stuck at 1
+  // (never re-queued, so never reaching MAX_ITEM_ATTEMPTS), zero
+  // architecture items ever queued, and the event silently judged empty.
   const existingItems = await env.DB.prepare(
-    `SELECT payload, status FROM event_queue WHERE event_id = ? AND task_type = 'revise_idea'`
+    `SELECT payload, status FROM event_queue WHERE event_id = ? AND task_type = 'revise_idea' AND status != 'failed'`
   ).bind(eventId).all<{ payload: string | null; status: string }>();
   const completed = queuedPayloadValues(existingItems.results.filter((r) => r.status === "completed"), "ideaId");
   const covered = queuedPayloadValues(existingItems.results, "ideaId");
