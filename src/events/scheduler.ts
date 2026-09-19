@@ -250,23 +250,40 @@ async function capacityCheck(
     }
   }
 
-  // Groq bar (skipped when pinned-workers: nothing will try Groq).
-  let groqCovers = groqCalls === 0;
-  if (!groqCovers && groqModel) {
-    const cap = DAILY_CAPS[`groq:${groqModel}`];
-    // Unknown cap (model rotated without a caps update) counts as uncovered
-    // for this tier rather than assumed — the other tier still gets its say.
-    if (cap !== undefined) {
-      groqCovers = (await unitsUsedToday(env, "groq", groqModel)) + groqCalls <= cap;
-    }
-  }
-  if (pinnedGroq) return groqCovers ? "ok" : pauseReason();
-  // Workers bar (skipped when pinned-groq: fallthrough is disabled).
+  // A need no fresh day can satisfy must NOT pause: waiting for a reset
+  // that can never cover it parks the event forever (found live 2026-09-19:
+  // an event needing 10,500 neurons against a 9,500 cap sat parked across
+  // two resets). Proceed instead — per-call fallthrough, backoff, and
+  // partial-credit finalization are the backstops for the over-cap case;
+  // the pause exists for the within-cap-but-drained-today case only.
+  const groqCap = groqModel ? DAILY_CAPS[`groq:${groqModel}`] : undefined;
   const wCap = DAILY_CAPS["workers_ai"];
+  if (pinnedGroq) {
+    if (groqCap === undefined || groqCalls > groqCap) return "ok";
+    const groqCovers = (await unitsUsedToday(env, "groq", groqModel!)) + groqCalls <= groqCap;
+    return groqCovers ? "ok" : pauseReason();
+  }
+  if (pinnedWorkers) {
+    if (workersNeurons > wCap) return "ok";
+    const workersCovers = (await unitsUsedToday(env, "workers_ai")) + workersNeurons <= wCap;
+    return workersCovers ? "ok" : pauseReason();
+  }
+  // Unpinned: proceeding makes sense unless BOTH tiers are hopeless even
+  // fresh — matching the router cascade this gate predicts for.
+  const groqHopeless = groqCalls > 0 && (groqCap === undefined || groqCalls > groqCap);
+  const workersHopeless = workersNeurons > 0 && workersNeurons > wCap;
+  if (groqHopeless && workersHopeless) return "ok";
+  // Groq bar. Unknown cap counts as uncovered for this tier — the other
+  // tier still gets its say below.
+  let groqCovers = groqCalls === 0;
+  if (!groqCovers && groqModel && groqCap !== undefined) {
+    groqCovers = (await unitsUsedToday(env, "groq", groqModel)) + groqCalls <= groqCap;
+  }
+  if (groqCovers) return "ok";
+  // Workers bar.
   const workersCovers = workersNeurons === 0 ||
     (await unitsUsedToday(env, "workers_ai")) + workersNeurons <= wCap;
-  if (pinnedWorkers) return workersCovers ? "ok" : pauseReason();
-  if (groqCovers || workersCovers) return "ok";
+  if (workersCovers) return "ok";
   return pauseReason();
 
   function pauseReason(): string {
