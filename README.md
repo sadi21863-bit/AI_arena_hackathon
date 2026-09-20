@@ -59,3 +59,7 @@ the-arena/
 Open this folder in an agent that reads `AGENTS.md` automatically; it checks
 `.arena/state.json` before doing anything. No prompt to paste — the loop
 persists in the repo itself, across sessions and gaps.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Contributions land under the same license.
