@@ -634,11 +634,22 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // clears, but the queue stops accumulating identical failures.
     const dispatchFailures = await failedAttemptCounts(env, event.id, "dispatch_build_turn", "teamId");
 
-    for (const team of teams.results) {
+    // One dispatch per tick across ALL teams (not one per team): both teams
+    // share a single OPENCODE_API_KEY, i.e. one Zen rate pool, so same-tick
+    // dispatches synchronize the heaviest burst (turn-startup model calls) of
+    // both agents against the same undocumented cap. Staggering starts by ≥5
+    // min costs nothing real (288 ticks/day vs ≤12 dispatches needed) and
+    // turns still overlap on the GitHub side — only the starts are spread.
+    // Full mutual exclusion was considered and rejected: it would couple beta
+    // to alpha's worst-case 120-min job and halve velocity for unobserved
+    // contention. Revisit if provider 429/500 clusters ever correlate across
+    // teams on the same tick.
+    const ordered = [...teams.results].sort((a, b) => a.team_name.localeCompare(b.team_name));
+    for (const team of ordered) {
       if (alreadyQueued.has(team.id)) continue;
       if ((dispatchedTodayCount.get(team.id) ?? 0) >= MAX_BUILD_TURNS_PER_DAY) continue;
       if ((dispatchFailures.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
-      // Still working â€” let it finish rather than dispatching over the top.
+      // Still working — let it finish rather than dispatching over the top.
       if (await teamHasOpenTurn(env, team.id)) continue;
 
       await enqueue(env, {
@@ -646,6 +657,7 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
         payload: { teamId: team.id, teamName: team.team_name },
         priority: 3,
       });
+      break;
     }
   } else if (phase === "ready_for_judging") {
     return ensurePostBuildWork(env, { ...event, status: phase });
