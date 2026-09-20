@@ -55,6 +55,11 @@ export function agentName(id) {
   return a ? a.name : id;
 }
 
+/** Full roster row (elo_rating, rating_events, …) — null when not loaded. */
+export function agentRow(id) {
+  return agentsById.get(id) || null;
+}
+
 export async function refreshEvents() {
   try {
     invalidate("/events");

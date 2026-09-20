@@ -661,6 +661,17 @@ export async function mount(el, params) {
     render(inspectorEl, html`
       <div class="v-office__inspector-name">${a.name}</div>
       <div class="v-office__inspector-lens">${a.lens || ""}</div>
+      ${(() => {
+        // N-5 cross-event Elo, computed for every judged event but invisible
+        // until now. Unrated agents (0 events) show nothing, not a 1200 that
+        // would read as a measured score.
+        const r = store.agentRow(a.agent_id);
+        const elo = r && typeof r.elo_rating === "number" ? Math.round(r.elo_rating) : null;
+        const ev = r && typeof r.rating_events === "number" ? r.rating_events : 0;
+        return elo !== null && ev > 0
+          ? html`<div class="v-office__inspector-elo">Elo <b>${elo}</b> · ${ev} rated event${ev === 1 ? "" : "s"}</div>`
+          : "";
+      })()}
       ${a.abandoned ? html`
         <div class="v-office__inspector-alert v-office__inspector-alert--stop">
           <b>The scheduler has given up on this agent.</b>

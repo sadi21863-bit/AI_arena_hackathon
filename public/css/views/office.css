@@ -167,6 +167,8 @@
 .v-office__inspector-empty { font-family: var(--arena-font-mono); font-size: 0.78rem; color: var(--arena-ink-faint); }
 .v-office__inspector-name { font-family: var(--arena-font-display); font-size: 1.16rem; color: var(--arena-ink); }
 .v-office__inspector-lens { font-family: var(--arena-font-mono); font-size: 0.74rem; color: var(--arena-ink-faint); margin-top: 2px; }
+.v-office__inspector-elo { font-family: var(--arena-font-mono); font-size: 0.74rem; color: var(--arena-ink-soft); margin-top: 6px; }
+.v-office__inspector-elo b { color: var(--arena-clay-deep); font-weight: 600; }
 .v-office__inspector-rows { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 13px; }
 .v-office__inspector-rows div { font-family: var(--arena-font-mono); font-size: 0.76rem; color: var(--arena-ink-soft); }
 .v-office__inspector-rows b { color: var(--arena-ink); font-weight: 600; }
