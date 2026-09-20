@@ -400,8 +400,8 @@ jobs:
           cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
           echo "--- shim ---"
           cat "$RUNNER_TEMP/shim.log" 2>/dev/null || echo "shim.log not found"
-          echo "--- crash signature (empty means the P0-0a id bug did not recur) ---"
-          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream" \
+          echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
+          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|Unexpected server error|Failed to execute statement" \
             opencode-turn.log opencode-turn.err.log "$RUNNER_TEMP/shim.log" 2>/dev/null || true
 
       - name: Enforce real build output
@@ -751,6 +751,15 @@ jobs:
         # Use the repo's ARENA_PUSH_TOKEN (a PAT with the `workflow` scope)
         # for the push; the default GITHUB_TOKEN is the fallback so the
         # harness still works on repos without that secret.
+        #
+        # Verified 2026-09-20: ARENA_PUSH_TOKEN is set NEITHER at repo level
+        # (main + team repos) NOR verifiably at org level (403 on the org
+        # secrets API from here) — so every push today runs the `else` branch
+        # on GITHUB_TOKEN. That is load-bearing, not incidental: it works
+        # ONLY because the restore guard below guarantees the push never
+        # contains .github/ changes (which GITHUB_TOKEN would 403 on). If a
+        # push ever needs to carry workflow files, set ARENA_PUSH_TOKEN
+        # (repo or org level) instead of debugging the 403.
         #
         # NOTE: since the turn agent no longer owns workflow files (they are
         # harness-owned and ro-mounted in every container — see Phase A), the

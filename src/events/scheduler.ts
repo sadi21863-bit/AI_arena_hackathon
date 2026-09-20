@@ -559,6 +559,13 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
   }
 
   if (phase === "team_formation") {
+    // Reconcile here too, not just in the building branch below: turn 1
+    // dispatches (and usually completes) on formation day, but outcomes
+    // were only ever pulled during building — so day-0 turns sat
+    // `dispatched`/NULL in build_turns (and everywhere that reads it)
+    // until day 1. Read-only status pull; the dispatch guard below and the
+    // per-day ceiling are untouched.
+    await reconcileBuildTurns(env, event.id);
     // status != 'failed' â€” found live (2026-07-22 code review): without this
     // filter, a single failed team_formation attempt (e.g. a transient
     // GitHub 5xx during createTeamRepo) permanently stalls the whole
