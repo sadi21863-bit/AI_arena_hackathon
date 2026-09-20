@@ -182,6 +182,7 @@ const HARNESS_FILES = [
 const SCAFFOLD_FILES = [
   "AGENTS.md",
   "BACKLOG.md",
+  "arena.config.json",
   ".gitignore",
   ".env.example",
   ".github/workflows/ci.yml",

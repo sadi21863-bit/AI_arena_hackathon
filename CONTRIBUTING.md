@@ -14,3 +14,19 @@ have access.
    pushes; anything else needs the manual deploy.
 5. Never commit secrets (`.env` is gitignored; see `.env.example`). Never
    widen build-turn network scope without a written reason (spec §7).
+
+## Use the arena skills in your own agent
+
+The build-turn skills in `docker/skills/` (TDD, code review, debugging,
+verification, …) follow the Agent Skills standard (`SKILL.md` + description
+frontmatter) and work in any compatible host — no packaging step, copy the
+directory:
+
+```bash
+cp -r docker/skills/arena-team ~/.agents/skills/   # user-level
+```
+
+Team repos additionally carry `AGENTS.md` (conventions), `BACKLOG.md` (the
+task queue), and `arena.config.json` (machine-readable workspace pointers).
+An external agent with those three plus the skill above can work a team
+repo the same way a build turn does.
