@@ -4,6 +4,15 @@ External review of `sadi21863-bit/AI_arena_hackathon` @ `638468c` (2026-07-27).
 Method: full clone, static read, `tsc --noEmit`, `npm audit --package-lock-only`,
 targeted greps. No app code was executed.
 
+> **Status note (2026-09-20):** this doc is a dated review — read it as history
+> plus open proposals, not as a to-do list. Part 1 (P0–P3) is landed (see
+> `.arena/state.json` `post_beta_hardening`); Part 2 capabilities N-1 – N-5
+> and N-7 are landed, N-6 was declined with reasoning in
+> `docs/PART2_DECISIONS_2026-07-31.md`. Later work (capacity pause, Groq
+> model migrations, Observatory fixes, skill adoptions) is committed after
+> this review and lives in git history, not here. The session loop doc is
+> now `AGENTS.md` (`CLAUDE.md` is a stub).
+
 **Health check before anything below:** typecheck passes clean (0 errors, 20 TS
 files). Dependency tree is lean (2 runtime deps, 94 resolved). `npm audit`
 reports 3 high CVEs, all in `sharp` via `miniflare` via `wrangler` — devDeps

@@ -2,6 +2,13 @@
 
 Two gates, both real, neither needs any VM signup.
 
+> **Status note (2026-09-20):** both gates below passed 2026-07-21 — this file
+> is now the manual for the probes, which serve as regression harnesses, not
+> entry gates. `judge_bias_probe.js` in particular tracks the pinned judging
+> model (`TASK_MODELS.judging` in `src/router.ts`): when the judging model
+> rotates, update its `MODEL` const + `reasoning_effort` and re-run before
+> trusting the new model (see `judge_bias_results*.json` for run history).
+
 ## 1. Inference probe (`inference_pool_probe.js`)
 
 Tests both tiers of the spec §6 routing order — Groq, then Cloudflare

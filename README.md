@@ -1,7 +1,7 @@
-# The Arena — build tree
+# The Arena — autonomous AI competition
 
-Scaffold for **The Arena** (see `The_Arena_Specification.docx` — keep it next
-to this repo, it's the source of truth for every decision below).
+**The Arena** (see `The_Arena_Specification.docx` — the source of truth for
+every design decision below, plus `AGENTS.md` for the session loop).
 
 ## Architecture in one paragraph
 
@@ -10,42 +10,52 @@ Workers AI) handles everything always-on: frontend, API, database, archive,
 and the inference router. GitHub Actions runs hackathon build turns as
 ephemeral, isolated jobs. Inference is pooled across two no-card providers —
 Groq primary, Cloudflare Workers AI fallback — with load split between them
-directly inside the Cloudflare Worker.
+directly inside the Cloudflare Worker; hackathon builds run on OpenCode Zen
+(free tier), a separate pool by necessity (Groq's per-minute caps can't fit
+OpenCode's prompt overhead).
 
-## Before you touch Week 1
+## Status
 
-Two gates, per `.arena/state.json`:
-
-1. **`inference_pool`** — does Groq's published free tier actually hold up on
-   a real account for judging/architecture-shaped prompts?
-2. **`build_pipeline`** — does the GitHub Actions build-turn workflow actually
-   complete successfully end to end?
-
-Both are cheap to check (minutes) — see `week0-spike/README.md`.
+Live autonomous cadence (see `.arena/state.json`, `current_gate:
+post_beta_hardening`). Both Week 0 gates (`inference_pool`,
+`build_pipeline`) passed 2026-07-21; the probes in `week0-spike/` now serve
+as regression harnesses (notably `judge_bias_probe.js`, which tracks the
+pinned judging model).
 
 ## Layout
 
 ```
 the-arena/
-├── CLAUDE.md                        # the build loop — Claude Code reads this automatically
+├── AGENTS.md                        # the build loop (CLAUDE.md is a stub pointing here)
+├── CONTRIBUTING.md                  # contributor workflow (MIT-licensed — see LICENSE)
 ├── .arena/state.json                # loop state: gates, pass/fail, measured numbers
-├── scripts/                         # gate checkers
-├── week0-spike/                     # run this first
+├── scripts/                         # gate checkers, schema tooling, admin token setup
+├── week0-spike/                     # feasibility probes, now regression harnesses
 ├── .github/workflows/
-│   └── team-build-turn.yml          # runs one hackathon build turn per trigger — spec §8
+│   ├── team-build-turn.yml          # one hackathon build turn per trigger — spec §8
+│   ├── manual-build-test.yml        # fire one turn by hand to test the harness
+│   ├── deploy-worker.yml            # auto-deploy Worker on src/** pushes
+│   ├── deploy-pages.yml             # auto-deploy Observatory on public/** pushes
+│   └── ci.yml                       # typecheck + smoke test on push/PR
 ├── docker/
-│   └── Dockerfile.arena-team-base   # binary whitelist for the build-turn container
+│   ├── Dockerfile.arena-team-base   # binary whitelist for the build-turn container
+│   └── skills/                      # baked build-turn skills (TDD, review, debugging, …)
 ├── src/
 │   ├── router.ts                    # inference routing: Groq -> Workers AI
-│   └── index.ts                     # Worker entry point (Week 1 stub)
+│   ├── events/                      # scheduler, executor, build-turn bookkeeping
+│   ├── judges/                      # personas, calibration, scoring
+│   └── index.ts                     # Worker entry point + public API
 ├── db/
-│   └── schema.sql                   # D1 schema
+│   ├── schema*.sql                  # D1 migrations (apply via scripts/apply_schema.js)
+│   └── APPLY_ORDER.md               # canonical migration order
+├── public/                          # Observatory frontend (no framework, no build step)
 ├── wrangler.toml
-└── package.json
+├── package.json
+└── docs/                            # dated investigations, reviews, research notes
 ```
 
-## How this hands off to Claude Code
+## Session loop
 
-Open this folder in Claude Code; it reads `CLAUDE.md` automatically and
-checks `.arena/state.json` before doing anything. No prompt to paste — the
-loop persists in the repo itself, across sessions and gaps.
+Open this folder in an agent that reads `AGENTS.md` automatically; it checks
+`.arena/state.json` before doing anything. No prompt to paste — the loop
+persists in the repo itself, across sessions and gaps.
