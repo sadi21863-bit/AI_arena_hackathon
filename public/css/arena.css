@@ -343,6 +343,15 @@ g[role="button"]:focus-visible circle {
   margin-top: 32px;
 }
 
+/* Kiosk mode (?kiosk): fullscreen capture for OBS/streaming. Only the view
+   stays — the shell chrome that makes no sense on a broadcast goes away. */
+body.is-kiosk .arena-nav,
+body.is-kiosk #arena-context,
+body.is-kiosk .arena-footer,
+body.is-kiosk .arena-skip {
+  display: none;
+}
+
 /* ---------- Arena context bar (core/arena-context.js) ---------- */
 
 .arena-context {

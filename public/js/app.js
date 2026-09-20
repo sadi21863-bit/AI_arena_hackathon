@@ -12,6 +12,13 @@ import * as store from "./core/store.js";
 
 const outlet = document.getElementById("view");
 
+// Kiosk mode (?kiosk in the query string) hides the shell chrome — nav,
+// context bar, footer — for fullscreen OBS/streaming capture. Hash routing
+// is untouched, so any view deep-link works with ?kiosk prepended.
+if (new URLSearchParams(location.search).has("kiosk")) {
+  document.body.classList.add("is-kiosk");
+}
+
 /** Keep the top-bar active state in sync with whatever view is mounted. */
 function syncNav() {
   const view = activeView();
