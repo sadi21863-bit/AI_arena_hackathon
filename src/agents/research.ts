@@ -8,18 +8,20 @@
  *
  * BUDGET MATH (updated 2026-07-21 — 3-events/month cadence, pooled across
  * 3 separate Tavily accounts to give agents real room to research deeply
- * rather than rationing them):
+ * rather than rationing them; critique-extract costs amended 2026-09-19):
  *   - search_depth defaults to "basic" here (see searchTavily below) = 1
  *     credit/call. "advanced" would be 2 — don't switch to it without
  *     redoing this math.
  *   - handleResearch() in executor.ts runs 4 queries per agent during
  *     deep_research (opportunities, review-of-prior-failures, target-user
  *     validation, market/funding signals), and handleCritique() runs 1
- *     grounding query per critique. Real cost per ideathon: 12 agents x 4
- *     = 48, plus ~36 critiques x 1 = 36 -> ~84 credits. Hackathon costs 0
- *     until wired to a real call site (see PER_EVENT_BUDGETS.hackathon).
- *   - 3 accounts x 1,000 credits/month = 3,000 pooled. 3 cycles/month x 84
- *     credits = 252 — 8% of the pool, leaving very wide headroom even
+ *     grounding query per critique via deepResearchWithExtract (search + extract
+ *     = up to 2 credits, verified worth it by browser_research_probe 2026-08-25:
+ *     1.41x richer evidence, worst-case 360/mo vs 2700 ceiling). Real cost per
+ *     ideathon: 12 agents x 4 = 48, plus ~36 critiques x 2 = 72 -> ~120 credits.
+ *     Hackathon costs 0 until wired to a real call site (see PER_EVENT_BUDGETS.hackathon).
+ *   - 3 accounts x 1,000 credits/month = 3,000 pooled. 3 cycles/month x 120
+ *     credits = 360 — 12% of the pool, leaving very wide headroom even
  *     accounting for heavy development/testing on top of real events.
  *   - Round-robin across TAVILY_API_KEY_1/2/3 (see selectTavilyKey) so load
  *     spreads evenly; no per-key exhaustion tracking needed for that to
