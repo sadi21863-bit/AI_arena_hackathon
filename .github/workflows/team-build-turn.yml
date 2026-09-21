@@ -401,7 +401,7 @@ jobs:
           echo "--- shim ---"
           cat "$RUNNER_TEMP/shim.log" 2>/dev/null || echo "shim.log not found"
           echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
-          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|Unexpected server error|Failed to execute statement" \
+          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement" \
             opencode-turn.log opencode-turn.err.log "$RUNNER_TEMP/shim.log" 2>/dev/null || true
 
       - name: Enforce real build output
