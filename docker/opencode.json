@@ -37,19 +37,5 @@
       "wget *": "deny"
     }
   },
-  "provider": {
-    "workers-ai": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Cloudflare Workers AI",
-      "options": {
-        "baseURL": "{env:ARENA_AI_BASE_URL}",
-        "apiKey": "{env:ARENA_AI_API_KEY}"
-      },
-      "models": {
-        "@cf/openai/gpt-oss-120b": {
-          "name": "GPT-OSS 120B (Workers AI)"
-        }
-      }
-    }
-  }
+  "provider": {}
 }

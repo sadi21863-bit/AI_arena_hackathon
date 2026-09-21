@@ -148,6 +148,7 @@ const SKILL_PATHS = [
   "docker/skills/skill-creator/SKILL.md",
   "docker/skills/test-driven-development/SKILL.md",
   "docker/skills/ui-verify/SKILL.md",
+  "docker/skills/verification-before-completion/SKILL.md",
 ] as const;
 
 const HARNESS_FILES = [
@@ -156,7 +157,6 @@ const HARNESS_FILES = [
   "docker/opencode.json",
   "docker/playwright-mcp.json",
   ...SKILL_PATHS,
-  "scripts/workers_ai_shim.js",
 ] as const;
 
 /**

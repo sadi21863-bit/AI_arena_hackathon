@@ -62,18 +62,11 @@ jobs:
   build-turn:
     runs-on: ubuntu-latest # 4 CPU / 16GB RAM / 14GB SSD on public repos, confirmed July 2026
     timeout-minutes: 120 # well under the 6-hour hard cap; a single turn should never need this long
-    env:
-      # Builds run on OpenCode Zen free tier (see Phase A --model flag), NOT
-      # on Groq or Workers AI: OpenCode's ~32-38K-token baseline request
-      # exceeds Groq free TPM caps on the first call, and the old Workers AI
-      # path is superseded (shim below pending removal — see its own note).
-      # No GROQ_API_KEY here: nothing in this job consumes it (verified
-      # 2026-09-17 — the old comment claiming otherwise was stale).
-      # CF_ACCOUNT_ID/CF_API_TOKEN stay: the shim holds them so the --auto
-      # container never receives the credential the egress filtering exists
-      # to protect. They go when the shim goes.
-      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-      CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+    # No job-level env block on purpose: every secret is passed explicitly
+    # per step/container below, so a credential can never leak into a step
+    # that doesn't need it. Builds run on OpenCode Zen free tier (see Phase
+    # A --model flag), NOT on Groq or Workers AI. CF_*/GROQ_* secrets are
+    # gone with the shim (removed 2026-09-21 — run had zero requests).
     steps:
       - name: Checkout team repo at current state
         uses: actions/checkout@v4
@@ -118,14 +111,13 @@ jobs:
         # container traffic, they're not something a process inside the
         # container can opt out of.
         #
-        # Only package registries are allowed now: registry.npmjs.org for
-        # whatever the coding agent's own build needs to npm install, plus
-        # pypi.org/files.pythonhosted.org for the Phase B dependency-install
-        # step, so Python-stack team repos can pip install. api.cloudflare.com
-        # was removed when the Workers AI shim landed below: the container no
-        # longer talks to Cloudflare at all, it talks to the shim on the
-        # runner, so leaving Cloudflare allowlisted would only widen egress
-        # for no reason.
+        # Only package registries plus the agent's own inference endpoint:
+        # registry.npmjs.org for whatever the coding agent's own build needs
+        # to npm install, pypi.org/files.pythonhosted.org for the Phase B
+        # dependency-install step (Python-stack team repos), and .opencode.ai
+        # for OpenCode Zen traffic. api.cloudflare.com is deliberately absent:
+        # nothing in any container talks to Cloudflare (the retired Workers
+        # AI shim used to, via the runner — removed 2026-09-21).
         # github.com/api.github.com are deliberately NOT allowlisted — the
         # "Commit progress" step below does git push from the RUNNER, outside
         # any container, so nothing inside Phase A's container legitimately
@@ -151,54 +143,7 @@ jobs:
           sudo iptables -I DOCKER-USER -p tcp --dport 443 -j DROP
           sudo iptables -I DOCKER-USER -p tcp --dport 80 -j DROP
 
-      - name: Start Workers AI compatibility shim (P0-0a)
-        # REMOVAL PENDING one live-turn confirmation (2026-09-17): Phase A now
-        # runs --model opencode/* via auth.json's `opencode` provider, which
-        # bypasses this shim's workers-ai path entirely (turn14's 40 tool
-        # calls show zero shim traffic), but turn logs don't record the
-        # serving provider so a negative can't be proven statically. Do NOT
-        # remove until a real turn's $RUNNER_TEMP/shim.log shows zero
-        # requests — the health check below still hard-gates the job.
-        # Fixes the crash that killed every build turn mid-run:
-        # `AI_InvalidResponseDataError: Expected 'id' to be a string.`
-        #
-        # docs/INVESTIGATION_2026-07-28.md guessed this was sandbox-specific
-        # because one un-sandboxed local run passed. It isn't. The error comes
-        # from the Vercel AI SDK, which validates tool_calls[].id as a string
-        # per the OpenAI spec, and Cloudflare's 2026-02-17 change ("preserves
-        # original tool call IDs from models instead of regenerating them")
-        # means whatever gpt-oss-120b emits now reaches the client raw. It is
-        # a per-tool-call property of model output, so it is nondeterministic
-        # — which is why it struck on the ~5th tool call and why a single
-        # clean local run proved nothing.
-        #
-        # The shim normalizes those ids (and the assistant `content: null`
-        # incompatibility found in the same investigation) and holds
-        # CF_API_TOKEN itself, so the --auto agent's container never receives
-        # the credential the egress filtering above exists to protect.
-        #
-        # Logs go to $RUNNER_TEMP, deliberately NOT into the workspace: any
-        # file the shim wrote there would show up in "Enforce real build
-        # output"'s `git status` and make a do-nothing turn look like it
-        # produced changes, defeating the very guard that catches a no-op
-        # agent. nohup + redirect also stops the backgrounded process from
-        # holding this step's stdout open, which can hang the step.
-        run: |
-          nohup node scripts/workers_ai_shim.js > "$RUNNER_TEMP/shim.log" 2>&1 &
-          for _ in $(seq 1 30); do
-            # -s (not -sf): the shim answering with any HTTP status means it is
-            # up. Only a refused connection is worth waiting out.
-            if curl -s -o /dev/null -m 2 http://127.0.0.1:3129/v1/models; then
-              echo "shim reachable on 3129"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::Workers AI shim never became reachable on 3129"
-          cat "$RUNNER_TEMP/shim.log" || true
-          exit 1
-
-      - name: "Phase A — agent work (network-scoped to the shim + registry.npmjs.org)"
+      - name: "Phase A — agent work (network-scoped to package registries)"
         # HOME=/tmp below: OpenCode (Bun) writes its config/cache to
         # $HOME/.local on startup; the read-only rootfs has no writable
         # /home, so it needs to land inside the tmpfs already mounted at /tmp.
@@ -224,14 +169,15 @@ jobs:
         # provided host-gateway alias) — the DOCKER-USER DROP rules block any
         # attempt to bypass it and go direct.
         #
-        # NO_PROXY includes host.docker.internal so the shim call goes direct
-        # rather than being bounced through Squid (which no longer allowlists
-        # Cloudflare anyway).
+        # NO_PROXY keeps localhost traffic direct rather than bouncing it
+        # through Squid pointlessly.
         #
-        # CF_ACCOUNT_ID/CF_API_TOKEN are deliberately NOT passed in any more —
-        # the shim on the runner holds them. The container gets only a
-        # placeholder key, because @ai-sdk/openai-compatible requires the
-        # option to be non-empty.
+        # No Cloudflare credentials anywhere in this container: inference goes
+        # straight to OpenCode Zen through the proxy allowlist (.opencode.ai),
+        # authenticated by OPENCODE_API_KEY below. The retired Workers AI shim
+        # (removed 2026-09-21 after a live turn logged zero requests) used to
+        # hold CF_API_TOKEN on the runner instead — that indirection is gone
+        # with it.
         #
         # `set +e` + explicit exit-code capture: a crash partway through a
         # turn still leaves real files on disk, and git history is the
@@ -244,15 +190,12 @@ jobs:
         # turns 15-18 (alpha) and 14-17 (beta) burned the full 120-min job
         # timeout producing ZERO bytes of agent output — the first model call
         # hung forever and only the job's hard cap ended the turn, which then
-        # reconciled as a 'cancelled' run. Two fixes:
+        # reconciled as a 'cancelled' run. (An earlier companion fix — an
+        # upstream timeout inside the retired Workers AI shim — went away
+        # with the shim on 2026-09-21; this watchdog is now the only hang
+        # guard, which is all a Zen-driven turn needs.)
         #
-        #   (1) scripts/workers_ai_shim.js now times out a stalled upstream
-        #       api.cloudflare.com call (SHIM_UPSTREAM_TIMEOUT_MS, default
-        #       180s) so opencode sees a real error within minutes and either
-        #       retries or exits with a diagnosable failure. This is the root
-        #       cause fix.
-        #
-        #   (2) This watchdog is the belt-and-suspenders: the container runs
+        # This watchdog is the belt-and-suspenders: the container runs
         #       in the background while this step watches the turn logs AND
         #       the working tree. If neither grows for
         #       WATCHDOG_SILENCE_MINUTES (default 10), the agent is hung —
@@ -307,9 +250,15 @@ jobs:
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
-            -e ARENA_AI_BASE_URL=http://host.docker.internal:3129/v1 \
-            -e ARENA_AI_API_KEY=shim-injects-the-real-credential \
+            # Two Zen keys, one picked at random per turn (same pattern as the
+            # old GROQ_API_KEY split): spreads burst load AND survives one key
+            # hitting a limit. Caveat learned the hard way on Groq — this only
+            # doubles anything if the keys belong to SEPARATE accounts (limits
+            # are per-account); two keys on one account share one pool and the
+            # pick below is then just jitter. Harmless either way; unset _2
+            # behaves exactly like before.
             -e OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }} \
+            -e OPENCODE_API_KEY_2=${{ secrets.OPENCODE_API_KEY_2 }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
             -e GIT_AUTHOR_EMAIL=arena-turn-agent@users.noreply.github.com \
@@ -318,7 +267,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$OPENCODE_API_KEY" "$OPENCODE_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$OPENCODE_API_KEY" && if [ -n "$OPENCODE_API_KEY_2" ] && [ "$((RANDOM % 2))" = "0" ]; then KEY="$OPENCODE_API_KEY_2"; fi && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
@@ -398,11 +347,9 @@ jobs:
           cat opencode-turn.log 2>/dev/null || echo "opencode-turn.log not found"
           echo "--- stderr ---"
           cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
-          echo "--- shim ---"
-          cat "$RUNNER_TEMP/shim.log" 2>/dev/null || echo "shim.log not found"
           echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
-          grep -iE "expected 'id'|InvalidResponseData|upstream error|timed out after|shim upstream|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement" \
-            opencode-turn.log opencode-turn.err.log "$RUNNER_TEMP/shim.log" 2>/dev/null || true
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement" \
+            opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output
         # Found live (see docs/INVESTIGATION_2026-07-28.md P0-0a / NEW-1): a

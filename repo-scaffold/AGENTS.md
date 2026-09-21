@@ -41,9 +41,8 @@ extend what's there instead of recreating it.
    values; keep real credentials out of the repository.
 8. **Don't touch the arena harness or any workflow files.** Everything under
    `.github/` — including `ci.yml` — is the arena's: `.github/workflows/team-build-turn.yml`,
-   `docker/Dockerfile.arena-team-base`, `docker/opencode.json`, and
-   `scripts/workers_ai_shim.js` are re-synced before every turn, and the
-   harness mounts `.github/` read-only inside your container and restores it
+   `docker/Dockerfile.arena-team-base`, `docker/opencode.json` are re-synced
+   before every turn, and the harness mounts `.github/` read-only inside your container and restores it
    before every push, so edits there are discarded anyway. The arena extends
    `ci.yml` when the product needs new CI; you don't. `ci.yml` runs on every
    push and fails loudly (rule 1) — build against it, don't edit it.

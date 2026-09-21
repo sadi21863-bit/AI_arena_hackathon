@@ -225,6 +225,9 @@ const NON_PRODUCT_PATHS = [
   ".github/workflows/team-build-turn.yml",
   "docker/Dockerfile.arena-team-base",
   "docker/opencode.json",
+  // scripts/workers_ai_shim.js stays listed although the shim was removed
+  // 2026-09-21: older team repos still carry their synced copy, and without
+  // this entry a log-only turn there would read as product work.
   "scripts/workers_ai_shim.js",
 ];
 

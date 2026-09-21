@@ -57,16 +57,16 @@ RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" && \
     rm -rf /root/.npm 2>/dev/null || true
 
 # Baked-in provider config, not one carried by each team's repo — every team
-# gets Workers AI wired up the same way regardless of what's in their
+# gets the same skills/MCP/permissions regardless of what's in their
 # checkout. OPENCODE_CONFIG works independent of $HOME/project-root lookup,
 # which matters here since HOME gets pointed at the per-run tmpfs at runtime
 # (see team-build-turn.yml) and anything baked in under it would be hidden
 # by that mount.
 #
-# Its baseURL/apiKey now come from ARENA_AI_BASE_URL/ARENA_AI_API_KEY, which
-# team-build-turn.yml points at the Workers AI shim running on the runner
-# rather than at Cloudflare directly (P0-0a). The real CF credentials stay
-# outside this container entirely.
+# No custom provider block: the driver model comes from the dispatch (`model`
+# input, default opencode/nemotron-3-ultra-free) authenticated via auth.json,
+# not from config. A `workers-ai` provider block lived here until 2026-09-21
+# and was removed with the shim it served — see team-build-turn.yml.
 COPY opencode.json /opt/opencode/config/opencode.json
 ENV OPENCODE_CONFIG=/opt/opencode/config/opencode.json
 
