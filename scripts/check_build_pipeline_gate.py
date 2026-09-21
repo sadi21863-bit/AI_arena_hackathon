@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 """
+RETIRED 2026-09-21: do not run. This gate checks the latest team-build-turn
+run on the MAIN repo, but turns run on TEAM repos now — it would report on
+the wrong repo and could regress the long-closed gate in .arena/state.json.
+Pipeline health is .github/workflows/ci.yml, deploy workflows, and the
+reconciled build_turns table. Kept for the record.
+
 Loop gate: build_pipeline (spec §8, §17).
 
 Unlike the other gates, this one doesn't read a local results file — it asks
@@ -48,6 +54,10 @@ def github_get(url, token):
 
 
 def main():
+    print("RETIRED 2026-09-21: this gate checks the main repo, but turns run on team repos.")
+    print("Use Actions history, ci.yml, and build_turns instead. Refusing to touch .arena/state.json.")
+    sys.exit(2)
+
     state = load_state()
     token = os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("GITHUB_REPO")

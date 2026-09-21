@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+RETIRED 2026-09-21: do not run. This gate passed 2026-07-21 against a results
+file testing long-dead models; re-running it would re-stamp history, not
+check the present. Live budget health is GET /headroom; judging-model
+currency is tracked by week0-spike/judge_bias_probe.js. Kept for the record.
+
 Loop gate: inference_pool (spec §6, §17).
 
 Reads week0-spike/inference_pool_results.json (written by
@@ -34,6 +39,10 @@ def save_state(state):
 
 
 def main():
+    print("RETIRED 2026-09-21: this gate passed 2026-07-21 and its results file tests dead models.")
+    print("Use GET /headroom for live budget health. Refusing to touch .arena/state.json.")
+    sys.exit(2)
+
     state = load_state()
 
     if not RESULTS_PATH.exists():
