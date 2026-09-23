@@ -473,8 +473,8 @@ jobs:
         id: install
         run: |
           set +e
-          # Bounded retry (whole-arena sim finding, docs/ARCHITECTURE_COMPARISON.md
-          # A6: one-shot flaky verification cost ~10pp end-to-end winner accuracy
+          # Bounded retry (whole-arena sim finding, docs/ARENA_CONDUCT_V3.md
+          # §10: one-shot flaky verification cost ~10pp end-to-end winner accuracy
           # — a single transient registry/network hiccup flipped a turn to
           # 'failure' that a retry would have passed, and over a multi-turn event
           # that compounds into wrong winners). npm ci / pip install over the

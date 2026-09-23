@@ -3,6 +3,28 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-23
+
+- Build-turn prompt travels via environment, not inline interpolation —
+  an agent-written BACKLOG row with backticks executed as shell and killed
+  12 straight turns with exit 127 (`4a9d396`).
+- One Zen key pinned per team (alpha→key 1, beta→key 2) with same-turn
+  failover on provider-error signature; only the active key enters the
+  sandbox; fail-fast guard when both keys are empty.
+- Crash-grep covers dead/deprecated model IDs (Zen catalog churns).
+- Manual test dispatches to the repo's default branch (was hardcoded
+  `master`, 422 on team repos); Enforce/watchdog ignore failover
+  `attempt1.*` diagnostics.
+- Docs: providers deep-dive folded into budget research §9, architecture
+  comparison folded into conduct spec §10, stale headers corrected
+  (Office proposal, redesign plan), week-0 READMEs de-retired script refs.
+
+## 2026-09-21
+
+- Dead Workers AI shim removed from build turns (proven zero-traffic);
+  prompt-injection-safe task passing; staggered team dispatches.
+- `spike-turn.yml` renamed `manual-build-test.yml`; Week-0 gate scripts retired.
+
 ## 2026-09-20
 
 - Observatory `?kiosk` query hides nav/context/footer for OBS capture.

@@ -133,16 +133,13 @@ orchestrator that cron + queue already provide.
 
 ## 4. Inference alternatives (any stack above can use these)
 
-- **Pay-as-you-go APIs:** Groq Developer (~10× free limits, Batch −50%:
-  `console.groq.com/docs/*`); Together ($0.05–9/1M, $5 signup credit:
-  `together.ai/pricing`); Cerebras (trial $5/30d, then $0.10–1.20/1M:
-  `cerebras.ai/pricing`, `inference-docs.cerebras.ai/support/rate-limits`);
-  OpenRouter gateway (26 free models at 20 RPM/200/day + 5.5% fee:
-  `openrouter.ai/pricing`); HuggingFace Serverless (few-hundred req/hr,
-  <10B params: `huggingface.co/pricing`); Mistral La Plateforme
-  (Small/Nemo free tier, Large $2/$6: `mistral.ai/pricing`). Full 2026
-  comparison with worked Arena costs: `docs/AI_BUDGET_RESEARCH_2026-08-31.md`,
-  `docs/AI_PROVIDERS_DEEP_DIVE_2026-08-31.md`.
+Prices rot fast — the list below names options only. Worked per-model
+prices with Arena-scale math live in
+`docs/AI_BUDGET_RESEARCH_2026-08-31.md` (§2 tables, §4.D, §9); re-check
+provider pages before budgeting.
+
+- **Pay-as-you-go APIs:** Groq Developer, Together, Cerebras, OpenRouter
+  gateway, HuggingFace Serverless, Mistral La Plateforme.
 - **Self-hosted:** Ollama 8B ≈ 5–8 GB (fits 8–12 GB VRAM/RAM), 70B ≈ 43 GB
   disk → 48 GB+ VRAM (`ollama.com/library/llama3.1`, `docs.ollama.com/gpu`);
   vLLM needs NVIDIA 7.5+ compute, 2+N cores (`docs.vllm.ai`); rentals —

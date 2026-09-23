@@ -22,11 +22,12 @@ export CF_API_TOKEN=...
 node inference_pool_probe.js
 ```
 
-Writes `inference_pool_results.json`. Check it with:
-
-```bash
-python3 ../scripts/check_inference_gate.py
-```
+Writes `inference_pool_results.json`. Gate checks have moved on since:
+`scripts/check_*_gate.py` were retired 2026-09-20 (superseded by
+`/headroom`, CI, and `reconcileBuildTurns`). Current equivalents: Groq
+headroom via `GET /headroom`, build-turn health via the `build-turn-*`
+artifacts and `Enforce real build output` in
+`.github/workflows/team-build-turn.yml`.
 
 **Go/no-go:** Groq must succeed on judging and architecture prompts — it's the
 primary tier. Workers AI failing is worth investigating (it's real fallback
@@ -43,13 +44,12 @@ gh workflow run team-build-turn.yml \
   -f task_prompt="Add a simple health check endpoint that returns 200 OK"
 ```
 
-Then check the result:
-
-```bash
-export GITHUB_TOKEN=...    # needs actions:read
-export GITHUB_REPO=owner/repo
-python3 ../scripts/check_build_pipeline_gate.py
-```
+Then check the result in the Actions run log (the `Enforce real build
+output` step is the gate now — `scripts/check_build_pipeline_gate.py`
+was retired with the other gate scripts 2026-09-20). For harness
+experiments, prefer `.github/workflows/manual-build-test.yml`
+(`gh workflow run manual-build-test.yml -f turn_id=...`), which
+dispatches one turn without touching a live event.
 
 **Go/no-go:** the workflow needs to complete successfully at least once before
 Week 4 (Build System) starts. First-run failures are almost always branch

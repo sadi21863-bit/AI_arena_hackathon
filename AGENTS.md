@@ -10,9 +10,9 @@ Read this file at the start of every session. Full design: `The_Arena_Specificat
 
 ## Active guardrails
 
-- Network is default-deny in build turns (spec §7). Phase A runs through Squid allowlist (`registry.npmjs.org`, `pypi`, `opencode.ai` — `.github/workflows/team-build-turn.yml:135`) + `DOCKER-USER DROP 80/443` (`:146-147`); no Cloudflare credentials exist anywhere in the job since the Workers AI shim was removed 2026-09-21. Verification is always `--network=none`. Expand the allowlist only per-domain with a written reason; never move agent work into verify.
-- Agent driver is baked at image build time (`docker/Dockerfile.arena-team-base:32,55,110`, `docker/opencode.json:3` `skills.paths`). If you change model/provider, update the Dockerfile comment and the workflow model flag together.
-- Baked skills: `docker/skills/` (7). Per-team skills: `.arena/skills/` (turn prompt in `src/events/executor.ts:663` tells the agent to read them). New skill collections (e.g. scientific skills) land as a curated subset via `docker/skills` or `.arena/skills` — never the full 163; most need network the sandbox denies.
+- Network is default-deny in build turns (spec §7). Phase A runs through Squid allowlist (`registry.npmjs.org`, `pypi`, `opencode.ai` — `.github/workflows/team-build-turn.yml:132`) + `DOCKER-USER DROP 80/443` (`:143-144`); no Cloudflare credentials exist anywhere in the job since the Workers AI shim was removed 2026-09-21. Verification is always `--network=none`. Expand the allowlist only per-domain with a written reason; never move agent work into verify.
+- Agent driver is baked at image build time (`docker/Dockerfile.arena-team-base`, `docker/opencode.json:3` `skills.paths`). If you change model/provider, update the Dockerfile comment and the workflow model flag together.
+- Baked skills: `docker/skills/` (8). Per-team skills: `.arena/skills/` (turn prompt in `src/events/executor.ts` tells the agent to read them). New skill collections (e.g. scientific skills) land as a curated subset via `docker/skills` or `.arena/skills` — never the full 163; most need network the sandbox denies.
 - Inference is two providers only (`src/router.ts:36-91` `TASK_MODELS`/`DAILY_CAPS`: Groq primary, Workers AI fallback). No third provider, no VM (spec §2) without explicit user approval.
 - `/admin/*` routes require bearer-token check (spec §7.1, `src/index.ts:1047-1163`).
 - Never ship a guessed number as measured (`src/router.ts:201`, `src/agents/memory.ts:36`). Say when a value is replaced by a real measurement.
@@ -21,4 +21,4 @@ Read this file at the start of every session. Full design: `The_Arena_Specificat
 ## Pointers
 
 - Routing/caps: `src/router.ts:36-91,212-228`. Queue/scheduler: `src/events/scheduler.ts:104,779,977`. Judging: `src/judges/scoring.ts`, `src/judges/calibration.ts:135`. Builds: `src/events/build-turns.ts:92,256,322`, `.github/workflows/team-build-turn.yml`. Research: `src/agents/research.ts:21-53`. Dedupe: `src/agents/interactions.ts:55` (0.90 intra-agent).
-- Ops: `npx tsc --noEmit`, `npx wrangler deploy`, `npx wrangler d1 execute arena-db --remote --command "..."`. Budget research: `docs/AI_BUDGET_RESEARCH_2026-08-31.md`, `docs/AI_PROVIDERS_DEEP_DIVE_2026-08-31.md`.
+- Ops: `npx tsc --noEmit`, `npx wrangler deploy`, `npx wrangler d1 execute arena-db --remote --command "..."`. Budget research: `docs/AI_BUDGET_RESEARCH_2026-08-31.md` (the providers deep-dive was folded into its §9). Incident record: `docs/INCIDENT_2026-09-23_HARNESS.md` (prompt injection, key pinning/failover, harness bugs found by test turns).

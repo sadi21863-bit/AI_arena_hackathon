@@ -21,7 +21,7 @@ there is no penalty, and there is no credit for legitimate evolution.
 | **R1 Quota** | Each agent submits 3 ideas; **max 1 may derive from prior work**, 2 must be fresh. | Sim S2: violations → 0 wins when quota present. |
 | **R2 Base material legal** | Reuse of base material (spec, judging rubric, prompts) is legal evolution, **credited** — not policed. | User decision; kept intact through all iterations. |
 | **R3 Detection bands** | measured cosine sim: fresh `<0.80` · evolution `0.80–0.90` · violation `>0.90` · hard `≥0.95`. | Band edges live between `DUPLICATE_SIMILARITY_THRESHOLD` (0.90) and observed legit-overlap distributions. |
-| **R4 Ladder** | violation: −2.0 (first) / −3.0 (repeat) + 1 strike; hard (`≥0.95`): excluded + 2 strikes; **3 strikes = lose privilege** (suspension); decay −1 per clean arena (redemption path). **Strikes only fire at measured `≥0.92`** — the `0.90–0.92` zone is *marginal*: −0.5, no strike (v3.1 amendment, see §8.5). | S4/S5: repeat offenders and decay-riding cyclers both win 0.0%; privilege loss stays ~0.74/arena — agents recover. v3.1: false accusations 20.7% → 5.3%, best-legal advance +9.8pp. |
+| **R4 Ladder** | violation: −2.0 (first) / −3.0 (repeat) + 1 strike; hard (`≥0.95`): excluded + 2 strikes; **3 strikes = lose privilege** (suspension); decay −1 per clean arena (redemption path). **Strikes only fire at measured `≥0.92`** — the `0.90–0.92` zone is *marginal*: −0.5, no strike (v3.1 amendment, see §8). | S4/S5: repeat offenders and decay-riding cyclers both win 0.0%; privilege loss stays ~0.74/arena — agents recover. v3.1: false accusations 20.7% → 5.3%, best-legal advance +9.8pp. |
 | **R5 Evolution credit** | +0.05 score bonus for credited evolution. | Calibrated from 0.25 after v1 measured it hijacking 70% of wins; at 0.05 the evolution lane wins ~its submission share. |
 | **R6 Convergence (new v3)** | Same-arena idea with sim `≥0.90` to an **earlier submission** → class `dup`, −1.0, **no strike**; first submission keeps priority. | EchoPlex world (×5 convergent agents in one arena): without R6 violations went 100% of arenas; with R6 → 0.0%, ties at top collapse 3.05 → 1.61. |
 | **R8 Tie-break (new v3)** | Exact ties at top: lower sim → fewer strikes → earlier submission. Runoff ties are **inconclusive → changes nothing** (spec N-3). | Coin flips 79.6/100 → 0.0; winner-share 13.8% → 8.7% (theoretical uniform = 8.3%). |
@@ -88,7 +88,7 @@ already on all ideas).
 4. Whether agents actually cite "builds on X" (R2's credit path) once the
    conduct layer is visible to them.
 
-## 8. Whole-arena results (arena_full_sim.js — added 2026-08-13)
+## 7. Whole-arena results (arena_full_sim.js — added 2026-08-13)
 
 Full lifecycle sim: ideation → conduct → judging → advancement → 2 teams ×
 4 build turns → hackathon judging → winner (200 arenas per scenario, truth
@@ -133,7 +133,7 @@ Whole-arena insights the partial sims could not produce:
    first-movers more; the current value trades that away for "best-polished
    copy wins".
 
-## 9. Research gaps closed (added 2026-08-13)
+## 8. Research gaps closed (added 2026-08-13)
 
 Two further sims covered what the scenario sims assumed away: measurement
 error in detection, parameter robustness (flat vs knife-edge), adaptive
@@ -180,7 +180,7 @@ outlier judge) — bounded by judges_sim's panel result (1 judge ≈ 41% winner-
 hit vs 69.5% at 7), inference-cost per arena (266 calls), and live
 re-calibration of the bands on real Week-8 sim values.
 
-## 10. Reproduce
+## 9. Reproduce
 
 ```bash
 node scripts/conduct_sim.js             # R1-R8 behavior sim (S1-S7, ~3 min)
@@ -189,3 +189,33 @@ node scripts/arena_full_sim.js          # whole-arena lifecycle sim (A1-A6+, ~30
 node scripts/conduct_robustness_sim.js  # detection error + parameter sweeps (~30 s)
 node scripts/arena_longitudinal_sim.js  # adaptive agents across arenas (~30 s)
 ```
+
+## 10. Head-to-head: existing vs conduct v3.1 (folded in from `ARCHITECTURE_COMPARISON.md`, 2026-09-23)
+
+Existing = live system (7-judge parallel scoring, 0.90 distinctness filter,
+N-3 runoff, no conduct layer, no tie-break, no calibration). New = same
+machinery + R1–R8 v3.1. Whole-arena sims, 200 arenas/scenario.
+
+| Metric | Existing | New (v3.1) |
+|---|---|---|
+| Derivative ideas → hackathon | 22.0% | **1.0%** (v3.1 marginal-zone residual) |
+| Violating ideas → hackathon | ~10–20% | **0.0%** |
+| Winner = best legal idea | 83.0% | **79.5%** (the ~3.5pp integrity tax — pool size, not ranking; advancement of best-legal unchanged at 86–87%) |
+| Evolution lane → hackathon | 0.0% | **29.5%** |
+| Top-2 novelty | 0.310 | **0.399** (+29%) |
+| Ties resolved by coin flip | 79.6/100 | **0.0** (R8) |
+| Winner concentration | 13.0% | 14.0% (+1.0pp) |
+| Violation share, arena 1 → 20 | 25% → 16–36% | 25% → **5–6%** (self-cleaning) |
+| LLM calls per arena | 266 | **266** (classification reuses existing embeddings — zero new calls) |
+
+New schema if implemented: 4 columns (`recycle_sim`, `class`, `of`,
+`agent_conduct`) + strikes on agents; ~1 classification hook, penalty at
+scoring, ledger at executor, exclusion at team formation.
+
+Deliberately unchanged: individual parallel judging (deliberation buys
+≤0.4pp at 2× cost; panel consensus is −28pp), persona weights (+1.9pp),
+0.90 filter, N-3 runoff, N-1 merge bonus, two-provider pool, no-VM.
+
+Verdict: ~3.5pp of raw winner accuracy buys zero derivative wins, zero tie
+chaos, a self-cleaning pool, and a healthy evolution lane. Biggest remaining
+end-to-end lever is the build pipeline, not judging.

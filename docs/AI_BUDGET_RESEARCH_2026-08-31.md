@@ -5,6 +5,13 @@
 **Author:** Muse Spark (research synthesis; all external claims cite primary sources inline)
 **Scope:** Groq + Cloudflare Workers AI (the two pooled providers in `src/router.ts`) and Tavily search; alternatives are evaluated but flagged against the spec constraint
 
+> **Status note (2026-09-23):** the limits/pricing research below stands;
+> the *code refs* are dated 2026-08-31. Since then: judging moved
+> `qwen3.6-27b` → `qwen3.8-27b` (2026-09-17), the Workers AI build shim was
+> removed (builds run on OpenCode Zen, 2026-09-21), and the
+> `scripts/check_*_gate.py` checkers were retired. §9 folds in the companion
+> `AI_PROVIDERS_DEEP_DIVE_2026-08-31.md` (file removed, content preserved).
+
 ---
 
 ## 0. How this doc was built
@@ -407,3 +414,32 @@ Ordered by load-bearing claim. A claim without a source below is either this rep
 ---
 
 *Generated for `C:\Users\aditya\Desktop\AI_arena_hackathon_project\AI_arena_hackathon` — read `src/router.ts:70` before changing `DAILY_CAPS`, read `CLAUDE.md:68` before adding a provider, and read `docs/INVESTIGATION_2026-07-28.md:359-366` before changing the 0.90 similarity threshold. No files besides this one were modified.*
+
+---
+
+## 9. New-provider evaluation (folded in from `AI_PROVIDERS_DEEP_DIVE_2026-08-31.md`, 2026-09-23)
+
+The companion deep-dive's §1 tables duplicated §2 above row-for-row and are
+not repeated here. Preserved: its new-provider evaluations and the workload
+comparison, since §4.D covers only Cerebras/Together/OpenRouter/HF in brief.
+
+**Cerebras — reconcile before use.** This doc's §4.D cites the rate-limits
+page for a 1M-tokens/day free tier (5 RPM, 30K TPM, 8K context cap); the
+deep-dive's FAQ reading says no permanent free tier — $5 trial credits
+expiring 30 days after grant, API stops until purchase. Both were true of
+different page sections on 2026-08-31. Cerebras rotates these terms;
+re-check `inference-docs.cerebras.ai/support/rate-limits` before budgeting.
+
+| Provider | Free | Paid | Fit for 252 judge calls × 870 tok |
+|---|---|---|---|
+| **Together AI** | $5 signup credits, no refill | $0.05–$9.00/1M, Batch −50% | Best catalog (200+); not free-forever |
+| **Hugging Face Serverless** | few-hundred req/hr, <10B params | PRO $9/mo | 70B judging gated; cold starts break batch windows |
+| **OpenRouter** | 26 `:free` models, 20 RPM / 200 req/day | 355+ models, 5.5% fee | 200/day ≈ 0.8 events; free set rotates — not a pin target |
+| **Mistral La Plateforme** | Small/Nemo rate-limited free | Large $2/$6 per 1M | Free too thin for 252 judges |
+| **Cohere / AI21 / Anyscale** | trial credits only | $0.15–$15/1M etc. | Trials, not tiers |
+| **Brave Search** (search, not inference) | 2,000 queries/mo free | $3/1K | +67% search pool vs Tavily, snippet-only — see §4.F |
+
+Workload comparison (219K tokens/event): Groq Free ≈ 0.9 events (TPD-bound);
+Workers Free ≈ 0.4–0.9 events as fallback; Cerebras trial ≈ 4.5 events then
+stop; Together credits ≈ ~10 events one-time; OpenRouter free ≈ 0.8 events.
+Recommendation unchanged (§5): Groq Developer + Workers Paid $5.

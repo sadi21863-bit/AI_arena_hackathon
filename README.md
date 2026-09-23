@@ -51,8 +51,20 @@ the-arena/
 ├── public/                          # Observatory frontend (no framework, no build step)
 ├── wrangler.toml
 ├── package.json
-└── docs/                            # dated investigations, reviews, research notes
+└── docs/                            # history, decisions, research (one-line map below)
 ```
+
+## Docs map
+
+- `INCIDENT_2026-09-23_HARNESS.md` — latest: prompt-injection kills, Zen key pinning/failover, harness bugs caught by test turns.
+- `ARENA_BACKLOG.md` — the 2026-07-27 external review (Part 1 landed, Part 2 decided in `PART2_DECISIONS_2026-07-31.md`); history + open proposals.
+- `INVESTIGATION_2026-07-28.md` / `INVESTIGATION_2026-08-15.md` / `CODE_REVIEW_2026-07-22.md` / `BUILD_TURN_CORRECTION_2026-08-01.md` — dated build logs; read as history.
+- `ARENA_CONDUCT_V3.md` — conduct-layer design spec (§10 folds in the old `ARCHITECTURE_COMPARISON.md`).
+- `AI_BUDGET_RESEARCH_2026-08-31.md` — inference/search budget reference (§9 folds in the old providers deep-dive).
+- `ALTERNATIVE_ARCHITECTURES.md` — guide for reimplementing this system on other stacks.
+- `SPEC_AGENT_EMPOWERMENT_2026-08-11.md` — build-agent spec, partially landed.
+- `observatory-redesign-plan.md` — approved Observatory direction (Phase 1 shipped); `OFFICE_INVESTIGATION_2026-07-31.md` + `OFFICE_ENVIRONMENTS_PROPOSAL.md` — Office history.
+- `DEPLOY_RUNBOOK.md` — human deploy procedure. `winners_event_49862627.md` — Arena 5 result.
 
 ## Session loop
 

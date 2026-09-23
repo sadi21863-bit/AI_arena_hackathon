@@ -91,7 +91,7 @@ and fixed without touching a live event.
 |-----|------|--------|---------|
 | 35877812285 → turn 35877839705 | manual-verify-001 | Phase A failed (`-e: command not found`) | env fix PROVEN (poison intact, unexecuted); caught Bug A |
 | 35879537840 → turn 35879558683 | manual-verify-002 | Phase A ok, agent ran, `503 Nvidia overloaded`, Enforce failed by design | chain fix PROVEN; caught Bug B (empty key) |
-| 35880753792 → turn TBD | manual-verify-003 | PENDING at time of writing | decides: env fix + chain fix + real-key auth, full pass = agent runs tsc, Enforce fails by design |
+| 35880753792 → turn 35880770336 | manual-verify-003 | **FULL PASS of the harness**: attempt 1 on key 1 hit the Nvidia 503 storm → **failover fired live** (`Pinned pool errored — failing over`) → attempt 2 on key 2 ran (same storm, common-mode, also 503) → Enforce/install/verify all green → commit step failed only pushing to a remote that had moved mid-run (test artifact of running on the live management repo, not a harness bug; work preserved in the uploaded artifact) | env fix + chain fix + real-key auth + live failover ALL proven in one run |
 
 Expected shape of a passing verification: Phase A success, agent executes
 the prompted `tsc --noEmit`, Enforce fails (read-only prompt → no changes
@@ -111,7 +111,10 @@ by design). The verdict comes from logs, not the conclusion.
 - qwen3.8 production calibration debut — next ideathon.
 - Winners ritual — when the current event completes.
 - Zen-429 pause — no qualifying signal.
-- Live failover observation — only observable during a real pool outage.
+- Live failover — OBSERVED in test 003 (fired on the Nvidia 503 storm;
+  both pools hit the same common-mode outage, so the retry also 503'd —
+  correct behavior: per-account quota deaths, the case it guards, are
+  independent, not common-mode).
 - Dropped permanently: kaushikb11 (fork deleted by owner), Python install.
 
 ## Commits (main repo, all pushed)

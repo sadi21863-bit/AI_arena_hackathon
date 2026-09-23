@@ -1,6 +1,11 @@
 # The Arena Observatory — Full Redesign Plan
 
-Status: approved direction, pre-build. Scope: whole observatory (shell, nav, and all instruments). Constraints honored: functionality, routes, APIs, dark mode, and the `--arena-*` token palette are preserved; only presentation is replaced, view by view, incrementally shippable. Product truth: `PRODUCT.md`.
+Status: approved direction, partially building. Scope: whole observatory (shell, nav, and all instruments). Constraints honored: functionality, routes, APIs, dark mode, and the `--arena-*` token palette are preserved; only presentation is replaced, view by view, incrementally shippable. Product truth: `PRODUCT.md`.
+
+> **Status note (2026-09-23):** Phase 1 (context bar) shipped —
+> `public/js/core/arena-context.js` + `arena-strip.js` are live on all
+> instruments. Phases 2–5 below remain pre-build; the phasing table is the
+> current plan.
 
 Critique baseline: 24/40 (snapshot in `.impeccable/critique/`). Target: ≥32/40 on re-critique, zero detector findings, WCAG AA, 44px targets.
 

@@ -2,7 +2,7 @@
  * Code of Conduct v3.1 — classification (docs/ARENA_CONDUCT_V3.md).
  *
  * Production implementation of the sim-validated ruleset (scripts/conduct_sim.js,
- * arena_longitudinal_sim.js; evidence in docs/ARCHITECTURE_COMPARISON.md §4-5).
+ * arena_longitudinal_sim.js; evidence in docs/ARENA_CONDUCT_V3.md §8-10).
  * Runs once per idea, inside postIdea (agents/interactions.ts), BEFORE the idea
  * row exists — so "earlier submissions" naturally means "everything already in
  * the event", which is exactly the first-submission priority R6 relies on.

@@ -1,9 +1,13 @@
 # Agent Office — room size, per-stage environments, team split
 
-Design proposal. Nothing built. Follows `docs/OFFICE_INVESTIGATION_2026-07-31.md`
-(P1–P3 shipped) and covers three asks: the room is too small for twelve agents,
-each Arena stage should have its own environment, and agents should split up
-with their team once teams form.
+> **Status note (2026-09-23):** design landed — the per-phase environments,
+> character-scaling fix, and room-crowding work below shipped (see the
+> 2026-08-01 banner in `docs/OFFICE_INVESTIGATION_2026-07-31.md`). Retained
+> as design history; read the shipped code, not this file, for current
+> behavior. Follows `docs/OFFICE_INVESTIGATION_2026-07-31.md`
+> (P1–P3 shipped) and covers three asks: the room is too small for twelve
+> agents, each Arena stage should have its own environment, and agents
+> should split up with their team once teams form.
 
 ---
 
