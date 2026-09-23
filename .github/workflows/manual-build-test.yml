@@ -33,6 +33,10 @@ on:
           green repo the turn should fail the real-output gate, which
           itself proves the gate works. Follow the standard build-turn
           discipline: plan, implement, self-verify, then commit.
+      model:
+        description: "Model override for the test turn (empty = workflow default)"
+        required: false
+        default: ""
 
 concurrency:
   group: manual-build-test-${{ inputs.turn_id || 'manual-test-001' }}
@@ -57,6 +61,7 @@ jobs:
         env:
           TASK_PROMPT: ${{ inputs.task_prompt }}
           TURN_ID: ${{ inputs.turn_id || 'manual-test-001' }}
+          MODEL: ${{ inputs.model }}
         run: |
           set -euo pipefail
           API="https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/v1/chat/completions"
@@ -71,8 +76,8 @@ jobs:
             # (found live 2026-07-21: hardcoded master 422s on team repos).
             REF=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" -H 'Accept: application/vnd.github+json' \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}" | jq -r .default_branch)
-            payload=$(jq -n --arg ref "$REF" --arg turn "$TURN_ID" --arg prompt "$TASK_PROMPT" \
-              '{ref:$ref, inputs:{team:"alpha", turn_id:$turn, task_prompt:$prompt}}')
+            payload=$(jq -n --arg ref "$REF" --arg turn "$TURN_ID" --arg prompt "$TASK_PROMPT" --arg model "$MODEL" \
+              '{ref:$ref, inputs:{team:"alpha", turn_id:$turn, task_prompt:$prompt, model:$model}}')
             curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
               -H "Authorization: Bearer ${GITHUB_TOKEN}" \
               -H 'Accept: application/vnd.github+json' \
