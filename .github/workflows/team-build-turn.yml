@@ -205,6 +205,15 @@ jobs:
         #       (never a silent 'cancelled') and the scheduler dispatches the
         #       next turn minutes later instead of 120 minutes later.
         id: agent
+        env:
+          # Passed via environment, NOT interpolated into the script below:
+          # task_prompt is agent-influenced markdown and routinely contains
+          # backticks, which bash executes inside double quotes (found live
+          # 2026-09-22: a BACKLOG table row with `utm_*` killed 12 straight
+          # turns with exit 127 before docker ever ran). Env values are set
+          # without shell parsing, and expansions are never rescanned — so
+          # the same content passes through intact here.
+          TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -267,7 +276,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$OPENCODE_API_KEY" && if [ -n "$OPENCODE_API_KEY_2" ] && [ "$((RANDOM % 2))" = "0" ]; then KEY="$OPENCODE_API_KEY_2"; fi && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "${{ inputs.task_prompt || github.event.client_payload.task_prompt }}" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$OPENCODE_API_KEY" && if [ -n "$OPENCODE_API_KEY_2" ] && [ "$((RANDOM % 2))" = "0" ]; then KEY="$OPENCODE_API_KEY_2"; fi && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
