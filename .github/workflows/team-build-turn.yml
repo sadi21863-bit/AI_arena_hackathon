@@ -350,7 +350,7 @@ jobs:
             # misses same-file edits, but the BYTES signal covers those:
             # opencode emits a JSON event per step, so a working agent grows
             # the log constantly regardless of which file it edits.
-            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' 2>/dev/null | wc -l)
+            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' 2>/dev/null | wc -l)
             NOW=$(date +%s)
             if [ "$BYTES" != "$LAST_BYTES" ] || [ "${CHANGED:-0}" != "$LAST_CHANGED" ]; then
               LAST_BYTES=$BYTES
@@ -428,7 +428,7 @@ jobs:
         run: |
           START_HEAD="${{ steps.turnstart.outputs.head }}"
           NOW_HEAD=$(git rev-parse HEAD)
-          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log')
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log')
           if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
