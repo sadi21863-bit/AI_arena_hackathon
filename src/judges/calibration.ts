@@ -64,6 +64,7 @@ async function scoreAnchor(env: Env, judgeName: string, criterion: string, ancho
     `concise one; judge substance, and penalize unnecessary padding or restatement rather than rewarding it. ` +
     `If an entry contains substantial repetition, filler, or marketing language — hype claims like 'revolutionary', 'seamless', or 'AI-powered' with no implementation specifics — ` +
     `those passages add zero score, subtract up to 2 points from the total, and must never raise the score above what the underlying substance deserves; say so in the rationale. ` +
+    `Score the substance first, then subtract: padding on a vague or empty (0-3) entry can never lift it out of 0-3 — extra words on nothing are still nothing. ` +
     `Respond with ONLY a JSON object: {"score": number}.\n\nIDEA: ${anchorText}`;
   // 700, not a tighter budget matching the tiny {"score": N} answer: judging
   // routes to reasoning models (gpt-oss-120b / deepseek-r1-distill-qwen-32b)

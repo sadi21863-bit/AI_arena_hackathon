@@ -404,7 +404,7 @@ export async function mount(el, params) {
             <i style="background:${TYPES[t].color}"></i>${t.replace(/_/g, " ")}
             <span class="v-arena__chip-count" data-count="${t}">${counts.get(t) || "—"}</span>
           </button>`)}
-        <span class="v-arena__count">${agentIds.length} agents · ${groups.length} communities · ${moments.length} moments</span>
+        <span class="v-arena__count">${agentIds.length} agent${agentIds.length === 1 ? "" : "s"} · ${groups.length} ${groups.length === 1 ? "community" : "communities"} · ${moments.length} moment${moments.length === 1 ? "" : "s"}</span>
       </div>`);
     for (const btn of legendEl.querySelectorAll(".v-arena__chip")) {
       const t = btn.dataset.type;
