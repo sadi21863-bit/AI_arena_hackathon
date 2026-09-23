@@ -214,6 +214,16 @@ jobs:
           # without shell parsing, and expansions are never rescanned — so
           # the same content passes through intact here.
           TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
+          # Same mechanism for the keys, and for a subtler reason: secrets.*
+          # do NOT exist as variables in the runner shell — they only
+          # materialize via ${{ }} substitution. Referencing $OPENCODE_API_KEY
+          # directly in bash silently yields EMPTY (found live 2026-09-23:
+          # test 002 ran its whole turn on an empty key and died on a
+          # misleading Nvidia 503). Only the ACTIVE key is passed into the
+          # container (-e ZEN_ACTIVE_KEY below), so the sandbox never holds
+          # the spare pool's key.
+          ZEN_KEY_1: ${{ secrets.OPENCODE_API_KEY }}
+          ZEN_KEY_2: ${{ secrets.OPENCODE_API_KEY_2 }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -244,17 +254,21 @@ jobs:
           done
 
           # Key selection: pinned pool first, other pool as failover.
-          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$OPENCODE_API_KEY_2" ]; then
-            PRIMARY_KEY="$OPENCODE_API_KEY_2"
-            FALLBACK_KEY="$OPENCODE_API_KEY"
+          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$ZEN_KEY_2" ]; then
+            PRIMARY_KEY="$ZEN_KEY_2"
+            FALLBACK_KEY="$ZEN_KEY_1"
           else
-            PRIMARY_KEY="$OPENCODE_API_KEY"
-            FALLBACK_KEY="$OPENCODE_API_KEY_2"
+            PRIMARY_KEY="$ZEN_KEY_1"
+            FALLBACK_KEY="$ZEN_KEY_2"
           fi
           if [ -z "$PRIMARY_KEY" ] && [ -n "$FALLBACK_KEY" ]; then
             echo "::warning::Pinned pool key is empty — starting on the failover pool"
             PRIMARY_KEY="$FALLBACK_KEY"
             FALLBACK_KEY=""
+          fi
+          if [ -z "$PRIMARY_KEY" ]; then
+            echo "::error::Neither Zen pool key is configured (OPENCODE_API_KEY and OPENCODE_API_KEY_2 are both empty) — refusing to run a turn with no credentials"
+            exit 1
           fi
 
           # One function, up to two calls (pinned attempt, then at most one
@@ -290,8 +304,6 @@ jobs:
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
-            -e OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }} \
-            -e OPENCODE_API_KEY_2=${{ secrets.OPENCODE_API_KEY_2 }} \
             -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
