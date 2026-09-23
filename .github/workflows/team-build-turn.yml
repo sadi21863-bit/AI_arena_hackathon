@@ -357,7 +357,7 @@ jobs:
           echo "--- stderr ---"
           cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
           echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
-          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement" \
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
             opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output
