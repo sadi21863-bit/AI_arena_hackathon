@@ -243,6 +243,26 @@ jobs:
             fi
           done
 
+          # Key selection: pinned pool first, other pool as failover.
+          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$OPENCODE_API_KEY_2" ]; then
+            PRIMARY_KEY="$OPENCODE_API_KEY_2"
+            FALLBACK_KEY="$OPENCODE_API_KEY"
+          else
+            PRIMARY_KEY="$OPENCODE_API_KEY"
+            FALLBACK_KEY="$OPENCODE_API_KEY_2"
+          fi
+          if [ -z "$PRIMARY_KEY" ] && [ -n "$FALLBACK_KEY" ]; then
+            echo "::warning::Pinned pool key is empty — starting on the failover pool"
+            PRIMARY_KEY="$FALLBACK_KEY"
+            FALLBACK_KEY=""
+          fi
+
+          # One function, up to two calls (pinned attempt, then at most one
+          # failover). Body kept at step indent — bash doesn't care, and it
+          # keeps the diff reviewable. Globals (code, TIMED_OUT) are
+          # intentionally NOT local: the failover decision below reads them.
+          run_attempt() {
+            ATTEMPT_KEY="$1"
           # Git identity via env, not `git config`: with .git/config mounted
           # read-only (see RO_MOUNTS above), `git config user.name` would
           # fail with "could not lock config file" and every agent commit
@@ -260,15 +280,17 @@ jobs:
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             # One Zen key per team, pinned by repo name (*alpha* -> key 1,
-            # *beta* -> key 2 when present): deterministic 50/50 split across
-            # the two pools with zero per-turn logic and per-team attribution
-            # (an alpha outage is a key-1 problem, full stop). Deliberately no
-            # cross-pool fallback — a dead pool pauses its team loudly instead
-            # of half-working, and the scheduler just re-dispatches later.
-            # Caveat from Groq: separate pools only if the keys belong to
-            # SEPARATE accounts. Unset _2 behaves exactly like before.
+            # *beta* -> key 2 when present), WITH same-turn failover: if the
+            # pinned pool errors (429/quota/5xx signature in the turn logs)
+            # the attempt's logs are archived and the turn re-runs once on the
+            # other pool. Healthy turns always take exactly one attempt on the
+            # pinned key, so attribution stays clean (alpha outage = key-1
+            # problem) while a dead pool costs one failed attempt, not a dead
+            # team. Caveat from Groq: separate pools only if the keys belong
+            # to SEPARATE accounts. Unset _2 behaves exactly like before.
             -e OPENCODE_API_KEY=${{ secrets.OPENCODE_API_KEY }} \
             -e OPENCODE_API_KEY_2=${{ secrets.OPENCODE_API_KEY_2 }} \
+            -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
@@ -278,7 +300,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$OPENCODE_API_KEY" && if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$OPENCODE_API_KEY_2" ]; then KEY="$OPENCODE_API_KEY_2"; fi && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$ZEN_ACTIVE_KEY" && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
@@ -336,6 +358,24 @@ jobs:
             echo "opencode was killed by the silence watchdog after ${WATCHDOG_SILENCE_MINUTES} min of no activity (exit ${code})"
           else
             echo "opencode exited $code"
+          fi
+          }  # end run_attempt
+
+          # Failover trigger: the attempt died AND the logs carry a provider
+          # signature (quota/429/5xx/dead model). Anything else (essay with
+          # exit 0, backtick-style 127, empty output) retries on the other
+          # pool would be pointless — those fail identically there.
+          provider_error() {
+            grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+              opencode-turn.log opencode-turn.err.log 2>/dev/null
+          }
+
+          run_attempt "$PRIMARY_KEY"
+          if { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ] && provider_error; then
+            echo "::warning::Pinned pool errored (provider signature in logs) — failing over to the other pool for one retry"
+            mv opencode-turn.log opencode-turn.attempt1.log 2>/dev/null || true
+            mv opencode-turn.err.log opencode-turn.attempt1.err.log 2>/dev/null || true
+            run_attempt "$FALLBACK_KEY"
           fi
           exit 0
         # --auto approves OpenCode's own permission prompts (needed since
