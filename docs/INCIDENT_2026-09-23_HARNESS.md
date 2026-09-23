@@ -92,6 +92,10 @@ and fixed without touching a live event.
 | 35877812285 → turn 35877839705 | manual-verify-001 | Phase A failed (`-e: command not found`) | env fix PROVEN (poison intact, unexecuted); caught Bug A |
 | 35879537840 → turn 35879558683 | manual-verify-002 | Phase A ok, agent ran, `503 Nvidia overloaded`, Enforce failed by design | chain fix PROVEN; caught Bug B (empty key) |
 | 35880753792 → turn 35880770336 | manual-verify-003 | **FULL PASS of the harness**: attempt 1 on key 1 hit the Nvidia 503 storm → **failover fired live** (`Pinned pool errored — failing over`) → attempt 2 on key 2 ran (same storm, common-mode, also 503) → Enforce/install/verify all green → commit step failed only pushing to a remote that had moved mid-run (test artifact of running on the live management repo, not a harness bug; work preserved in the uploaded artifact) | env fix + chain fix + real-key auth + live failover ALL proven in one run |
+| 35898572551 → turn 35898593174 | manual-pickle-001 (`opencode/big-pickle`) | **MODEL PASS**: exit 0 in 61s, healthy tool stream; agent hit a bad `tsc` fetch, diagnosed it, ran `npm ci`, re-ran tsc → PASS, reported faithfully | stealth model works end-to-end in the harness; fallback shelf, not pinned (identity swaps, expiring free, training-data terms) |
+| burst 18:30 UTC (8 models) | mimo25/ling ran; 6 others `cancelled` in queue | Burst-dispatching 8 identical workflow_dispatches within ~40s got the queued duplicates mass-cancelled by GitHub (concurrency is `cancel-in-progress: false`, so this is platform spam-protection, not our config). Lesson recorded: stagger manual dispatches ≥3 min; production already staggers per tick. The 6 need sequential re-fire. |
+| 35904323347 → turn 35904337369 | manual-ling-002 | `Unexpected server error` on both pools, twice 10 min apart | inconclusive (storm, see §10) |
+| 35905566366 → turn 35905584392 | manual-nemo3-control (`opencode/nemotron-3-ultra-free`) | Same `503 Nvidia overloaded` on both pools — on the proven production model | **common-mode Zen/Nvidia outage**, not dead models; all 18:30–19:00 model verdicts suspended |
 
 Expected shape of a passing verification: Phase A success, agent executes
 the prompted `tsc --noEmit`, Enforce fails (read-only prompt → no changes
@@ -106,16 +110,32 @@ by design). The verdict comes from logs, not the conclusion.
   one test run.
 
 ## 9. Still open (not actionable today)
-
 - PR inboxes (#1604, #594, #6) — silent; bump e2b ~2 weeks.
 - qwen3.8 production calibration debut — next ideathon.
 - Winners ritual — when the current event completes.
-- Zen-429 pause — no qualifying signal.
+- Zen-429 pause — no qualifying signal (see §10 for the storm that wasn't one).
 - Live failover — OBSERVED in test 003 (fired on the Nvidia 503 storm;
   both pools hit the same common-mode outage, so the retry also 503'd —
   correct behavior: per-account quota deaths, the case it guards, are
   independent, not common-mode).
+- Remaining free-model evals (mimo25/26, ling, nemo35, ms12/13, ds4, jev) —
+  suspended until the §10 storm clears; resume sequentially with the
+  nemotron control first.
 - Dropped permanently: kaushikb11 (fork deleted by owner), Python install.
+
+## 10. Zen outage 18:30–19:00+ UTC (common-mode, not quota)
+
+Nvidia-backed models erroring on BOTH pools simultaneously: `503 Upstream
+error from Nvidia: Service temporarily overloaded` plus generic
+`Unexpected server error`s. Proven common-mode by the nemotron control
+(§7): the proven production model fails identically, so no model verdict
+can be drawn from this window. Failover fires correctly throughout and
+also fails — as designed (it guards per-account quota, not upstream
+outages). Testing paused: further attempts burn turns for zero
+information. This is the exact scenario the dynamic throttle
+(`a9b42be`) exists for — repeated attempts into a common-mode outage all
+fail identically. No 429s observed: this is NOT the Zen-429 watch
+triggering, and issue #8 stays open.
 
 ## Commits (main repo, all pushed)
 
