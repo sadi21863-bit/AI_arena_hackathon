@@ -651,6 +651,28 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       if ((dispatchFailures.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) continue;
       // Still working — let it finish rather than dispatching over the top.
       if (await teamHasOpenTurn(env, team.id)) continue;
+      // Dynamic throttle (2026-09-23): dispatch reads recent turn OUTCOMES,
+      // not just queue state. A turn that fails still counts as a completed
+      // dispatch above, so without this the loop re-dispatches at full speed
+      // into any persistent failure — a 429 storm, a dead model, or a harness
+      // bug (the 12 straight backtick deaths all dispatched 5 min apart).
+      // Rule: if the team's last 2 turns both failed AND the latest was
+      // dispatched <30 min ago, skip this tick; the 5-min cron is the backoff
+      // clock. Older than 30 min, a probe turn goes out — so this slows a
+      // storm to ~1 attempt per half hour per team instead of 12/hour, and a
+      // single success resets everything instantly. Cause-agnostic by design;
+      // MAX_ITEM_ATTEMPTS above remains the only hard stop, so this can delay
+      // but never permanently stall a team.
+      const recentTurns = await env.DB.prepare(
+        `SELECT conclusion, dispatched_at FROM build_turns WHERE team_id = ? ORDER BY dispatched_at DESC LIMIT 2`
+      ).bind(team.id).all<{ conclusion: string | null; dispatched_at: string }>();
+      if (
+        recentTurns.results.length === 2 &&
+        recentTurns.results.every((t) => t.conclusion === "failure") &&
+        Date.now() - Date.parse(recentTurns.results[0].dispatched_at + "Z") < 30 * 60 * 1000
+      ) {
+        continue;
+      }
 
       await enqueue(env, {
         eventId: event.id, taskType: "dispatch_build_turn",
