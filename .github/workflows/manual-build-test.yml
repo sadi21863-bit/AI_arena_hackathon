@@ -67,7 +67,11 @@ jobs:
               -d '{"model":"@cf/openai/gpt-oss-120b","messages":[{"role":"user","content":"ok"}],"max_tokens":3}' || echo 000
           }
           dispatch() { # $1 = workflow file
-            payload=$(jq -n --arg ref master --arg turn "$TURN_ID" --arg prompt "$TASK_PROMPT" \
+            # Team repos default to main, this management repo to master
+            # (found live 2026-07-21: hardcoded master 422s on team repos).
+            REF=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}" | jq -r .default_branch)
+            payload=$(jq -n --arg ref "$REF" --arg turn "$TURN_ID" --arg prompt "$TASK_PROMPT" \
               '{ref:$ref, inputs:{team:"alpha", turn_id:$turn, task_prompt:$prompt}}')
             curl -s -o /dev/null -w '%{http_code}' -m 30 -X POST \
               -H "Authorization: Bearer ${GITHUB_TOKEN}" \
