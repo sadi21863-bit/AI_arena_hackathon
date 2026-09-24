@@ -96,6 +96,7 @@ and fixed without touching a live event.
 | burst 18:30 UTC (8 models) | mimo25/ling ran; 6 others `cancelled` in queue | Burst-dispatching 8 identical workflow_dispatches within ~40s got the queued duplicates mass-cancelled by GitHub (concurrency is `cancel-in-progress: false`, so this is platform spam-protection, not our config). Lesson recorded: stagger manual dispatches ≥3 min; production already staggers per tick. The 6 need sequential re-fire. |
 | 35904323347 → turn 35904337369 | manual-ling-002 | `Unexpected server error` on both pools, twice 10 min apart | inconclusive (storm, see §10) |
 | 35905566366 → turn 35905584392 | manual-nemo3-control (`opencode/nemotron-3-ultra-free`) | Same `503 Nvidia overloaded` on both pools — on the proven production model | **common-mode Zen/Nvidia outage**, not dead models; all 18:30–19:00 model verdicts suspended |
+| 36016328630 → turn 36016343884 | manual-a3-proof (default nemotron) | **FULL 3-ATTEMPT CHAIN LIVE**: A1 exit 1 → pool-failover warning → A2 exit 1 → model-failover warning (`Both pools errored on opencode/nemotron-3-ultra-free — failing over to model opencode/big-pickle`) → **A3 exit 0, full tool stream, tsc executed**; Enforce failed by design | attempt-3 model failover PROVEN during a real outage — the turn that would have died now builds |
 
 Expected shape of a passing verification: Phase A success, agent executes
 the prompted `tsc --noEmit`, Enforce fails (read-only prompt → no changes

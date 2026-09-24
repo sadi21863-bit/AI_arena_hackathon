@@ -3,6 +3,16 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-24
+
+- Attempt-3 model failover: both pools failing the pinned model re-runs
+  the turn once on `opencode/big-pickle` (default, dispatch-overridable).
+  Proven live during the Nvidia outage — the turn that would have died
+  now builds. Big Pickle runs clean through the storm (non-Nvidia
+  upstream); remaining free-model evals stay suspended until it clears.
+- Reverted a test turn's `package.json` churn on the management repo
+  (agent ran `npm install` against a read-only prompt).
+
 ## 2026-09-23
 
 - Build-turn prompt travels via environment, not inline interpolation —
