@@ -129,13 +129,21 @@ Nvidia-backed models erroring on BOTH pools simultaneously: `503 Upstream
 error from Nvidia: Service temporarily overloaded` plus generic
 `Unexpected server error`s. Proven common-mode by the nemotron control
 (§7): the proven production model fails identically, so no model verdict
-can be drawn from this window. Failover fires correctly throughout and
-also fails — as designed (it guards per-account quota, not upstream
-outages). Testing paused: further attempts burn turns for zero
-information. This is the exact scenario the dynamic throttle
-(`a9b42be`) exists for — repeated attempts into a common-mode outage all
-fail identically. No 429s observed: this is NOT the Zen-429 watch
-triggering, and issue #8 stays open.
+can be drawn from this window. Still ongoing 2026-09-24 14:12 UTC (19h+).
+Failover fires correctly throughout and also fails — as designed (it
+guards per-account quota, not upstream outages). Testing paused: further
+attempts burn turns for zero information. This is the exact scenario the
+dynamic throttle (`a9b42be`) exists for — repeated attempts into a
+common-mode outage all fail identically. No 429s observed: this is NOT
+the Zen-429 watch triggering, and issue #8 stays open.
+
+Storm-proof exception: Big Pickle (`manual-pickle-002`, 2026-09-24 14:12
+UTC) runs clean THROUGH the outage — exit 0, ~30 tool calls, full
+autonomous tsc troubleshooting. Non-Nvidia upstream (presumed GLM family)
+is unaffected. Implication: pool failover (accounts) cannot survive
+upstream outages; only MODEL diversity can. Proposed: model-fallback
+dimension (pinned model → big-pickle) as attempt 3 — needs owner approval
+since it changes which model builds production code mid-event.
 
 ## Commits (main repo, all pushed)
 
