@@ -64,9 +64,11 @@ RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" && \
 # by that mount.
 #
 # No custom provider block: the driver model comes from the dispatch (`model`
-# input, default opencode/nemotron-3-ultra-free) authenticated via auth.json,
-# not from config. A `workers-ai` provider block lived here until 2026-09-21
-# and was removed with the shim it served — see team-build-turn.yml.
+# input, default opencode/nemotron-3-ultra-free, with `fallback_model`
+# default opencode/big-pickle as attempt 3 when both pools fail the pinned
+# model) authenticated via auth.json, not from config. A `workers-ai`
+# provider block lived here until 2026-09-21 and was removed with the shim
+# it served — see team-build-turn.yml.
 COPY opencode.json /opt/opencode/config/opencode.json
 ENV OPENCODE_CONFIG=/opt/opencode/config/opencode.json
 

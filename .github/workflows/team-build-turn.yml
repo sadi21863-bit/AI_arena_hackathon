@@ -44,6 +44,11 @@ on:
         required: false
         default: "opencode/nemotron-3-ultra-free"
         type: string
+      fallback_model:
+        description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
+        required: false
+        default: "opencode/big-pickle"
+        type: string
   repository_dispatch:
     types: [team-build-turn]
 
@@ -224,6 +229,15 @@ jobs:
           # the spare pool's key.
           ZEN_KEY_1: ${{ secrets.OPENCODE_API_KEY }}
           ZEN_KEY_2: ${{ secrets.OPENCODE_API_KEY_2 }}
+          # Model ids via env for the same interpolation reason as the prompt
+          # (dispatch-controlled values, never inline). MODEL is the pinned
+          # build model; FALLBACK_MODEL is attempt 3 when both pools fail the
+          # pinned model — upstream-outage survival (proven live 2026-09-24:
+          # big-pickle built clean through a 19h Nvidia outage that killed
+          # nemotron on both pools). Empty/missing falls back to the pinned
+          # model, which disables attempt 3 without touching the logic below.
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'opencode/nemotron-3-ultra-free' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'opencode/big-pickle' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -271,21 +285,24 @@ jobs:
             exit 1
           fi
 
-          # One function, up to two calls (pinned attempt, then at most one
-          # failover). Body kept at step indent — bash doesn't care, and it
-          # keeps the diff reviewable. Globals (code, TIMED_OUT) are
-          # intentionally NOT local: the failover decision below reads them.
+          # One function, up to three calls: pinned attempt, pool failover,
+          # model failover. Body kept at step indent — bash doesn't care, and
+          # it keeps the diff reviewable. Globals (code, TIMED_OUT) are
+          # intentionally NOT local: the failover decisions below read them.
           run_attempt() {
             ATTEMPT_KEY="$1"
+            ATTEMPT_MODEL="$2"
           # One Zen key per team, pinned by repo name (*alpha* -> key 1,
           # *beta* -> key 2 when present), WITH same-turn failover: if the
           # pinned pool errors (429/quota/5xx signature in the turn logs)
           # the attempt's logs are archived and the turn re-runs once on the
-          # other pool. Healthy turns always take exactly one attempt on the
-          # pinned key, so attribution stays clean (alpha outage = key-1
-          # problem) while a dead pool costs one failed attempt, not a dead
-          # team. Kept ABOVE `docker run`: comment lines inside the -e chain
-          # break it (`-e: command not found`, found live 2026-09-23).
+          # other pool, then once more on FALLBACK_MODEL (different upstream —
+          # survives upstream outages that kill both pools identically).
+          # Healthy turns always take exactly one attempt on the pinned
+          # key+model, so attribution stays clean while a dead pool costs one
+          # failed attempt, not a dead team. Kept ABOVE `docker run`: comment
+          # lines inside the -e chain break it (`-e: command not found`,
+          # found live 2026-09-23).
           # Caveat from Groq: separate pools only if the keys belong to
           # SEPARATE accounts. Unset _2 behaves exactly like before.
           # Git identity via env, not `git config`: with .git/config mounted
@@ -305,6 +322,7 @@ jobs:
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
+            -e ZEN_MODEL="$ATTEMPT_MODEL" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
@@ -314,7 +332,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$ZEN_ACTIVE_KEY" && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "${{ github.event.inputs.model || 'opencode/nemotron-3-ultra-free' }}" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$ZEN_ACTIVE_KEY" && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$ZEN_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
@@ -350,7 +368,7 @@ jobs:
             # misses same-file edits, but the BYTES signal covers those:
             # opencode emits a JSON event per step, so a working agent grows
             # the log constantly regardless of which file it edits.
-            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' 2>/dev/null | wc -l)
+            CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' 2>/dev/null | wc -l)
             NOW=$(date +%s)
             if [ "$BYTES" != "$LAST_BYTES" ] || [ "${CHANGED:-0}" != "$LAST_CHANGED" ]; then
               LAST_BYTES=$BYTES
@@ -375,21 +393,34 @@ jobs:
           fi
           }  # end run_attempt
 
-          # Failover trigger: the attempt died AND the logs carry a provider
+          # Failover triggers: the attempt died AND the logs carry a provider
           # signature (quota/429/5xx/dead model). Anything else (essay with
-          # exit 0, backtick-style 127, empty output) retries on the other
-          # pool would be pointless — those fail identically there.
+          # exit 0, backtick-style 127, empty output) retries elsewhere would
+          # be pointless — those fail identically there. Attempt 2 switches
+          # POOL (same model, per-account quota); attempt 3 switches MODEL
+          # (different upstream — survives upstream outages that kill both
+          # pools identically). Attempt 3 is skipped when FALLBACK_MODEL
+          # equals MODEL (same model twice would be a pointless re-run).
           provider_error() {
             grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
+          attempt_failed() {
+            { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
+          }
 
-          run_attempt "$PRIMARY_KEY"
-          if { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ] && provider_error; then
+          run_attempt "$PRIMARY_KEY" "$MODEL"
+          if attempt_failed && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ]; then
             echo "::warning::Pinned pool errored (provider signature in logs) — failing over to the other pool for one retry"
             mv opencode-turn.log opencode-turn.attempt1.log 2>/dev/null || true
             mv opencode-turn.err.log opencode-turn.attempt1.err.log 2>/dev/null || true
-            run_attempt "$FALLBACK_KEY"
+            run_attempt "$FALLBACK_KEY" "$MODEL"
+            if attempt_failed && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$MODEL" ]; then
+              echo "::warning::Both pools errored on $MODEL (provider signature in logs) — failing over to model $FALLBACK_MODEL for one retry"
+              mv opencode-turn.log opencode-turn.attempt2.log 2>/dev/null || true
+              mv opencode-turn.err.log opencode-turn.attempt2.err.log 2>/dev/null || true
+              run_attempt "$PRIMARY_KEY" "$FALLBACK_MODEL"
+            fi
           fi
           exit 0
         # --auto approves OpenCode's own permission prompts (needed since
@@ -428,7 +459,7 @@ jobs:
         run: |
           START_HEAD="${{ steps.turnstart.outputs.head }}"
           NOW_HEAD=$(git rev-parse HEAD)
-          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log')
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log')
           if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
