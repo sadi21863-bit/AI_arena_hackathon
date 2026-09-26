@@ -103,11 +103,18 @@ export async function postIdea(env: Env, input: PostIdeaInput): Promise<string> 
          (id, event_id, agent_id, title, one_liner, problem, solution, target_user, build_scope, research_anchor, estimated_build_time, queue_item_id, status, created_at, recycle_sim, recycle_class, recycle_of, conduct_penalty)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)`
     ).bind(
-      id, input.eventId, input.agentId, input.title, input.oneLiner, input.problem,
-      input.solution, input.targetUser, input.buildScope, input.researchAnchor ?? null,
+      id, input.eventId, input.agentId,
+      // Agent-supplied strings coalesced to NULL (found live 2026-09-25: one
+      // submit died with D1_TYPE_ERROR on an undefined field — an opaque
+      // driver error for what is simply a malformed agent JSON. NULL either
+      // lands cleanly or fails honestly on the column constraint, and the
+      // queue retry lets the agent resubmit well-formed).
+      input.title ?? null, input.oneLiner ?? null, input.problem ?? null,
+      input.solution ?? null, input.targetUser ?? null, input.buildScope ?? null,
+      input.researchAnchor ?? null,
       input.estimatedBuildTime ?? null, input.queueItemId ?? null,
       verdict.blocked ? 'blocked' : 'submitted',
-      verdict.sim, verdict.cls, verdict.of, verdict.penalty
+      verdict.sim, verdict.cls, verdict.of ?? null, verdict.penalty
     ),
     env.DB.prepare(
       `UPDATE archive_agents SET total_ideas_submitted = total_ideas_submitted + 1 WHERE id = ?`
