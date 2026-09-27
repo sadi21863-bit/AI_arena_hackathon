@@ -149,6 +149,7 @@ const SKILL_PATHS = [
   "docker/skills/test-driven-development/SKILL.md",
   "docker/skills/ui-verify/SKILL.md",
   "docker/skills/verification-before-completion/SKILL.md",
+  "docker/skills/verification-loop/SKILL.md",
 ] as const;
 
 const HARNESS_FILES = [

@@ -30,9 +30,10 @@ not clobber files; run them sequentially, not in parallel.
    function signatures, files the tests expect but that don't exist. No
    writing in this role — findings only.
 4. **VERIFY (you).** Fix review findings, then run the repo's checks
-   (npm test / npx tsc --noEmit / pytest) yourself. If the product has a UI,
-   browser-verify with the ui-verify skill — that is director's work, not a
-   subagent's.
+   (npm test / npx tsc --noEmit / pytest) yourself — follow the
+   `verification-loop` skill and write `VERIFICATION_REPORT.md` as its
+   single artifact. If the product has a UI, browser-verify with the
+   ui-verify skill — that is director's work, not a subagent's.
 5. **ASSEMBLE.** Ensure the working tree is coherent and the backlog is
    updated. Do not commit — the harness stages and commits your work at the
    end of the turn (workflow "Commit progress" step).

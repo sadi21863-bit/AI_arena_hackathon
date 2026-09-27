@@ -3,6 +3,17 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-26
+
+- Adopted three discipline patterns from `affaan-m/ECC` (MIT): the
+  `verification-loop` skill (6-phase ladder → `VERIFICATION_REPORT.md`,
+  wired into both build-turn prompts and the team skill), a TDD evidence
+  report (RED/GREEN/suite counts in the turn message) plus
+  untrusted-plan rules in the TDD and scaffold skills, and a browser
+  flake-triage table in `ui-verify`.
+- `postIdea` coalesces agent-supplied fields to NULL (one submit died with
+  an opaque `D1_TYPE_ERROR` on an undefined field, 2026-09-25).
+
 ## 2026-09-24
 
 - Attempt-3 model failover: both pools failing the pinned model re-runs

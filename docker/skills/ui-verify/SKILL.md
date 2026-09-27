@@ -47,6 +47,21 @@ the page through its **accessibility tree** (snapshots), not screenshots.
 6. **Stop the server.** Kill the background process before finishing so the
    turn leaves no stray processes.
 
+## Flaky-Failure Triage (adapted from `affaan-m/ECC` `skills/e2e-testing`, MIT)
+
+Browser failures are usually one of four things. Identify which before
+"fixing" anything, because three of the four are not product bugs:
+
+| Symptom | Likely cause | Do this |
+|---|---|---|
+| Fails ~always in the browser, passes headless | Timing: assertion ran before render/settle | Wait for the specific element/state, not a fixed sleep; re-snapshot and assert |
+| Fails once, passes on re-run | Genuine flake | Re-run the exact step 2–3 times. If it passes, note it in the commit message as flaky and add a wait, not a retry loop |
+| Fails only at one viewport | Responsive/CSS | Reproduce at that width; fix the layout, do not special-case the test |
+| Fails on a state you just changed | Real bug | Fix the code; the discrepancy is yours, not the browser's |
+
+Do not paper over a deterministic failure with retries or `waitForTimeout` —
+that converts a bug into a flake and hides it from every future turn.
+
 ## Rules
 
 - Never navigate anywhere except `127.0.0.1` / `localhost` — everything else

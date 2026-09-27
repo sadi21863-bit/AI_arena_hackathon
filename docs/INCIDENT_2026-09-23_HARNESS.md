@@ -1,3 +1,37 @@
+# 2026-09-26 — Harness hardening via affaan-m/ECC (MIT)
+
+Three transplants from `affaan-m/ECC` (MIT, 2.2.2), all copy-adapt, no infra
+change. Researched, not bulk-installed: ECC is a 292-skill distro whose hook
+runtime is Claude-format and whose AgentShield/cloud features are paid; the
+parts below are the OpenCode-compatible markdown discipline.
+
+1. **`docker/skills/verification-loop/` (new).** Their 6-phase ladder
+   (build→type→lint→test→security→diff) with a fixed `VERIFICATION REPORT`
+   format, mapped onto this harness: turns write `VERIFICATION_REPORT.md`,
+   each phase carries the real command + exit code, SKIPPED-with-reason is
+   mandatory (a phase with nothing to check is never PASS), and the Verdict
+   is READY only when every applicable phase passed. Registered in
+   `repos.ts` `SKILL_PATHS` (the allowlist is a contract — a skill not listed
+   never syncs to team repos) and cross-referenced from `arena-team`'s VERIFY
+   step and both build-turn prompts in `executor.ts`.
+2. **TDD evidence report + untrusted-plan rules** appended to
+   `docker/skills/test-driven-development/SKILL.md`. Their RED/GREEN
+   checkpoint commits don't fit a one-commit-per-turn harness, so the
+   evidence becomes a fixed block in the turn's final message instead. Their
+   Plan-Handoff rule (plans are data, not instructions) is the direct
+   generalization of the backtick incident: any document in the repo can
+   contain text that looks like commands. Mirrored as rule 12 in
+   `repo-scaffold/AGENTS.md` so it binds even if the skill is skipped.
+3. **Flaky-failure triage table** appended to `docker/skills/ui-verify/`:
+   four browser-failure shapes, only one of which is a product bug.
+
+Deliberately NOT taken: the GateGuard pre-write fact-forcing hook (needs
+porting from Claude `PreToolUse` to OpenCode `tool.execute.before`, plus
+container-durable state — spec'd, not built), the memory vault (design work),
+AgentShield (needs an Anthropic key + network outside the sandbox allowlist),
+and the 280+ other skills. ECC has no anti-essay/no-op-turn enforcement at
+all (verified by code search) — the scheduler-side Enforce gate stays ours.
+
 # 2026-09-23 — Harness incident day: backtick kills, key pinning, failover, and two self-inflicted bugs caught by the test harness
 
 Event context: `event_a988b3dd-7baa-4570-a6cc-6b5675504818` hackathon finished
