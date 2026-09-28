@@ -270,7 +270,44 @@ now pinned to blob `3e7069fd`.
 
 Takeaway: harness sync is lazy, so "the fix is committed to main" does not
 mean "the team repo has it". Check the blob SHA on both repos after any
-harness change during a quiet period.
+harness change during a quiet period. Now automated: `GET /headroom` carries
+a `harness` array comparing each LIVE event's team repos' build-workflow
+blob SHA against main (`checkHarnessDrift` in `repos.ts`).
+
+## 7.3 CRLF in both team repos — caught by the drift probe, 8h before impact
+
+The drift probe reported `inSync: false` for `75504818` on its first run —
+a repo I had synced by hand two hours earlier and believed was fine. Cause:
+**the manual sync pushed the Windows working copy instead of git's committed
+blob.** `.gitattributes` normalizes the checkout to CRLF on Windows, so
+`ReadAllBytes(checkout)` uploaded 948 CRLF-terminated lines against main's
+0. Verified by counting CR bytes in the fetched blobs.
+
+Impact had it shipped: bash is CRLF-hostile, so `set +e\r` fails to parse —
+a build turn would have died on its first line, at the start of tonight's
+build phase, on the exact harness the two days of fixing were meant to
+protect. Every *previous* manual sync carried the same defect; it was simply
+never exercised, because no turn dispatched during the quiet period.
+
+Fixed by pushing `git cat-file blob <sha>` bytes (byte-exact, verified by
+`git hash-object` matching the committed SHA `1bea42c1`) to both repos, and
+confirmed CR=0 in the fetched content of each.
+
+Two transferable rules, both now in the code comments:
+
+1. **A manual harness sync must push git's blob, never the checkout.** The
+   working copy is not the committed content; only the blob is.
+2. **A blob-SHA comparison detects this class for free.** It is the reason
+   the probe is worth its 60 lines — content diffing would have shown
+   "different line endings" as noise; SHA equality is unambiguous, so a
+   mismatch means *investigate*, never *ignore as harmless*.
+
+Reusable tooling note: `cmd /c "git cat-file blob <sha> > file"` is the
+byte-transparent way to extract a committed blob on Windows. PowerShell's
+`>` and `[IO.File]::WriteAllText` round-trip both add CRLF and mangle
+multi-byte characters (an em-dash in a commit message once produced an
+invalid JSON body and an HTTP 400 — use `-Encoding`/`UTF8Encoding($false)`
+for any JSON written to a file for `gh --input`).
 
 ## Commits (main repo, all pushed)
 

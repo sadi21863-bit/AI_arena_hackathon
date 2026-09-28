@@ -5,6 +5,13 @@ notes what changed behavior in production and why.
 
 ## 2026-09-28
 
+- `GET /headroom` now reports **harness drift**: each live event's team
+  repos' build-workflow blob SHA vs main. Added after beta was found 7
+  commits behind and one dispatch from running a pre-failover harness.
+- Fixed a CRLF defect the probe caught within an hour: manual harness syncs
+  were pushing the Windows working copy instead of git's committed blob, so
+  both team repos carried 948 CRLF line endings — bash would have failed on
+  the first line of tonight's build phase. Re-synced byte-exact.
 - Lockfile churn no longer counts as build output. `npm`/`pip` rewrite
   lockfiles during the install phase, and that rewrite was satisfying the
   "Enforce real build output" gate — so a turn that wrote no product code
@@ -14,8 +21,11 @@ notes what changed behavior in production and why.
   counts, so genuine dependency work is unaffected. Verified in a scratch
   repo across 6 cases (churn-only, real work + churn, dependency change +
   churn, failure-log + churn, pure no-op, untracked new lockfile).
+- Free-model evaluation completed across all 10 Zen free models: **3 work**
+  (`nemotron-3-ultra-free`, `mimo-v2.5-free`, `big-pickle`), 5 dead, 1 is
+  not a coding model (`jev-1.13-free`), 1 skipped on upstream evidence.
 - Confirmed the Zen/Nvidia common-mode outage (2026-09-23 → 09-28, ~4d20h)
-  resolved; nemotron and `mimo-v2.5-free` both verified end-to-end.
+  resolved.
 
 ## 2026-09-26
 
