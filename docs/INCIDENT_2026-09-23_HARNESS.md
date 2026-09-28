@@ -180,6 +180,17 @@ upstream outages; only MODEL diversity can. Proposed: model-fallback
 dimension (pinned model → big-pickle) as attempt 3 — needs owner approval
 since it changes which model builds production code mid-event.
 
+**Storm resolved: 2026-09-28 10:54 UTC** (~4 days, 20h total). Control
+`manual-nemo3-stormcheck3` (run 36412285990): nemotron exit 0 on the
+FIRST attempt, no failover, Phase B install + `--network=none` verification
++ commit all green, conclusion `success` — the first complete end-to-end
+turn since 2026-09-23. Common-mode only, no 429s, no quota actions, no
+code change needed. The suspended free-model evals (mimo25/26, ling,
+nemo35, ms12/13, jev) can resume; `deepseek-v4-flash-free` is skipped on
+evidence — upstream opencode#42977 reports it returning
+`FreeUsageLimitError` continuously for 5-7 days including 1-message
+requests.
+
 ## Commits (main repo, all pushed)
 
 `4a9d396` env prompt · `9526edd` model grep · `4a9d834` pinning ·
