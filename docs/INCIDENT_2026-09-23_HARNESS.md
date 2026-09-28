@@ -191,7 +191,7 @@ evidence — upstream opencode#42977 reports it returning
 `FreeUsageLimitError` continuously for 5-7 days including 1-message
 requests.
 
-## 7.1 Free-model fallback evaluation (resumed 2026-09-28, storm cleared)
+## 7.1 Free-model fallback evaluation (complete — full free catalog, 2026-09-28)
 
 Read-only prompt (run `npx tsc --noEmit`, change nothing) dispatched through
 `manual-build-test.yml` with a `model` override. Verdict shape: A1/A2/A3
@@ -209,7 +209,8 @@ after 8 simultaneous dispatches got mass-cancelled by GitHub queueing.
 | `deepseek-v4-flash-free` | — | — | — | **SKIPPED** — upstream opencode#42977 reports it returning `FreeUsageLimitError` continuously for 5-7 days, including 1-message requests |
 | `jev-1.13-free` | 1 | 1 | 0 | **NOT A CODING MODEL** — System One (TypeSafe AI): evaluates a `state` against typed questions and returns values + probabilities on `/zen/v1/systemone`, not text. Cannot be a build agent. Reclassified: candidate for the *judging* layer (calibrated probabilities), not the build layer. |
 | `space-bunny-free` (stealth #2) | **132** | — | — | **DEAD — SIGILL.** Crashes the `opencode` binary itself (128+4) on attempt 1, so no provider signature and therefore **no failover fired**; Enforce correctly failed the turn. 132 is a hard crash of our own driver, not a provider error — a different failure class from the 429/503 family. |
-| `muse-spark-1.2-contributor-free`, `muse-spark-1.3-contributor-free` | — | — | — | not run (time budget) |
+| `muse-spark-1.2-contributor-free` | 1 | 1 | 0 | **DEAD** (429/503 family) |
+| `muse-spark-1.3-contributor-free` | 1 | 1 | 0 | **DEAD** (429/503 family) |
 | `longcat-2.5-preview-free` (zero-retention) | 1 | 1 | 0 | **DEAD** (429/503 family) — A3 rescued, Enforce correctly failed it |
 
 Two distinct failure shapes worth separating, because they are NOT the same
@@ -245,12 +246,18 @@ pinned for production: a model that works but trains on our prompts is a
 different decision than one that works and forgets. Re-check the free-tier
 terms whenever the catalog churns.
 
-Verdict so far: 3 verified build models (`nemotron-3-ultra-free`,
-`mimo-v2.5-free`, `big-pickle`), 5 dead (`nemotron-3.5-lightning-free`,
-`ling-3.0-flash-fin-free`, `mimo-v2.6-flash-free`, `space-bunny-free`,
-`longcat-2.5-preview-free`), 1 not-a-coding-model (`jev-1.13-free`), 1
-skipped on upstream evidence (`deepseek-v4-flash-free`). Both team repos
-re-synced to the current harness (beta was 7 commits behind — see below).
+Verdict: **3 of the 10 free models on Zen actually work as build agents.**
+Working: `nemotron-3-ultra-free` (pinned), `mimo-v2.5-free`, `big-pickle`.
+Dead: `nemotron-3.5-lightning-free`, `ling-3.0-flash-fin-free`,
+`mimo-v2.6-flash-free`, `space-bunny-free` (SIGILL),
+`longcat-2.5-preview-free`, `muse-spark-1.2-contributor-free`,
+`muse-spark-1.3-contributor-free`. Not a coding model: `jev-1.13-free`.
+Skipped on upstream evidence: `deepseek-v4-flash-free`.
+
+The 70% failure rate is the load-bearing fact, not a footnote: the free tier
+is far thinner than its catalog suggests, which is exactly why the pinned
+model plus a two-rung fallback (pool -> model) exists at all. Both team
+repos re-synced to the current harness (beta was 7 commits behind).
 
 ## 7.2 Beta was 7 commits behind the harness (caught 2026-09-28)
 
