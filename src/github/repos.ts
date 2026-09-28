@@ -285,6 +285,14 @@ async function fetchMainRepoFile(path: string): Promise<string> {
  * Read-only and best-effort: any failure (404, no teams, rate limit) yields
  * `error` for that repo rather than throwing, because this runs on a public
  * operator route and must never take down /headroom.
+ *
+ * CAUGHT A REAL BUG IN ITS FIRST HOUR (2026-09-28): a manual harness sync
+ * pushed the Windows WORKING COPY rather than git's committed blob, so both
+ * team repos got 948 CRLF line endings against main's 0. Bash is
+ * CRLF-hostile — `set +e\r` does not parse — so a build turn on that copy
+ * would have failed on its first line, hours before the build phase. Any
+ * future manual sync must push `git cat-file blob <sha>` bytes, never
+ * `ReadAllBytes` on the checkout.
  */
 export interface HarnessDrift {
   repo: string;
@@ -296,8 +304,18 @@ export interface HarnessDrift {
 
 export async function checkHarnessDrift(env: Env): Promise<HarnessDrift[]> {
   const WATCH = ".github/workflows/team-build-turn.yml";
+  // Only repos for a LIVE event. Scoping to active events matters: the
+  // historical set is 12+ repos from completed arenas whose harness is
+  // permanently frozen and irrelevant, and reporting all of them as "drifted"
+  // buried the one row that mattered (first build on 2026-09-28 listed 14
+  // repos, 13 of them archaeology).
   const teams = await env.DB.prepare(
-    `SELECT DISTINCT repo_url FROM hackathon_teams WHERE repo_url IS NOT NULL ORDER BY repo_url`
+    `SELECT DISTINCT t.repo_url FROM hackathon_teams t
+       JOIN archive_events e ON e.id = t.event_id
+      WHERE t.repo_url IS NOT NULL
+        AND e.status NOT IN ('judged', 'complete', 'superseded')
+        AND e.abandoned_at IS NULL
+      ORDER BY t.repo_url`
   ).all<{ repo_url: string }>();
 
   let mainSha: string | null = null;
