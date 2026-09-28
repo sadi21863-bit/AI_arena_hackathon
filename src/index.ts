@@ -19,7 +19,7 @@ import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
 import { JUDGES } from "./judges/personas";
-import { syncTeamHarness } from "./github/repos";
+import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
 
 export type { Env };
@@ -329,7 +329,20 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         `SELECT last_tick_at, last_success_at, last_error FROM cron_heartbeat WHERE id = 'singleton'`
       ).first<{ last_tick_at: string | null; last_success_at: string | null; last_error: string | null }>();
 
-      return Response.json({ day: today, usage: tiers, cron: heartbeat ?? null });
+      // Harness drift: syncTeamHarness runs at dispatch time only, so a team
+      // repo that is not currently building silently keeps an OLD harness
+      // (found live 2026-09-28, beta 7 commits behind and one dispatch away
+      // from a live build phase). Surfaced here so it is visible before a
+      // turn runs on it, not after. Best-effort by construction — never let
+      // a GitHub hiccup take down the operator route.
+      let harness: unknown = [];
+      try {
+        harness = await checkHarnessDrift(env);
+      } catch (err) {
+        harness = [{ error: err instanceof Error ? err.message : String(err) }];
+      }
+
+      return Response.json({ day: today, usage: tiers, cron: heartbeat ?? null, harness });
     }
 
     if (url.pathname === "/ideas" && request.method === "GET") {

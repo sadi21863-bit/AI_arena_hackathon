@@ -266,6 +266,66 @@ async function fetchMainRepoFile(path: string): Promise<string> {
   return res.text();
 }
 
+/**
+ * Harness-drift probe: compares each team repo's copy of the build-turn
+ * workflow against this repo's, by blob SHA.
+ *
+ * Why this exists (found live 2026-09-28): `syncTeamHarness` re-syncs
+ * HARNESS_FILES only at dispatch time, so a team repo silently drifts
+ * whenever it is not actively building. Beta's copy was found 7 commits
+ * behind — missing pool pinning, both failover layers, the Enforce
+ * attempt-log exclusions, and the lockfile guard — one dispatch away from
+ * running a pre-failover harness on a live build phase. It was caught by a
+ * human remembering to check. This makes it self-detecting instead.
+ *
+ * Blob SHA rather than content: git hashes are content-addressed, so equal
+ * SHAs mean byte-identical files regardless of commit history, and the
+ * Contents API returns the sha without a second download.
+ *
+ * Read-only and best-effort: any failure (404, no teams, rate limit) yields
+ * `error` for that repo rather than throwing, because this runs on a public
+ * operator route and must never take down /headroom.
+ */
+export interface HarnessDrift {
+  repo: string;
+  inSync: boolean;
+  mainSha: string | null;
+  teamSha: string | null;
+  error?: string;
+}
+
+export async function checkHarnessDrift(env: Env): Promise<HarnessDrift[]> {
+  const WATCH = ".github/workflows/team-build-turn.yml";
+  const teams = await env.DB.prepare(
+    `SELECT DISTINCT repo_url FROM hackathon_teams WHERE repo_url IS NOT NULL ORDER BY repo_url`
+  ).all<{ repo_url: string }>();
+
+  let mainSha: string | null = null;
+  try {
+    const [owner, repo] = MAIN_REPO.split("/");
+    const res = await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${WATCH}`);
+    mainSha = ((res as { sha?: string }).sha ?? null);
+  } catch (err) {
+    return teams.results.map((t) => ({
+      repo: t.repo_url, inSync: false, mainSha: null, teamSha: null,
+      error: err instanceof Error ? err.message : String(err),
+    }));
+  }
+
+  return Promise.all(teams.results.map(async ({ repo_url }): Promise<HarnessDrift> => {
+    try {
+      const res = await githubRequest(env, "GET", `/repos/${repo_url}/contents/${WATCH}`);
+      const teamSha = (res as { sha?: string }).sha ?? null;
+      return { repo: repo_url, inSync: teamSha === mainSha, mainSha, teamSha };
+    } catch (err) {
+      return {
+        repo: repo_url, inSync: false, mainSha, teamSha: null,
+        error: err instanceof GitHubApiError ? `${err.status}` : (err instanceof Error ? err.message : String(err)),
+      };
+    }
+  }));
+}
+
 export interface TeamRepoIdea {
   title: string;
   oneLiner: string;
