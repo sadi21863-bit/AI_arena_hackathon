@@ -207,23 +207,50 @@ after 8 simultaneous dispatches got mass-cancelled by GitHub queueing.
 | `ling-3.0-flash-fin-free` | 1 | 1 | 0 | **DEAD** — same shape |
 | `mimo-v2.6-flash-free` | 1 | 1 | 0 | **DEAD** — same shape (note: 2.5 passes, 2.6 does not) |
 | `deepseek-v4-flash-free` | — | — | — | **SKIPPED** — upstream opencode#42977 reports it returning `FreeUsageLimitError` continuously for 5-7 days, including 1-message requests |
-| `muse-spark-1.2-contributor-free`, `muse-spark-1.3-contributor-free`, `jev-1.13-free` | — | — | — | not run (time budget) |
+| `jev-1.13-free` | 1 | 1 | 0 | **NOT A CODING MODEL** — System One (TypeSafe AI): evaluates a `state` against typed questions and returns values + probabilities on `/zen/v1/systemone`, not text. Cannot be a build agent. Reclassified: candidate for the *judging* layer (calibrated probabilities), not the build layer. |
+| `space-bunny-free` (stealth #2) | **132** | — | — | **DEAD — SIGILL.** Crashes the `opencode` binary itself (128+4) on attempt 1, so no provider signature and therefore **no failover fired**; Enforce correctly failed the turn. 132 is a hard crash of our own driver, not a provider error — a different failure class from the 429/503 family. |
+| `muse-spark-1.2-contributor-free`, `muse-spark-1.3-contributor-free` | — | — | — | not run (time budget) |
+| `longcat-2.5-preview-free` (zero-retention) | 1 | 1 | 0 | **DEAD** (429/503 family) — A3 rescued, Enforce correctly failed it |
 
 Two distinct failure shapes worth separating, because they are NOT the same
 bug and only one of them is the gate doing its job:
 
-- **DEAD models**: A1 and A2 both exit 1 with a provider signature, A3
-  rescues with exit 0 — the turn is saved by the model failover, then failed
-  by Enforce because the rescued attempt wrote nothing. The fallback saved
-  the run; the gate kept it honest. Correct end state: failed turn, nothing
-  committed.
-- **No commit from a successful attempt** is the shape to watch: an attempt
-  that exits 0 without a single tool call is exactly the P0-0a essay bug.
-  The Enforce gate exists for this and caught every instance.
+- **DEAD models (429/503 family)**: A1 and A2 both exit 1 with a provider
+  signature, A3 rescues with exit 0 — the turn is saved by the model
+  failover, then failed by Enforce because the rescued attempt wrote
+  nothing. The fallback saved the run; the gate kept it honest. Correct end
+  state: failed turn, nothing committed.
+- **`space-bunny-free` (driver-crash class)**: exit 132 with no provider
+  signature, so the failover chain correctly declined to fire — there is
+  nothing to fail over from. The three-attempt design assumes provider-side
+  death; a SIGILL in our own binary is outside that assumption and is caught
+  only by the Enforce gate. Worth watching if more stealth models appear.
 
-Verdict so far: 3 verified build models, 3 dead, 1 skipped on upstream
-evidence. Both team repos re-synced to the current harness (beta was 7
-commits behind — see below).
+### Privacy terms of the free tier (from opencode.ai/v2/docs/console/models)
+
+Relevant because build turns write proprietary product code and read the
+arena scaffold. Training-on-prompts exceptions: `big-pickle`,
+`mimo-v2.5-free`, `mimo-v2.6-flash-free`, `ling-3.0-flash-fin-free`, and
+`muse-spark-1.3-contributor-free` (Meta contributor tier). Trial-logged:
+both Nemotron free models (NVIDIA terms — "do not submit personal or
+confidential data", and session logs are used for product improvement).
+**Zero-retention:** only `space-bunny-free` and
+`longcat-2.5-preview-free` — and **both are DEAD** (bunny SIGILLs the
+driver, longcat 429/503s). So no verified build model is both working and
+zero-retention. `mimo-v2.5-free` is the only other verified one, and its
+prompts do go to training.
+
+This table, not capability, is what decides whether a new model may be
+pinned for production: a model that works but trains on our prompts is a
+different decision than one that works and forgets. Re-check the free-tier
+terms whenever the catalog churns.
+
+Verdict so far: 3 verified build models (`nemotron-3-ultra-free`,
+`mimo-v2.5-free`, `big-pickle`), 5 dead (`nemotron-3.5-lightning-free`,
+`ling-3.0-flash-fin-free`, `mimo-v2.6-flash-free`, `space-bunny-free`,
+`longcat-2.5-preview-free`), 1 not-a-coding-model (`jev-1.13-free`), 1
+skipped on upstream evidence (`deepseek-v4-flash-free`). Both team repos
+re-synced to the current harness (beta was 7 commits behind — see below).
 
 ## 7.2 Beta was 7 commits behind the harness (caught 2026-09-28)
 
