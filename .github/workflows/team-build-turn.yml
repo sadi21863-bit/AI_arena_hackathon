@@ -459,7 +459,16 @@ jobs:
         run: |
           START_HEAD="${{ steps.turnstart.outputs.head }}"
           NOW_HEAD=$(git rev-parse HEAD)
-          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log')
+          # Lockfile exclusions above exist because npm/pip rewrite lockfiles
+          # as a side effect of installing dependencies. Found live 2026-09-28
+          # (three times in one day): a turn that wrote NO product code still
+          # produced a "file change" — a bare `"license": "MIT"` line npm added
+          # to package-lock.json — which satisfied this very gate and let a
+          # no-op turn report success. The gate exists to catch exactly that
+          # (P0-0a), so churn must not count as output. A turn that ONLY adds
+          # or removes a dependency is still real work and is NOT excluded —
+          # package.json always counts.
+          CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!poetry.lock' ':!uv.lock' ':!Cargo.lock' ':!composer.lock' ':!go.sum')
           if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
@@ -838,6 +847,46 @@ jobs:
             echo "$NON_SAMPLE_HOOKS" | xargs -r rm -f
           fi
           git add -A
+          # Lockfile-restore guard (2026-09-28): `git add -A` above sweeps up
+          # whatever the install phase's package manager rewrote. Restore any
+          # lockfile whose ONLY change this turn was metadata churn, so a
+          # dependency-install side effect never becomes a committed "result".
+          # Deliberately narrow, and it runs BEFORE the commit below so a turn
+          # with real product work commits it untouched:
+          #   - fires only when no non-lockfile file changed this turn;
+          #   - `git checkout` restores content, so a lockfile the agent
+          #     genuinely rewrote alongside real work still gets restored
+          #     ONLY if nothing else changed — otherwise it is left alone;
+          #   - VERIFICATION_FAILURE.log is NEVER restored: it is the
+          #     next turn's required reading and must reach history.
+          REAL_CHANGES=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!poetry.lock' ':!uv.lock' ':!Cargo.lock' ':!composer.lock' ':!go.sum' | grep -v 'VERIFICATION_FAILURE.log' || true)
+          if [ -z "$REAL_CHANGES" ]; then
+            LOCK_CHURN=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!VERIFICATION_FAILURE.log' | awk '{print $NF}' | grep -E '(^|/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|uv\.lock|Cargo\.lock|composer\.lock|go\.sum)$' || true)
+            if [ -n "$LOCK_CHURN" ]; then
+              echo "::warning::Only dependency-lockfile metadata changed this turn (install side effect, not product work) — restoring instead of committing:"
+              echo "$LOCK_CHURN" | sed 's/^/    /'
+              for f in $LOCK_CHURN; do
+                # `git checkout HEAD -- <path>` (not bare `git checkout --`):
+                # this step runs AFTER `git add -A`, so the churn is already
+                # staged and a bare checkout would restore from the index —
+                # a no-op. Restoring from HEAD updates index AND worktree, so
+                # the file ends up clean and the later commit skips it.
+                # "Exists in HEAD?" — NOT `git ls-files`, which lists the
+                # INDEX: `git add -A` above has already staged a brand-new
+                # lockfile, so ls-files calls it known and a bare checkout
+                # then fails with "pathspec did not match". cat-file against
+                # HEAD is the only correct test (scratch cases 1-6).
+                if git cat-file -e "HEAD:$f" 2>/dev/null; then
+                  git checkout HEAD -- "$f" || true
+                else
+                  # Newly created lockfile: `git rm -f` drops it from index AND
+                  # worktree. `git clean` cannot - the file is staged, so it is
+                  # no longer "untracked" as far as git is concerned.
+                  git rm -f -q -- "$f" >/dev/null 2>&1 || true
+                fi
+              done
+            fi
+          fi
           git diff --cached --quiet || git commit -m "Build turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }}"
           if [ -n "$ARENA_PUSH_TOKEN" ]; then
             # actions/checkout sets an http.extraheader with GITHUB_TOKEN
