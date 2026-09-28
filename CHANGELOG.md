@@ -3,6 +3,20 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-28
+
+- Lockfile churn no longer counts as build output. `npm`/`pip` rewrite
+  lockfiles during the install phase, and that rewrite was satisfying the
+  "Enforce real build output" gate — so a turn that wrote no product code
+  could report success. Lockfiles are now excluded from the gate's
+  change-detection and from the watchdog, and a commit-step guard restores
+  them when they are the only change a turn produced. Package.json still
+  counts, so genuine dependency work is unaffected. Verified in a scratch
+  repo across 6 cases (churn-only, real work + churn, dependency change +
+  churn, failure-log + churn, pure no-op, untracked new lockfile).
+- Confirmed the Zen/Nvidia common-mode outage (2026-09-23 → 09-28, ~4d20h)
+  resolved; nemotron and `mimo-v2.5-free` both verified end-to-end.
+
 ## 2026-09-26
 
 - Adopted three discipline patterns from `affaan-m/ECC` (MIT): the
