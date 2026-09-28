@@ -191,6 +191,53 @@ evidence — upstream opencode#42977 reports it returning
 `FreeUsageLimitError` continuously for 5-7 days including 1-message
 requests.
 
+## 7.1 Free-model fallback evaluation (resumed 2026-09-28, storm cleared)
+
+Read-only prompt (run `npx tsc --noEmit`, change nothing) dispatched through
+`manual-build-test.yml` with a `model` override. Verdict shape: A1/A2/A3
+exits, then whether the Enforce gate passed. 1 min between dispatches
+after 8 simultaneous dispatches got mass-cancelled by GitHub queueing.
+
+| model | A1 | A2 | A3 (big-pickle) | verdict |
+|---|---|---|---|---|
+| `nemotron-3-ultra-free` (pinned) | 0 | — | — | **PASS** — first clean full turn since 09-23 |
+| `mimo-v2.5-free` | 0 | — | — | **PASS** — all steps green incl. Enforce + commit |
+| `big-pickle` | 0 | — | — | **PASS** — proven storm-proof (ran clean through the 4d20h Nvidia outage) |
+| `nemotron-3.5-lightning-free` | 1 | 1 | 0 | **DEAD** — 3-attempt chain rescued the turn, Enforce then correctly failed it (no tool calls, no files) |
+| `ling-3.0-flash-fin-free` | 1 | 1 | 0 | **DEAD** — same shape |
+| `mimo-v2.6-flash-free` | 1 | 1 | 0 | **DEAD** — same shape (note: 2.5 passes, 2.6 does not) |
+| `deepseek-v4-flash-free` | — | — | — | **SKIPPED** — upstream opencode#42977 reports it returning `FreeUsageLimitError` continuously for 5-7 days, including 1-message requests |
+| `muse-spark-1.2-contributor-free`, `muse-spark-1.3-contributor-free`, `jev-1.13-free` | — | — | — | not run (time budget) |
+
+Two distinct failure shapes worth separating, because they are NOT the same
+bug and only one of them is the gate doing its job:
+
+- **DEAD models**: A1 and A2 both exit 1 with a provider signature, A3
+  rescues with exit 0 — the turn is saved by the model failover, then failed
+  by Enforce because the rescued attempt wrote nothing. The fallback saved
+  the run; the gate kept it honest. Correct end state: failed turn, nothing
+  committed.
+- **No commit from a successful attempt** is the shape to watch: an attempt
+  that exits 0 without a single tool call is exactly the P0-0a essay bug.
+  The Enforce gate exists for this and caught every instance.
+
+Verdict so far: 3 verified build models, 3 dead, 1 skipped on upstream
+evidence. Both team repos re-synced to the current harness (beta was 7
+commits behind — see below).
+
+## 7.2 Beta was 7 commits behind the harness (caught 2026-09-28)
+
+`syncTeamHarness` re-syncs `HARNESS_FILES` before each turn, so a team repo
+drifts whenever it is not actively building. Beta's copy was still
+`8f40f3f7` (2026-09-22) — before pool pinning, both failover layers, the
+Enforce attempt-log exclusions, and the lockfile guard. It was one dispatch
+away from running a pre-failover harness on tonight's build phase. Both repos
+now pinned to blob `3e7069fd`.
+
+Takeaway: harness sync is lazy, so "the fix is committed to main" does not
+mean "the team repo has it". Check the blob SHA on both repos after any
+harness change during a quiet period.
+
 ## Commits (main repo, all pushed)
 
 `4a9d396` env prompt · `9526edd` model grep · `4a9d834` pinning ·
