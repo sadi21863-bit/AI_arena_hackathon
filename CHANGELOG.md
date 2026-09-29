@@ -3,6 +3,41 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-29
+
+- **Ideathon `d9d7a33f` judged on `qwen/qwen3.8-27b` (Groq)** — the first
+  production judging pass with no fallback to Workers AI. All 126 scores from
+  the single model/pool, so this event's scores are internally comparable in a
+  way the previous arena's were not. 18 ideas scored, range 1–9, mean 5.69, no
+  saturation or all-7s collapse. Top two, both `fresh` recycle class:
+  **NFT-KYC Hub (8.0)** and **Auto-Expense Capture Assistant (7.7)**.
+- **Calibration failed for the first time ever: correlation 0.959 against a
+  0.60–0.95 acceptance band, i.e. it broke the *upper* bound.** The anchor
+  details show every judge separating the strong/mid/weak anchors almost
+  perfectly, which is the over-discrimination signature the ceiling exists to
+  catch. Judging proceeded regardless — the known P2-7 gap where calibration is
+  computed and surfaced but never enforced. **Suspected, not proven:** the
+  strengthened weak-entry padding clause (2026-09-27) may be over-tightening
+  judges into agreement. One sample cannot separate that from qwen3.8 simply
+  being a consistent model; treat the causal link as an open hypothesis.
+- **Product code-quality review of both hackathon repos** (alpha
+  `75504818`, beta `75504818`). Beta is clean: 8/8 CI green, 434 lines of real
+  isolated tests, no secrets. Alpha has 2 green then **10 consecutive failures
+  since 2026-09-21** — `src/services/storage.ts` imports
+  `@aws-sdk/lib-dynamodb` at 12 sites, and that package is absent from
+  `package.json`, so `tsc` fails with TS2307. The arena's own verify step
+  *did* catch it (the turn is recorded failed) but the work was still committed
+  by design, and nothing compels the next turn to read
+  `VERIFICATION_FAILURE.log` — alpha's own BACKLOG still lists "keep ci.yml
+  green" as an open TODO. Same shape as the missing dependency: reported
+  honestly, acted on by nobody.
+- Both team repos independently regenerated a copy of the dead
+  `scripts/workers_ai_shim.js` (302 lines, removed from the harness
+  2026-09-21). Harmless but dead weight, and a sign the scaffold misleads.
+- Conduct finding recorded for post-event analysis: cumulative strikes blocked
+  17/36 ideas and touched 8/12 agents, vs ~2.4/12 agents expected by simulation.
+  Thresholds deliberately left unchanged mid-event.
+
 ## 2026-09-28
 
 - `GET /headroom` now reports **harness drift**: each live event's team
@@ -21,9 +56,11 @@ notes what changed behavior in production and why.
   counts, so genuine dependency work is unaffected. Verified in a scratch
   repo across 6 cases (churn-only, real work + churn, dependency change +
   churn, failure-log + churn, pure no-op, untracked new lockfile).
-- Free-model evaluation completed across all 10 Zen free models: **3 work**
-  (`nemotron-3-ultra-free`, `mimo-v2.5-free`, `big-pickle`), 5 dead, 1 is
-  not a coding model (`jev-1.13-free`), 1 skipped on upstream evidence.
+- Free-model evaluation completed across all 12 discovered Zen free-model
+  entries: **3 work** (`nemotron-3-ultra-free`, `mimo-v2.5-free`,
+  `big-pickle`), 7 dead, 1 is not a coding model (`jev-1.13-free`), 1 skipped
+  on upstream evidence. (Corrected 2026-09-29 from "all 10 / 5 dead" — the
+  original miscount; catalog contents were not re-measured.)
 - Confirmed the Zen/Nvidia common-mode outage (2026-09-23 → 09-28, ~4d20h)
   resolved.
 

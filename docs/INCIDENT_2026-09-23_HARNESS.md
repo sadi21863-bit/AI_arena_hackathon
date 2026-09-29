@@ -1,3 +1,81 @@
+# 2026-09-29 — Ideathon judged on qwen3.8; calibration broke the ceiling; a verify failure nobody read
+
+Two firsts from the `d9d7a33f` ideathon, plus one structural gap found by
+reading the finished products rather than the logs.
+
+## 8.1 Judging debut, and the first calibration failure
+
+`qwen/qwen3.8-27b` on Groq scored all 126 judge scores with **no fallback to
+Workers AI** — the first judging pass entirely inside the primary provider, so
+these 18 ideas' scores are internally comparable in a way the previous
+arena's were not. Distribution healthy: range 1–9, mean 5.69, no saturation and
+no all-7s collapse (the two failure modes the judge sims flagged as live
+hazards). Top two, both `fresh` recycle class — NFT-KYC Hub (8.0) and
+Auto-Expense Capture Assistant (7.7).
+
+**Calibration returned 0.959 and `passed: 0`** — the first recorded failure,
+and it broke the *upper* bound of the 0.60–0.95 band, not the lower one. That
+bound exists to catch an overfit or over-tired judge, and the anchor details
+are its textbook signature: every judge separates strong/mid/weak almost
+perfectly (strong-vs-weak gaps of 5–8 points across all seven judges).
+
+**Suspected link to our own change, not proven.** The weak-entry padding
+clause was strengthened on 2026-09-27 ("score the substance first, then
+subtract; padding on a 0-3 entry can never lift it out of 0-3"). If every judge
+applies the same deterministic penalty their relative ordering converges —
+exactly what the ceiling detects. But a single sample cannot separate
+"clause over-tightened the judges" from "qwen3.8 is simply a consistent
+model", and calibration has run clean on previous models. Recording it as an
+open hypothesis to test against the next event's correlation, not as a cause.
+
+**Judging proceeded anyway** — the known P2-7 gap where calibration is
+computed and surfaced but never enforced. So a failed calibration currently
+leaves no trace in the published result. Closing that (a failed calibration
+must mark the event so the caveat reaches readers) is the real follow-up, and
+it is a bigger correctness win than the correlation number itself.
+
+## 8.2 A verify failure that nothing compelled any turn to read
+
+Post-hackathon code-quality review of both team repos. Beta is clean: 8/8 CI
+green, 434 lines of genuinely isolated tests (temp SQLite, PRAGMA parity,
+boundary mocks), no secrets. Alpha has 2 green then **10 consecutive failures
+since 2026-09-21**: `src/services/storage.ts` imports
+`@aws-sdk/lib-dynamodb` at 12 sites and that package is not in
+`package.json`, so `tsc` fails TS2307 on every push.
+
+The interesting part is not the missing dependency — the interesting part is
+that **every layer above it behaved exactly as designed and the bug still
+shipped**:
+
+- The verify step *did* catch it. The turn is recorded failed, with
+  `VERIFICATION_FAILURE.log` committed to the repo.
+- The work was still committed anyway, deliberately — "after the work was
+  preserved" is the right call for an autonomous loop; losing a turn's output
+  to a red typecheck is worse than keeping a red tree.
+- The turn prompt instructs the next turn to read the failure log. Nothing
+  checks that it did.
+
+Alpha's own `BACKLOG.md` tells the story: "In Progress — add persistent storage
+(DynamoDB/S3)" was never closed, and "keep `.github/workflows/ci.yml` green on
+every push" sat in Todo the whole time. The agent half-implemented a feature,
+never added the dependency, and ran out of turns. The rule it was given was
+visible in its own notes and unmet.
+
+This is the same shape as the padding clause above: **reported honestly,
+acted on by nobody.** Neither a failed calibration nor a failed verify step
+currently changes any downstream behavior. Both are computed, stored, and
+surfaced to an operator who has to notice. The fix is not more enforcement
+inside the turn (that is already maximal) — it is making the failure state
+*load-bearing* at the next decision point: a red verify log should shape the
+next turn's prompt or block its success, and a failed calibration should mark
+the event. Until then the harness can tell you everything is wrong and still
+ship it.
+
+Also noted: both team repos independently regenerated a copy of the dead
+`scripts/workers_ai_shim.js` (302 lines, removed from the harness 2026-09-21).
+Harmless, but two agents reaching the same dead artifact is a sign the
+scaffold invites it.
+
 # 2026-09-26 — Harness hardening via affaan-m/ECC (MIT)
 
 Three transplants from `affaan-m/ECC` (MIT, 2.2.2), all copy-adapt, no infra
@@ -246,7 +324,7 @@ pinned for production: a model that works but trains on our prompts is a
 different decision than one that works and forgets. Re-check the free-tier
 terms whenever the catalog churns.
 
-Verdict: **3 of the 10 free models on Zen actually work as build agents.**
+Verdict: **3 of the 12 free models on Zen actually work as build agents.**
 Working: `nemotron-3-ultra-free` (pinned), `mimo-v2.5-free`, `big-pickle`.
 Dead: `nemotron-3.5-lightning-free`, `ling-3.0-flash-fin-free`,
 `mimo-v2.6-flash-free`, `space-bunny-free` (SIGILL),
@@ -254,7 +332,11 @@ Dead: `nemotron-3.5-lightning-free`, `ling-3.0-flash-fin-free`,
 `muse-spark-1.3-contributor-free`. Not a coding model: `jev-1.13-free`.
 Skipped on upstream evidence: `deepseek-v4-flash-free`.
 
-The 70% failure rate is the load-bearing fact, not a footnote: the free tier
+(Count corrected 2026-09-29: this verdict originally read "3 of the 10" while the
+enumeration above it listed 12 entries — 3 working, 7 dead, 1 non-coding,
+1 skipped. The 10 was a miscount, not a change in the catalog.)
+
+The 9-in-12 failure rate is the load-bearing fact, not a footnote: the free tier
 is far thinner than its catalog suggests, which is exactly why the pinned
 model plus a two-rung fallback (pool -> model) exists at all. Both team
 repos re-synced to the current harness (beta was 7 commits behind).
