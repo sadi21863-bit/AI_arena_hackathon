@@ -41,6 +41,35 @@ export function score(n, digits = 2) {
   return typeof n === "number" && !isNaN(n) ? n.toFixed(digits) : "—";
 }
 
+/**
+ * Describes a calibration failure with the bound it actually breached.
+ *
+ * The band is two-sided, and the two sides mean opposite things: too-low means
+ * the judges disagree (weak anchors), too-high means they agree so closely that
+ * 3 anchors were too easy to separate — an overfit signal about the anchors,
+ * not confidence in the ranking. The bounds come from the API payload rather
+ * than being restated here, because this function previously hardcoded
+ * "below 0.6" for every failure and misreported a 0.959 over-correlation as an
+ * under-correlation on 2026-09-29.
+ */
+export function calibrationVerdict(cal) {
+  if (!cal) return "no calibration recorded";
+  const band = cal.band || { min: 0.6, max: 0.95 };
+  if (cal.passed) {
+    return `correlation ${score(cal.correlation)}, inside the ${band.min}–${band.max} band`;
+  }
+  const side =
+    cal.failedSide ||
+    (cal.correlation > band.max ? "high" : cal.correlation < band.min ? "low" : null);
+  if (side === "high") {
+    return `correlation ${score(cal.correlation)}, above the ${band.max} ceiling — over-agreeing judges`;
+  }
+  if (side === "low") {
+    return `correlation ${score(cal.correlation)}, below the ${band.min} floor — judges disagree`;
+  }
+  return `correlation ${score(cal.correlation)}, outside the ${band.min}–${band.max} band`;
+}
+
 export function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many || one + "s"}`;
 }

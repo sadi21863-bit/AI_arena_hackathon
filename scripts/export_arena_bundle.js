@@ -86,7 +86,70 @@ function main() {
   }
   const dir = path.join(out, event);
   fs.mkdirSync(dir, { recursive: true });
-  const manifest = { event_id: event, status: eventRows[0].status, exported_at: new Date().toISOString(), source: "arena-db (remote)", tables: {} };
+  const manifest = { event_id: event, status: eventRows[0].status, exported_at: new Date().toISOString(), source: "arena-db (remote)", tables: {}, caveats: [] };
+
+  // A failed calibration must survive into the frozen artifact as a caveat,
+  // not just as a `passed: 0` row someone has to know to look for. Closes the
+  // residual half of P2-7 (ARENA_BACKLOG.md:385): the soft-flag was already
+  // surfaced in the Observatory, but the bundle is the durable published
+  // result, and its "Done when" asks for a visible consequence where a reader
+  // of the results would see it.
+  //
+  // The band is two-sided and the two sides mean opposite things, so the side
+  // is named rather than flattened into "low confidence" — an over-correlation
+  // is an overfit signal about the anchors, not doubt about the ranking.
+  const CAL_MIN = 0.6;
+  const CAL_MAX = 0.95;
+  const calEvent = eventRows[0].parent_event_id || event;
+  for (const row of query(`SELECT correlation, passed FROM calibration_runs WHERE event_id='${calEvent}'`)) {
+    const corr = Number(row.correlation);
+    const high = corr > CAL_MAX;
+    const low = corr < CAL_MIN;
+    if (row.passed) {
+      // The stored verdict was computed under whatever band was in force at the
+      // time, and the 0.95 ceiling postdates some of these rows — event
+      // c35a0401 stored passed=1 at 0.994. Trusting the stored flag alone would
+      // ship a bundle claiming "calibration passed" for a correlation today's
+      // band rejects, so say so instead of silently deferring.
+      if (high || low) {
+        manifest.caveats.push({
+          code: "calibration_band_drift",
+          severity: "stored-verdict-disputed",
+          correlation: corr,
+          band: { min: CAL_MIN, max: CAL_MAX },
+          failedSide: high ? "high" : "low",
+          message: `This event's calibration was recorded as PASSED at correlation ${corr.toFixed(3)}, but the current ${CAL_MIN}-${CAL_MAX} band would reject it (${high ? "above the ceiling" : "below the floor"}). The stored verdict predates the current band; the raw number is in calibration.json.`,
+        });
+      }
+      continue;
+    }
+    manifest.caveats.push({
+      code: "calibration_failed",
+      severity: high ? "ranking-untested" : "low-confidence",
+      correlation: corr,
+      band: { min: CAL_MIN, max: CAL_MAX },
+      failedSide: high ? "high" : "low",
+      message: high
+        ? `Judge calibration correlation ${corr.toFixed(3)} exceeded the ${CAL_MAX} ceiling: the judges agreed far too closely for the 3 anchors, which points at the anchors being too easy to separate rather than at the ranking. Treat the recorded order as untested.`
+        : `Judge calibration correlation ${corr.toFixed(3)} fell below the ${CAL_MIN} floor: the judges disagreed, so the recorded ranking is low-confidence.`,
+    });
+  }
+  if (manifest.caveats.length === 0) {
+    const anyCal = query(`SELECT 1 AS ok FROM calibration_runs WHERE event_id='${calEvent}' LIMIT 1`);
+    if (anyCal.length === 0) {
+      manifest.caveats.push({
+        code: "calibration_absent",
+        severity: "unverified",
+        message: "No calibration run exists for this event, so judge agreement was never measured against the anchors. The ranking is unverified.",
+      });
+    }
+  }
+  if (manifest.caveats.length) {
+    console.log(`\nCAVEATS (${manifest.caveats.length}) — carry these into any writeup of this event:`);
+    for (const c of manifest.caveats) console.log(`  [${c.severity}] ${c.message}`);
+  } else {
+    console.log("\nno caveats: calibration passed");
+  }
   // team_members has no event_id: scope to this event's team ids.
   const teamIds = query(`SELECT id FROM hackathon_teams WHERE event_id='${event}'`).map((r) => r.id);
   for (const [name, spec] of Object.entries(TABLES)) {

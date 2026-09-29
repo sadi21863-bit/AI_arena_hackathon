@@ -101,6 +101,33 @@ export interface CalibrationResult {
   passed: boolean;
 }
 
+/**
+ * Acceptance band, exported because the failure has TWO distinct sides and
+ * callers must not describe them interchangeably.
+ *
+ * - low  (correlation < MIN): judges disagree / anchors are too close together.
+ *   The remedy is better or more discriminating anchors.
+ * - high (correlation > MAX): judges agree TOO well. 3 anchors this far apart
+ *   produce near-perfect agreement on any competent judge, so this is an
+ *   overfit signal about the anchors, not praise for the panel.
+ *
+ * Exported (2026-09-29) after the first live high-side failure: the Live view
+ * hardcoded "below the 0.6 threshold" for every failure, so a 0.959
+ * over-correlation was reported to readers as under-correlation — pointing an
+ * operator at the wrong remedy for the one signal that had never fired before.
+ */
+export const CALIBRATION_MIN = 0.6;
+export const CALIBRATION_MAX = 0.95;
+
+export type CalibrationFailureSide = "low" | "high" | null;
+
+/** Which bound a correlation fell outside of, or null when it is in band. */
+export function calibrationFailureSide(correlation: number): CalibrationFailureSide {
+  if (correlation < CALIBRATION_MIN) return "low";
+  if (correlation > CALIBRATION_MAX) return "high";
+  return null;
+}
+
 /** Runs all 7 judges against the 3 anchor ideas and records the result. */
 export async function runCalibration(env: Env, eventId: string): Promise<CalibrationResult> {
   // Parallel ACROSS judges (7-way), sequential WITHIN each judge's 3
@@ -137,7 +164,7 @@ export async function runCalibration(env: Env, eventId: string): Promise<Calibra
   }
   const correlation = pairwiseCorrelations.reduce((s, v) => s + v, 0) / pairwiseCorrelations.length;
   // Guard the 0.99 overfit: correlation >0.95 on 3 anchors means anchors too easy, not perfect judges
-  const passed = correlation >= 0.6 && correlation <= 0.95;
+  const passed = correlation >= CALIBRATION_MIN && correlation <= CALIBRATION_MAX;
   // If overfit, keep pinned provider/model but surface as failed so UI warns and future pin rotates anchors
 
   await env.DB.batch([

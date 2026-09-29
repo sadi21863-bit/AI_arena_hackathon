@@ -17,7 +17,7 @@ import { html, render, wireReload } from "../core/html.js";
 import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { toCycles, findCycle, phasesFor, phaseLabel, isLive, isTerminal, typeLabel } from "../core/model.js";
-import { dateRange, utcDate, shortId, score } from "../core/fmt.js";
+import { dateRange, utcDate, shortId, score, calibrationVerdict } from "../core/fmt.js";
 import { renderStrip } from "../core/arena-strip.js";
 import { taskLabel, mountTickClock, utcTime } from "../core/player.js";
 
@@ -290,7 +290,11 @@ export async function mount(el, params) {
 
       ${calFailed ? html`
         <div class="arena-note arena-note--warn"><span>⚠</span><span>
-          <b>Judge calibration failed for this Arena</b> (correlation ${score(i.calibration.correlation)}, below the 0.6 threshold) — every score below is lower-confidence.
+          <b>Judge calibration failed for this Arena</b> (${calibrationVerdict(i.calibration)}) — ${
+            i.calibration.failedSide === "high"
+              ? "the judges agreed far too closely, which points at the calibration anchors being too easy to tell apart rather than at the ranking itself; treat the order below as untested and check the anchors before trusting it."
+              : "every score below is lower-confidence."
+          }
         </span></div>` : ""}
 
       ${spine(cycle)}

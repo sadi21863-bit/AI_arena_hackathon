@@ -28,11 +28,44 @@ exactly what the ceiling detects. But a single sample cannot separate
 model", and calibration has run clean on previous models. Recording it as an
 open hypothesis to test against the next event's correlation, not as a cause.
 
-**Judging proceeded anyway** — the known P2-7 gap where calibration is
-computed and surfaced but never enforced. So a failed calibration currently
-leaves no trace in the published result. Closing that (a failed calibration
-must mark the event so the caveat reaches readers) is the real follow-up, and
-it is a bigger correctness win than the correlation number itself.
+**Judging proceeded anyway, and that was correct** — not the "P2-7 gap" it
+first looked like. `src/events/scheduler.ts:417-425` reasons that with no human
+reliably watching a live event, a hard block risks permanently stalling the
+event over a single low-n (3 anchors) dip, which is worse than proceeding
+flagged; the soft-flag was implemented 2026-07-28
+(`docs/INVESTIGATION_2026-07-28.md:504`). The non-enforcement is a documented
+trade-off, so the follow-up is not "enforce it."
+
+**The real defect was in how the flag was worded.** The Live view reported
+this failure as:
+
+> Judge calibration failed for this Arena (correlation 0.96, **below the 0.6
+> threshold**) — every score below is lower-confidence.
+
+Wrong side of a two-sided band. The Office view and `scripts/health_check.js`
+compounded it by calling every failure "low-confidence", which is false for an
+over-correlation — the judges were *over*-agreeing. So the one calibration
+failure the arena has ever produced that fired the new ceiling was reported to
+readers as the opposite condition, pointing an operator at the wrong remedy
+(loosen the anchors, add examples) for a signal that had never fired before.
+
+Root cause is duplication, not a missing feature: `0.6` was hardcoded in a UI
+string while the live check lived in `calibration.ts`, and the field was
+constructed inline at four separate API sites. Fixed by making the band a
+single exported constant, returning `failedSide` + the `band` with the
+payload so no client restates it, and describing the side actually breached.
+The one historical trap found while doing this: `event_c35a0401` stored
+`passed: 1` at correlation 0.994, because the 0.95 ceiling postdates that run
+— so a verifier that trusts the stored verdict alone will disagree with the
+current band, which the export now reports as `calibration_band_drift` rather
+than papering over.
+
+**Residual P2-7 gap, now closed.** The backlog's "Done when" (`ARENA_BACKLOG.md:403`)
+asks for the failure to be visible "somewhere a reader of the results would
+see it". That was true in the Observatory but false in the frozen export
+bundle, which emitted `passed: 0` as a bare row in `calibration.json` for
+someone to know to look for. `manifest.json` now carries `caveats[]` with a
+direction-specific message, verified against four real events.
 
 ## 8.2 A verify failure that nothing compelled any turn to read
 

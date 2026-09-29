@@ -22,7 +22,7 @@ import { html, render, wireReload } from "../core/html.js";
 import { href, navigate } from "../core/router.js";
 import * as store from "../core/store.js";
 import { isLive, typeLabel, phaseLabel } from "../core/model.js";
-import { shortId } from "../core/fmt.js";
+import { shortId, calibrationVerdict } from "../core/fmt.js";
 import { mountArenaStrip } from "../core/arena-strip.js";
 import { utcTime } from "../core/player.js";
 
@@ -1390,7 +1390,7 @@ export async function mount(el, params) {
       <b>Judging — ${judging.judges.filter((j) => j.expected > 0 && j.scored >= j.expected).length}/${judging.judges.length} judges finished</b>
       across ${judging.expected} ${judging.phase === "hackathon" ? "team(s)" : "idea(s)"}.
       Pinned model: <code>${judging.pinned.model || "not pinned"}</code>${judging.pinned.provider ? html` (${judging.pinned.provider})` : ""}.
-      ${cal ? html` Calibration correlation ${Number(cal.correlation).toFixed(2)} — ${cal.passed ? "passed" : "FAILED, scores are low-confidence"}.` : " No calibration recorded."}
+      ${cal ? html` Calibration ${calibrationVerdict(cal)}.${cal.passed ? "" : cal.failedSide === "high" ? " Anchors are likely too easy to separate — verify them before trusting the order." : " Scores are low-confidence."}` : " No calibration recorded."}
       ${deviants.length ? html` <b>${deviants.join(", ")} did not use the pinned model.</b>` : ""}
     </span></div>`);
   }

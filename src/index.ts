@@ -19,8 +19,28 @@ import { processQueue } from "./events/executor";
 import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
 import { JUDGES } from "./judges/personas";
+import { calibrationFailureSide, CALIBRATION_MIN, CALIBRATION_MAX } from "./judges/calibration";
 import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
+
+/**
+ * Single builder for the `calibration` field on every event-shaped response.
+ * Added 2026-09-29: the field was constructed inline at four sites, which is
+ * how a stale "below the 0.6 threshold" string shipped to readers describing
+ * an over-correlation failure as an under-correlation one. `failedSide` lets a
+ * client render the right remedy without hardcoding either bound; the bounds
+ * travel with the payload so the number lives in exactly one module.
+ */
+function calibrationField(correlation: unknown, passed: unknown) {
+  const corr = typeof correlation === "number" && Number.isFinite(correlation) ? correlation : null;
+  if (corr == null) return null;
+  return {
+    correlation: corr,
+    passed: !!passed,
+    failedSide: calibrationFailureSide(corr),
+    band: { min: CALIBRATION_MIN, max: CALIBRATION_MAX },
+  };
+}
 
 export type { Env };
 
@@ -440,9 +460,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         const { calibration_correlation, calibration_passed, ...event } = row;
         return {
           ...event,
-          calibration: calibration_correlation != null
-            ? { correlation: calibration_correlation, passed: !!calibration_passed }
-            : null,
+          calibration: calibrationField(calibration_correlation, calibration_passed),
         };
       });
       return Response.json(withCalibration);
@@ -500,9 +518,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         const { calibration_correlation, calibration_passed, ...event } = row;
         return {
           ...event,
-          calibration: calibration_correlation != null
-            ? { correlation: calibration_correlation, passed: !!calibration_passed }
-            : null,
+          calibration: calibrationField(calibration_correlation, calibration_passed),
           counts: {
             ideas: sum(ideas.results, event.id),
             judgedIdeas: sum(judgedIdeas.results, event.id),
@@ -543,7 +559,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const calibration = event.type === "ideathon"
         ? await env.DB.prepare(`SELECT correlation, passed FROM calibration_runs WHERE event_id = ?`).bind(eventMatch[1]).first<{ correlation: number; passed: number }>()
         : null;
-      return Response.json({ ...event, calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null });
+      return Response.json({ ...event, calibration: calibrationField(calibration?.correlation, calibration?.passed) });
     }
 
     // Observatory Live view (spec §11): aggregate queue-item counts by status
@@ -1071,7 +1087,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         phase,
         status: event.status,
         pinned: { provider: event.judging_provider, model: event.judging_model },
-        calibration: calibration ? { correlation: calibration.correlation, passed: !!calibration.passed } : null,
+        calibration: calibrationField(calibration?.correlation, calibration?.passed),
         expected,
         judges,
       });

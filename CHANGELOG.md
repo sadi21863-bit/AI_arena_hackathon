@@ -15,11 +15,34 @@ notes what changed behavior in production and why.
   0.60–0.95 acceptance band, i.e. it broke the *upper* bound.** The anchor
   details show every judge separating the strong/mid/weak anchors almost
   perfectly, which is the over-discrimination signature the ceiling exists to
-  catch. Judging proceeded regardless — the known P2-7 gap where calibration is
-  computed and surfaced but never enforced. **Suspected, not proven:** the
-  strengthened weak-entry padding clause (2026-09-27) may be over-tightening
-  judges into agreement. One sample cannot separate that from qwen3.8 simply
-  being a consistent model; treat the causal link as an open hypothesis.
+  catch. Judging proceeded regardless — **by design, not by oversight**
+  (`src/events/scheduler.ts:417-425` reasons that a hard block risks
+  permanently stalling an unattended event over one low-n dip; the soft flag
+  was implemented 2026-07-28 per `docs/INVESTIGATION_2026-07-28.md:504`).
+  **Suspected, not proven:** the strengthened weak-entry padding clause
+  (2026-09-27) may be over-tightening judges into agreement. One sample
+  cannot separate that from qwen3.8 simply being a consistent model; treat
+  the causal link as an open hypothesis.
+- **Fixed a real user-facing bug found by reading that first failure.** The
+  Live view reported it as "correlation 0.96, **below the 0.6 threshold**" —
+  the wrong side of a two-sided band, pointing an operator at the wrong remedy
+  (loosen the anchors) for the one signal that had never fired before. The
+  Office view and `scripts/health_check.js` compounded it by calling any
+  failure "low-confidence", which is false for an over-correlation. Now the
+  band is a single exported constant (`CALIBRATION_MIN`/`MAX`), the API
+  returns `failedSide` and the `band` so no client restates the numbers, and
+  every surface describes the side it actually breached. Covered by
+  `scripts/calibration_verdict_test.mjs` (10 cases: live value, both
+  boundaries, both failure sides, legacy payloads with no `band`).
+- **Export bundles now carry calibration caveats in `manifest.json`.** P2-7's
+  "Done when" — a failed calibration producing a visible consequence where a
+  reader of the results would see it — was met in the Observatory but *not* in
+  the frozen bundle, which shipped `passed: 0` as a bare row. Bundles now emit
+  `caveats[]` with a direction-specific message. Also catches **band drift**:
+  `event_c35a0401` stored `passed: 1` at correlation 0.994, above the ceiling
+  that postdates it, so a bundle would otherwise claim "calibration passed".
+  Verified against four real events (high fail, low fail, stored-pass drift,
+  clean pass).
 - **Product code-quality review of both hackathon repos** (alpha
   `75504818`, beta `75504818`). Beta is clean: 8/8 CI green, 434 lines of real
   isolated tests, no secrets. Alpha has 2 green then **10 consecutive failures

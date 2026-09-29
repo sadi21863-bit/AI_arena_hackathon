@@ -211,7 +211,20 @@ async function checkJudging(event) {
   if (deviants.length) fail("judge-model", `${deviants.join(", ")} scored with a model other than the pinned ${j.pinned?.model || "(none)"}`);
 
   if (j.calibration && !j.calibration.passed) {
-    warn("calibration", `correlation ${Number(j.calibration.correlation).toFixed(2)} failed its threshold — ranking is low-confidence`);
+    // Two-sided band: an over-correlation is an overfit signal about the
+    // anchors, NOT low confidence in the ranking. Reporting both as
+    // "low-confidence" (the 2026-09-29 text) would point an operator at the
+    // wrong remedy for the one failure that had never fired before.
+    const band = j.calibration.band || { min: 0.6, max: 0.95 };
+    const side = j.calibration.failedSide ||
+      (j.calibration.correlation > band.max ? "high" : j.calibration.correlation < band.min ? "low" : null);
+    const corr = Number(j.calibration.correlation).toFixed(2);
+    warn(
+      "calibration",
+      side === "high"
+        ? `correlation ${corr} exceeded the ${band.max} ceiling — judges over-agree, anchors are likely too easy; ranking is untested rather than low-confidence`
+        : `correlation ${corr} fell below the ${band.min} floor — ranking is low-confidence`,
+    );
   }
 
   const scored = (j.judges || []).reduce((s, x) => s + x.scored, 0);

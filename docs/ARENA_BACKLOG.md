@@ -403,6 +403,17 @@ But "a number nobody acts on" degrades into noise. Pick one:
 **Done when:** a failed calibration produces a visible, persistent consequence
 somewhere a reader of the results would see it.
 
+**Status: closed 2026-07-28, with a residual gap found and closed 2026-09-29.**
+The soft-flag landed 2026-07-28 (list route LEFT JOIN + Observatory banner)
+but had **never been exercised against a live failure** — the one real failure
+at the time had aged out of the 20-event window. The first failure that
+actually rendered was 2026-09-29 (correlation 0.959, the overfit ceiling), and
+the banner then described it as "below the 0.6 threshold" — the wrong side of
+a two-sided band. Fixed: band is a single exported constant, API returns
+`failedSide` + `band`, all surfaces name the side breached, and export bundles
+now carry `caveats[]`. The Observatory half is not sufficient on its own —
+`manifest.json` is the durable artifact, so it gets its own caveat.
+
 ---
 
 ## P2-8 — Cron failures are silent
