@@ -3,6 +3,52 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-09-30
+
+- **Live incident: `event_7308f1fe` built nothing for ~27 hours because
+  `createTeamRepo` never set the Zen pool keys.** All 14 build turns across both
+  teams (2026-09-29 03:05 → 2026-09-30 05:51) failed on the workflow's own
+  guard — `Neither Zen pool key is configured (OPENCODE_API_KEY and
+  OPENCODE_API_KEY_2 are both empty)`. Both teams hit
+  `MAX_BUILD_TURNS_PER_DAY = 6` with zero successful turns, so the event burned
+  its entire daily build budget twice over. Root cause: `createTeamRepo`
+  provisioned only `CF_ACCOUNT_ID`/`CF_API_TOKEN`, never the Zen keys the build
+  workflow reads. The previous event's repos worked **only because an operator
+  set those keys by hand afterwards** — the gap was in the data the whole time
+  and was treated as a one-off instead of a missing code path.
+- **Every safeguard was green and all of them were blind to this.** The queue
+  recorded the failures faithfully but a fast-failing turn is indistinguishable
+  from a provider flake; `/headroom` reported `harness.inSync: true` on both
+  repos because it checks the workflow file's blob SHA, not whether the
+  credentials that workflow reads exist. The missing invariant is "team repo
+  exists" ⇒ "team repo can run its own workflow". Full write-up in
+  `docs/INCIDENT_2026-09-23_HARNESS.md` §9.
+- **Fixed:** `createTeamRepo` now provisions the Zen pool keys from the
+  Worker's secrets like the `CF_*` pair (`repos.ts:432-441`). Both are optional
+  in `Env`, so a Worker with only one pool still forms teams instead of
+  throwing. `OPENCODE_API_KEY_2` added to the Worker's secrets so both pools
+  are available to provision. The two live repos were also provisioned by hand
+  to unblock the event.
+- **Verified end-to-end before calling it fixed:** a dispatch on
+  `arena-team-alpha-c5ad953c` cleared the credential guard, ran real inference,
+  and produced 37 files / 4,796 lines / 14 test files in commit `bc60d7d`, with
+  the locked-down verification container passing. It still exited 1 with an
+  **empty** crash/provider signature (no 429, no provider error, no `expected
+  'id'` regression), so this reads as a driver-level exit after the work was
+  committed — the designed "preserved but failed" path.
+- **ECC verification-loop proven absent, not just unproven.** With this turn
+  being the first real product turn since the skill was wired in
+  (2026-09-26), `VERIFICATION_REPORT.md` was **not** produced — the phase
+  commands ran and passed because the workflow runs them, and the report is a
+  request rather than a gate.
+- Both new team repos confirmed `harness.inSync: true` at blob `1bea42c1`: the
+  byte-exact sync (vs. the CRLF-broken manual path) held on first contact with
+  a freshly created event's repos.
+- Local `.env` has two Groq keys (`GROQ_API_KEY_1`, `GROQ_API_KEY_2`) —
+  correcting an earlier note that claimed no spare existed. `OPENCODE_API_KEY_`
+  is missing its trailing `1` relative to the `_1`/`_2` convention used by the
+  other key sets in the same file.
+
 ## 2026-09-29
 
 - **Ideathon `d9d7a33f` judged on `qwen/qwen3.8-27b` (Groq)** — the first

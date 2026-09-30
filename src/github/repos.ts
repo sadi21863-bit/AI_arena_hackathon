@@ -432,6 +432,13 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   await Promise.all([
     setRepoSecret(env, owner, repoName, "CF_ACCOUNT_ID", env.CF_ACCOUNT_ID),
     setRepoSecret(env, owner, repoName, "CF_API_TOKEN", env.CF_API_TOKEN),
+    // Zen pool keys (2026-09-30). Optional, so a Worker holding only one pool
+    // still forms teams: the workflow treats a missing second key as "no
+    // failover" rather than as a misconfiguration. Provisioning these here is
+    // what stops a new hackathon from repeating the 27-hour, 14-turn outage
+    // where every build turn refused to run for want of credentials.
+    ...(env.OPENCODE_API_KEY ? [setRepoSecret(env, owner, repoName, "OPENCODE_API_KEY", env.OPENCODE_API_KEY)] : []),
+    ...(env.OPENCODE_API_KEY_2 ? [setRepoSecret(env, owner, repoName, "OPENCODE_API_KEY_2", env.OPENCODE_API_KEY_2)] : []),
   ]);
 
   return { fullName: `${owner}/${repoName}` };

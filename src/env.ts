@@ -53,4 +53,20 @@ export interface Env {
   // own secrets, just also readable here for that one purpose).
   CF_ACCOUNT_ID: string;
   CF_API_TOKEN: string;
+
+  // OpenCode Zen pool keys, injected into new team repos the same way the CF_*
+  // pair above is. Added 2026-09-30: createTeamRepo provisioned only the CF
+  // pair, so a freshly formed hackathon's repos had no Zen credentials and
+  // every build turn died on the workflow's own guard ("Neither Zen pool key
+  // is configured"). It went unnoticed for 27 hours and burned 14 turns
+  // across 2 teams, because the failure looks like ordinary provider flakiness
+  // in the queue and nothing cross-checks "team repo exists" against
+  // "team repo has the credentials its workflow requires".
+  //
+  // Both are optional: the Worker may hold only pool 1, and provisioning then
+  // degrades to a single key (the workflow's A2 attempt finds no failover key
+  // and simply proceeds on A1). Optional rather than required so a Worker
+  // without them still creates repos instead of throwing at formation time.
+  OPENCODE_API_KEY?: string;
+  OPENCODE_API_KEY_2?: string;
 }

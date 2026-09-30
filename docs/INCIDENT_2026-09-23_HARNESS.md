@@ -1,3 +1,91 @@
+# 2026-09-30 — A new event built nothing for 27 hours because `createTeamRepo` never set the Zen keys
+
+The worst failure in this file's record, and the most instructive: nothing was
+broken, nothing crashed, every layer reported honestly, and a live hackathon
+still produced **zero** product code for a full day.
+
+## 9.1 What happened
+
+`event_7308f1fe` (the hackathon carrying the top-2 from `d9d7a33f`) formed
+both teams cleanly. Then **every build turn died** on the workflow's own guard:
+
+```
+Neither Zen pool key is configured (OPENCODE_API_KEY and OPENCODE_API_KEY_2
+are both empty) — refusing to run a turn with no credentials
+```
+
+14 turns across 2 teams, `2026-09-29 03:05` → `2026-09-30 05:51`, **all
+failed**, and nothing surfaced it. Both teams hit
+`MAX_BUILD_TURNS_PER_DAY = 6` (`scheduler.ts:49`) without a single successful
+turn — so the event silently burned its entire daily build budget, twice.
+
+Cause: `createTeamRepo` provisioned only `CF_ACCOUNT_ID`/`CF_API_TOKEN`
+(`repos.ts:433`). It never set the Zen pool keys the build workflow requires.
+The previous event's repos had them **because an operator set them by hand
+after the fact** — the automation gap was visible in the data the whole time and
+was read as a one-off fix rather than a missing code path. It recurred exactly
+as written.
+
+## 9.2 Why nothing caught it, which is the real lesson
+
+Every existing safeguard worked correctly and every one of them is blind to
+this class of failure:
+
+- **The workflow refused to run** with no credentials. Correct, loud, and
+  useless on its own — it prevents a wasted inference call, not a wasted event.
+- **The queue recorded the failure faithfully.** But a turn that fails
+  immediately looks identical in the queue to a provider flake, and 14 of them
+  in a row across 2 teams still read as "the models are down today".
+- **`/headroom` showed healthy harness sync** (`inSync: true` on both repos) —
+  it checks the *workflow file's* blob SHA, not whether the credentials that
+  workflow reads exist. The probe I added two days earlier reported green on a
+  completely non-functional repo.
+- **No check ties "team repo exists" to "team repo can actually run its
+  workflow."** That is the missing invariant, and it is the one worth building.
+
+This is the same shape as §8.2 (alpha's `TS2307`): **reported honestly, acted
+on by nobody.** There the report was a log file; here it is a `::error::`
+annotation. Neither is load-bearing, so a defect that is trivially detectable
+keeps consuming a live event's whole budget.
+
+Worth stating plainly: the first sign was visible at 03:05 on 09-29 and I did
+not read it until 12:08 on 09-30, because I was reviewing a *judging* result
+and treated team formation as already settled. The drift probe reporting
+`inSync: true` actively reinforced the wrong conclusion — a green check for the
+wrong property is worse than no check.
+
+## 9.3 Fix
+
+- **`createTeamRepo` now provisions the Zen pool keys** (`repos.ts:432-441`)
+  from the Worker's own secrets, exactly as it already did for the `CF_*` pair.
+  Both keys are optional in the `Env` type, so a Worker holding only one pool
+  still forms teams (the workflow reads a missing second key as "no failover",
+  not as misconfiguration). `OPENCODE_API_KEY_2` was added to the Worker's
+  secrets so both pools are actually available.
+- **Both new team repos were provisioned by hand** to unblock the live event,
+  restoring parity with `75504818`.
+- **Verified end-to-end before declaring it fixed:** a dispatch on
+  `arena-team-alpha-c5ad953c` cleared the credential guard, ran real inference,
+  and produced **37 files / 4,796 lines / 14 test files** in commit `bc60d7d`
+  (config, DI container, domain types, HTTP app, auth + error middleware, an
+  identity/EID provider) with the locked-down verification container passing.
+
+That turn still `opencode exited 1` with an **empty** crash/provider signature
+— no 429, no provider error, no `expected 'id'` regression — so the honest
+reading is a driver-level exit after the work was committed, not a known
+failure. Work preserved, turn reported failed: the designed behavior, and
+exactly why "preserved" has to be separated from "succeeded" in the accounting.
+
+## 9.4 The discipline gap this also proved
+
+`VERIFICATION_REPORT.md` **was not produced.** The ECC verification-loop skill
+has been wired into the prompt since 2026-09-26 and this was the first real
+product turn to exercise it — and the report is absent, while the phase
+commands ran and passed. So the ladder is enforced in *description* and not in
+*artifact*: the agent runs the phases because the workflow runs them, and the
+report is a request, not a gate. §8.2's "wired but not yet proven" is now
+resolved — proven absent.
+
 # 2026-09-29 — Ideathon judged on qwen3.8; calibration broke the ceiling; a verify failure nobody read
 
 Two firsts from the `d9d7a33f` ideathon, plus one structural gap found by
