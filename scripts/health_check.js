@@ -161,6 +161,35 @@ async function checkDispatchRate(event) {
  * that produced no commit is the P0-0a shape, and it is exactly what a green
  * CI conclusion hides.
  */
+/**
+ * Can each live team repo actually run a build turn?
+ *
+ * Two independent properties, and conflating them is what hid the 2026-09-30
+ * outage: `harness.inSync` compares the workflow file's blob SHA and reported
+ * `true` on two repos whose build turns could not authenticate, because the
+ * repo had no Zen pool keys. A repo can be perfectly current and still be
+ * unable to run.
+ */
+async function checkHarness(headroom) {
+  const rows = headroom.harness || [];
+  if (!rows.length) return;
+  for (const r of rows) {
+    if (r.error) {
+      fail("harness", `${r.repo}: could not be inspected — ${r.error}`);
+      continue;
+    }
+    if (r.runnable === false) {
+      fail("harness", `${r.repo}: cannot run build turns — missing secret(s) ${(r.missingCredentials || []).join(", ")}`);
+    } else if (r.inSync === false) {
+      warn("harness", `${r.repo}: harness drifted (team ${String(r.teamSha).slice(0, 7)} vs main ${String(r.mainSha).slice(0, 7)})`);
+    } else if ((r.optionalCredentialsMissing || []).length) {
+      warn("harness", `${r.repo}: runnable, but no failover pool (${r.optionalCredentialsMissing.join(", ")}) — a single provider outage will fail the turn`);
+    } else {
+      ok("harness", `${r.repo}: current and runnable`);
+    }
+  }
+}
+
 async function checkTurnsProducedWork(event) {
   let teams, turns;
   try {
@@ -171,6 +200,16 @@ async function checkTurnsProducedWork(event) {
 
   for (const team of teams) {
     const succeeded = turns.filter((t) => t.team_id === team.id && t.conclusion === "success").length;
+    const attempted = turns.filter((t) => t.team_id === team.id).length;
+    // A team with turns dispatched and none successful is the exact shape that
+    // went unnoticed on event_7308f1fe: 14 turns, all failed, and this loop
+    // skipped the team entirely (`continue` on !succeeded), so the one check
+    // meant to catch "success without work" said nothing when there was no
+    // success and no work either. Absence of evidence was reported as health.
+    if (!succeeded && attempted >= 3) {
+      fail("turns-vs-commits", `${team.team_name}: ${attempted} build turns dispatched, 0 succeeded — the team produced nothing`);
+      continue;
+    }
     if (!succeeded) continue;
     let commits = [];
     try { commits = await get(`${GH}/repos/${team.repo_url}/commits?per_page=100`); } catch { continue; }
@@ -248,8 +287,9 @@ async function main() {
     process.exit(1);
   }
 
-  await checkCron(headroom);
-  checkQuota(headroom);
+await checkCron(headroom);
+checkQuota(headroom);
+await checkHarness(headroom);
   checkCadence(events);
   checkAbandoned(events);
 

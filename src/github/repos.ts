@@ -300,6 +300,69 @@ export interface HarnessDrift {
   mainSha: string | null;
   teamSha: string | null;
   error?: string;
+  /** Secrets the build workflow needs but this repo does not have. */
+  missingCredentials?: string[];
+  /** Secrets present that the build workflow reads opportunistically. */
+  optionalCredentialsMissing?: string[];
+  /** True when the repo cannot run a build turn as configured. */
+  runnable?: boolean;
+}
+
+/**
+ * Credentials `team-build-turn.yml` reads, split by whether their absence
+ * stops a turn outright.
+ *
+ * `required` is the list whose absence makes every build turn fail at the
+ * workflow's own credential guard — the defect that cost event_7308f1fe a full
+ * day (2026-09-30, incident §9): `createTeamRepo` never set them, and
+ * `checkHarnessDrift` reported `inSync: true` on both unusable repos because it
+ * only compared the workflow file's blob SHA. A green check for the wrong
+ * property is worse than no check, so the invariant now spans both properties.
+ *
+ * `OPENCODE_API_KEY_2` is optional by design: a missing second pool means "no
+ * failover attempt", not "cannot run". One pool is a degraded but working turn,
+ * so it is reported separately instead of failing the check.
+ */
+export const REQUIRED_BUILD_SECRETS = ["CF_ACCOUNT_ID", "CF_API_TOKEN", "OPENCODE_API_KEY"] as const;
+export const OPTIONAL_BUILD_SECRETS = ["OPENCODE_API_KEY_2"] as const;
+
+export interface CredentialCheck {
+  repo: string;
+  runnable: boolean;
+  missing: string[];
+  optionalMissing: string[];
+  error?: string;
+}
+
+/**
+ * Verifies each live team repo holds the secrets its own build workflow reads.
+ *
+ * Read-only and name-only: GitHub's `GET /repos/{repo}/actions/secrets` returns
+ * names and timestamps, never values, so this can run on the cron tick without
+ * putting a credential anywhere it isn't already stored. A repo the token
+ * cannot read is reported as an error rather than as "no missing secrets" —
+ * an unanswerable question must never read as a passing one.
+ */
+export async function checkTeamCredentials(env: Env, repoUrls: string[]): Promise<CredentialCheck[]> {
+  return Promise.all(repoUrls.map(async (repoUrl): Promise<CredentialCheck> => {
+    try {
+      const res = await githubRequest(env, "GET", `/repos/${repoUrl}/actions/secrets`);
+      const present = new Set(
+        ((res as { secrets?: Array<{ name?: string }> }).secrets ?? [])
+          .map((s) => s?.name)
+          .filter((n): n is string => typeof n === "string"),
+      );
+      const missing = REQUIRED_BUILD_SECRETS.filter((n) => !present.has(n));
+      const optionalMissing = OPTIONAL_BUILD_SECRETS.filter((n) => !present.has(n));
+      return { repo: repoUrl, runnable: missing.length === 0, missing, optionalMissing };
+    } catch (err) {
+      return {
+        repo: repoUrl, runnable: false,
+        missing: [...REQUIRED_BUILD_SECRETS], optionalMissing: [...OPTIONAL_BUILD_SECRETS],
+        error: err instanceof GitHubApiError ? `${err.status}` : (err instanceof Error ? err.message : String(err)),
+      };
+    }
+  }));
 }
 
 export async function checkHarnessDrift(env: Env): Promise<HarnessDrift[]> {
@@ -331,16 +394,30 @@ export async function checkHarnessDrift(env: Env): Promise<HarnessDrift[]> {
   }
 
   return Promise.all(teams.results.map(async ({ repo_url }): Promise<HarnessDrift> => {
-    try {
-      const res = await githubRequest(env, "GET", `/repos/${repo_url}/contents/${WATCH}`);
-      const teamSha = (res as { sha?: string }).sha ?? null;
-      return { repo: repo_url, inSync: teamSha === mainSha, mainSha, teamSha };
-    } catch (err) {
+    // Both properties are fetched per repo so one /headroom row answers
+    // "is this repo current?" AND "can it actually run a turn?" — the second
+    // question is the one that went unanswered for 27 hours on event_7308f1fe
+    // (incident §9). A credential read that errors is folded into the row's
+    // `error` rather than being allowed to read as a pass.
+    const [contentRes, credCheck] = await Promise.all([
+      githubRequest(env, "GET", `/repos/${repo_url}/contents/${WATCH}`).catch((err) => ({ __err: err })),
+      checkTeamCredentials(env, [repo_url]).then(([c]) => c),
+    ]);
+    const creds = {
+      missingCredentials: credCheck.missing,
+      optionalCredentialsMissing: credCheck.optionalMissing,
+      runnable: credCheck.runnable,
+    };
+    if ("__err" in (contentRes as object)) {
+      const err = (contentRes as { __err: unknown }).__err;
       return {
-        repo: repo_url, inSync: false, mainSha, teamSha: null,
-        error: err instanceof GitHubApiError ? `${err.status}` : (err instanceof Error ? err.message : String(err)),
+        repo: repo_url, inSync: false, mainSha, teamSha: null, ...creds,
+        error: [err instanceof GitHubApiError ? `${err.status}` : (err instanceof Error ? err.message : String(err)),
+          credCheck.error].filter(Boolean).join("; "),
       };
     }
+    const teamSha = ((contentRes as { sha?: string }).sha ?? null);
+    return { repo: repo_url, inSync: teamSha === mainSha, mainSha, teamSha, ...creds };
   }));
 }
 

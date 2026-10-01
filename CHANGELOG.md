@@ -44,6 +44,30 @@ notes what changed behavior in production and why.
 - Both new team repos confirmed `harness.inSync: true` at blob `1bea42c1`: the
   byte-exact sync (vs. the CRLF-broken manual path) held on first contact with
   a freshly created event's repos.
+- **`/headroom` now reports whether a team repo can actually run, not just
+  whether it is current.** The harness probe compared the workflow file's blob
+  SHA, so it reported `inSync: true` on two repos whose build turns could not
+  authenticate — a green check for the wrong property, which actively confirmed
+  the wrong conclusion during the incident above. Each `harness` row now also
+  carries `runnable`, `missingCredentials`, and `optionalCredentialsMissing`
+  (`checkTeamCredentials` in `repos.ts`), read name-only from
+  `GET /repos/{repo}/actions/secrets` — GitHub never returns values, so it is
+  safe on the cron tick. `OPENCODE_API_KEY_2` is reported as optional because a
+  missing second pool means "no failover", not "cannot run"; a repo the token
+  cannot read reports an error rather than reading as a pass.
+- **`health_check.js` had a blind spot that suppressed the alarm.** In
+  `checkTurnsProducedWork` a team with turns dispatched but none successful hit
+  `if (!succeeded) continue`, so a team producing *nothing* was skipped — the
+  check meant to catch "success without work" said nothing when there was
+  neither success nor work. Now `>= 3` dispatched with `0` succeeded is a
+  `FAIL`, and there is a new `harness` check wired into the run.
+- **Both fixes verified against the real failure mode, not just the happy
+  path.** With `OPENCODE_API_KEY` temporarily deleted from
+  `arena-team-beta-c5ad953c` (safe: both teams are at their 6/6 daily cap, so
+  no turn can dispatch), `/headroom` reported `inSync=True` **and**
+  `runnable=False, missing=[OPENCODE_API_KEY]`, and `health_check` raised
+  `FAIL harness ... cannot run build turns`. Secret restored, both green again.
+  A check that has only ever passed is the thing this whole incident is about.
 - Local `.env` has two Groq keys (`GROQ_API_KEY_1`, `GROQ_API_KEY_2`) —
   correcting an earlier note that claimed no spare existed. `OPENCODE_API_KEY_`
   is missing its trailing `1` relative to the `_1`/`_2` convention used by the
