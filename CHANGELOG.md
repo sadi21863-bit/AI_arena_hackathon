@@ -44,6 +44,25 @@ notes what changed behavior in production and why.
 - Both new team repos confirmed `harness.inSync: true` at blob `1bea42c1`: the
   byte-exact sync (vs. the CRLF-broken manual path) held on first contact with
   a freshly created event's repos.
+- **Fixed the root cause of every "reported honestly, acted on by nobody" case:
+  `repo-scaffold/.gitignore` had `*.log` under `# Logs`, which silently
+  ignored `VERIFICATION_FAILURE.log` and `VERIFICATION_NOTE.log`.** The verify
+  container writes the report into the workspace, then `git add -A` skips it as
+  ignored — so the file existed on the runner and vanished before the push.
+  Verified across all four team repos (full history, two events): neither file
+  has EVER been committed. Only `VERIFICATION_REPORT.md` (`.md`, not `.log`)
+  appears. This is the mechanical cause of:
+  - alpha's `TS2307` surviving 7 days and 10 consecutive red CI runs — the agent
+    was never told `@aws-sdk/lib-dynamodb` was missing from `package.json`;
+  - beta failing three consecutive turns on the same two test files
+    (`src/app.test.ts`, `src/index.test.ts`) — same reason.
+  Both were instructed (AGENTS.md rule 3, workflow error message) to read a
+  file that could not exist in their repo. Fixed by negating both after the
+  `*.log` rule; real runtime logs stay ignored. Covered by
+  `scripts/check_gitignore_contract.sh` using `git check-ignore` (the same
+  predicate `git add` uses), with a negative control against the pre-fix file.
+  Pushed to both live team repos via `scripts/sync_gitignore.cjs` (uses
+  `git update-index --cacheinfo` to set the exact blob, avoiding the CRLF trap).
 - **`/headroom` now reports whether a team repo can actually run, not just
   whether it is current.** The harness probe compared the workflow file's blob
   SHA, so it reported `inSync: true` on two repos whose build turns could not

@@ -1,3 +1,75 @@
+# 2026-10-02 — `*.log` in `.gitignore` silently swallowed the harness's required-reading artifact
+
+The deepest root cause found in this record, and the one that explains every
+"reported honestly, acted on by nobody" case in it.
+
+## 9.5 The bug
+
+`repo-scaffold/.gitignore` contains:
+
+```
+# Logs
+logs/
+*.log
+```
+
+`VERIFICATION_FAILURE.log` and `VERIFICATION_NOTE.log` match `*.log`. The
+verify container writes the report into `/workspace`, then the commit step runs
+`git add -A` — which **skips ignored files silently**. The file existed on the
+runner and vanished before the push. Every subsequent turn got a fresh checkout
+with no report.
+
+**Verified across all four team repos, full history, two events:** neither file
+has ever been committed. Only `VERIFICATION_REPORT.md` appears (`.md`, not
+`.log`). A negative control against the pre-fix `.gitignore` confirms both are
+ignored; `scripts/check_gitignore_contract.sh` now asserts the fix with
+`git check-ignore`, the same predicate `git add` uses.
+
+## 9.6 What this caused
+
+Every instance in this record where a failure was reported and never acted on:
+
+- **Alpha's `TS2307` survived 7 days and 10 consecutive red CI runs.** The agent
+  was told to read `VERIFICATION_FAILURE.log` if it existed. It never existed.
+  The agent had no way to know `@aws-sdk/lib-dynamodb` was missing from
+  `package.json`.
+- **Beta failed three consecutive turns on the same two test files**
+  (`src/app.test.ts`, `src/index.test.ts`). Same mechanism: the agent was never
+  told what broke, so it kept making the same mistake.
+- **The ECC verification-loop discipline was "wired but unproven"** — and the
+  reason it produced no `VERIFICATION_REPORT.md` on alpha's first turn is the
+  same: the agent was instructed to read a file that could not exist, and the
+  report it was supposed to write was itself swallowed by `*.log` on the next
+  turn's checkout.
+
+The contract was explicit in two places — `AGENTS.md` rule 3 ("the file is
+committed so the NEXT turn must fix what it describes") and the workflow's own
+error message ("see ... the committed VERIFICATION_FAILURE.log") — and broken by
+a `.gitignore` rule intended for runtime logs.
+
+## 9.7 Fix
+
+Negate both harness artifacts after the `*.log` rule in
+`repo-scaffold/.gitignore`:
+
+```
+!VERIFICATION_FAILURE.log
+!VERIFICATION_NOTE.log
+```
+
+Real runtime logs (`debug.log`, `app.log`, etc.) stay ignored. Pushed to both
+live team repos via `scripts/sync_gitignore.cjs`, which uses
+`git update-index --cacheinfo` to set the exact blob hash — avoiding the CRLF
+trap that the PowerShell `>` redirection reintroduced (the same trap as the
+2026-09-28 harness-sync incident).
+
+**Design gap this exposes:** `.gitignore` is a scaffold file (one-time), not a
+harness file (re-synced every turn). So scaffold fixes only apply to future
+repos; existing repos keep the broken version until manually synced. For a file
+that is now load-bearing for the harness contract, that distinction is wrong —
+it should be promoted to `HARNESS_FILES` so it self-heals. Proposed, not yet
+implemented.
+
 # 2026-09-30 — A new event built nothing for 27 hours because `createTeamRepo` never set the Zen keys
 
 The worst failure in this file's record, and the most instructive: nothing was
