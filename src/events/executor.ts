@@ -691,6 +691,29 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`),
     });
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
+
+    // Provision at most ONE team per queue item.
+    //
+    // The subrequest cap is per Worker INVOCATION, and a single invocation also
+    // drains other queue items (processQueue(limit=3)), so the budget is shared
+    // across the whole batch. One team's provisioning is ~40 subrequests — under
+    // the free-plan cap of 50 — but doing both teams in one item was ~80 and
+    // killed 4 of 5 team_formation items on event_7308f1fe with "Too many
+    // subrequests by single Worker invocation" (incident §10).
+    //
+    // A continuation item is safe and needs no new state: the loop head skips any
+    // team already at status 'building', which line 693 above has just set, so
+    // the follow-up forms only the remaining team and then enqueues nothing
+    // further. Termination is therefore structural — the work list shrinks by one
+    // per item — not a counter that could run away.
+    //
+    // Costs one extra queue item and one cron tick (5 min) before the second team
+    // starts building. That is not on the critical path: spec §8 starts build
+    // turns on day 1, and team formation is a day-0 step.
+    if (i < top2.length - 1) {
+      await enqueue(env, { eventId: item.event_id, taskType: "team_formation", priority: 1 });
+      return;
+    }
   }
 }
 

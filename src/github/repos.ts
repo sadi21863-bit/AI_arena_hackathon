@@ -150,13 +150,31 @@ async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promis
  * the file already exists there's nothing to reconcile — skip it rather
  * than fetch its sha to update, which GitHub's Contents API would
  * otherwise require.
+ *
+ * `knownAbsent` skips the existence GET, for a repo this call just created:
+ * nothing can be in it yet, so all 21 GETs are provably wasted. That GET is
+ * the single largest subrequest cost in team_formation, which provisions both
+ * teams in one Worker invocation and was dying on the free-plan cap of 50 (4 of
+ * 5 items failed on event_7308f1fe). The GET also explains why one item
+ * *succeeded*: on a retry, earlier files already existed so their GET hit and
+ * skipped the PUT, halving the cost — the idempotency check was doing double
+ * duty as accidental load-shedding.
+ *
+ * Only ever passed by the caller that observed the repo's creation succeed. A
+ * retry takes the 422 "already exists" branch, sets it false, and keeps every
+ * GET, so idempotency is preserved exactly where it is actually needed.
  */
-async function putFile(env: Env, owner: string, repo: string, path: string, content: string, message: string): Promise<void> {
-  try {
-    await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${path}`);
-    return; // already scaffolded by a prior attempt
-  } catch (err) {
-    if (!(err instanceof GitHubApiError) || err.status !== 404) throw err;
+async function putFile(
+  env: Env, owner: string, repo: string, path: string, content: string, message: string,
+  knownAbsent = false,
+): Promise<void> {
+  if (!knownAbsent) {
+    try {
+      await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${path}`);
+      return; // already scaffolded by a prior attempt
+    } catch (err) {
+      if (!(err instanceof GitHubApiError) || err.status !== 404) throw err;
+    }
   }
   await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/${path}`, {
     message,
@@ -565,12 +583,17 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   // supplied" (found live, 2026-07-21, team_formation's first real run:
   // README.md collided, workflow/Dockerfile/opencode.json didn't since
   // those paths don't exist in a bare auto_init README-only repo).
+  let repoIsFresh = false;
   try {
     await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
       name: repoName,
       private: false, // public repo required for free unlimited Actions minutes, spec §8
       description: `The Arena — Team ${teamName} building "${idea.title}" (event ${eventId})`,
     });
+    // Creation succeeded, so the repo is empty (auto_init is deliberately off,
+    // see below) and every path below is provably absent. This is what lets
+    // putFile skip its existence GETs on the first, most expensive attempt.
+    repoIsFresh = true;
   } catch (err) {
     // A retried team_formation attempt after this repo already got created
     // (e.g. the OTHER team's step is what failed last time) — reuse it
@@ -580,6 +603,9 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     if (!(err instanceof GitHubApiError && err.status === 422 && /already exists/i.test(err.body))) {
       throw err;
     }
+    // Falls through with repoIsFresh === false: this repo may already hold
+    // files from a partially-completed earlier attempt, so every existence
+    // GET below is doing real idempotency work and must still run.
   }
 
   // Driven off HARNESS_FILES rather than a second hand-written list, so
@@ -597,9 +623,9 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   // loses (found live, 2026-07-21, second team_formation run after the
   // auto_init fix above). Once the first PUT lands the branch exists, so
   // the rest are ordinary sequential commits — no race left to have.
-  await putFile(env, owner, repoName, "README.md", readme, "Scaffold: idea brief");
+  await putFile(env, owner, repoName, "README.md", readme, "Scaffold: idea brief", repoIsFresh);
   for (let i = 0; i < HARNESS_FILES.length; i++) {
-    await putFile(env, owner, repoName, HARNESS_FILES[i], harness[i], `Scaffold: ${HARNESS_FILES[i]}`);
+    await putFile(env, owner, repoName, HARNESS_FILES[i], harness[i], `Scaffold: ${HARNESS_FILES[i]}`, repoIsFresh);
   }
 
   // One-time product scaffold, seeded after the harness so agents build
@@ -613,7 +639,7 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
   // without touching agent edits.
   for (let i = 0; i < SCAFFOLD_FILES.length; i++) {
     const path = SCAFFOLD_FILES[i];
-    await putFile(env, owner, repoName, path, await fetchMainRepoFile(`repo-scaffold/${path}`), `Scaffold: ${path}`);
+    await putFile(env, owner, repoName, path, await fetchMainRepoFile(`repo-scaffold/${path}`), `Scaffold: ${path}`, repoIsFresh);
   }
 
   await setTeamRepoSecrets(env, owner, repoName);

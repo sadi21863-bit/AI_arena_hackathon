@@ -72,11 +72,54 @@ change beyond the two above, and each remaining option has a real cost:
 - or split team_formation into two task types, which changes queue semantics and
   the scheduler's phase-transition assumptions.
 
-None of these is taken here. The event recovered on its own, the current ideathon
-has no teams yet, and shipping a partial mitigation while describing it as a fix
-would repeat this file's worst habit. **Recommendation: skip putFile's
-existence GET for known-fresh repos first** — it is the smallest change that
-actually reaches the cap, and it is purely an optimisation of a redundant call.
+None of these was left as a note. The first two were implemented and verified:
+
+- **`putFile`'s existence GET is skipped when the repo is provably empty**
+  (`knownAbsent`). `createTeamRepo` sets it only when the create-repo POST
+  actually succeeded; a retry takes the 422 "already exists" branch, leaves it
+  false, and keeps every GET — so idempotency survives exactly where it is
+  load-bearing. That GET also explains the 4-of-5 pattern: on a retry, files
+  from the aborted attempt already existed, so their GET hit and skipped the
+  PUT, halving that attempt's cost. The idempotency check was accidentally doing
+  duty as load-shedding, which is why the 5th item squeaked through.
+- **`handleTeamFormation` now provisions one team per queue item**, enqueuing a
+  continuation for the second. No new state is needed: the loop head already
+  skips teams at status `building`, which the tail sets, so termination is
+  structural — the remaining work list shrinks by one per item rather than
+  being a counter that could run away. `scripts/check_team_formation_split.cjs`
+  asserts both the two-team case and that removing the skip would be *caught* by
+  the runaway guard, so a future edit that breaks termination fails a test
+  rather than looping a live event.
+
+**Per-team: 78 → 40 subrequests, under the cap of 50. Per item: ~40.**
+
+This also exposed a **pre-existing** churn loop, unrelated to the overrun: with
+both teams at `building`, the scheduler's queue count fell back to 0, so every
+5-minute tick enqueued another `team_formation` item that found both teams
+formed, skipped both, and completed — one wasted item per tick for the rest of
+formation day. The split makes that guard necessary rather than incidental
+(the continuation legitimately empties the queue mid-formation), so
+`ensurePhaseWorkQueued` now also checks that fewer than two team rows exist
+before enqueueing.
+
+The cost: one extra queue item and one 5-minute cron tick before the second
+team starts building. Not on the critical path — spec §8 starts build turns on
+day 1, and formation is a day-0 step.
+
+## 10.4 Verified on the repos that still carried the bug
+
+The self-heal was driven against `arena-team-alpha-75504818` and
+`arena-team-beta-75504818` — the only two repos with both the missing negations
+*and* an agent's own entry. Both now report:
+
+```
+!VERIFICATION_FAILURE.log = True    !VERIFICATION_NOTE.log = True
+agent's /.pydeps/ intact = True     *.log rule still present = True
+```
+
+`*.log` is deliberately still there: the negations are what make the harness's
+own files win, and removing the blanket rule would start tracking every stray
+runtime log in a product repo. All four team repos are now consistent.
 
 # 2026-10-02 — `*.log` in `.gitignore` silently swallowed the harness's required-reading artifact
 

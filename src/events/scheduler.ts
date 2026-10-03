@@ -575,7 +575,19 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // get re-invoked to use that.
     const existing = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation' AND status != 'failed'`)
       .bind(event.id).first<{ n: number }>();
-    if ((existing?.n ?? 0) === 0) {
+    // ...and do not re-queue once the teams actually exist. Pre-existing churn
+    // (found while fixing the subrequest overrun, incident §10): with both teams
+    // at status 'building' the queue count falls back to 0, so every 5-minute
+    // cron tick enqueued another team_formation item that found both teams
+    // formed, skipped both, and completed without doing anything — one wasted
+    // item per tick for the rest of formation day. The `handleTeamFormation`
+    // split (one team per item, continuation via enqueue) makes the count-based
+    // guard necessary rather than incidental, since the continuation item is
+    // what legitimately empties the queue mid-formation.
+    const formedTeams = await env.DB.prepare(`SELECT COUNT(*) as n FROM hackathon_teams WHERE event_id = ?`)
+      .bind(event.id).first<{ n: number }>();
+    const HACKATHON_TEAM_COUNT = 2;
+    if ((existing?.n ?? 0) === 0 && (formedTeams?.n ?? 0) < HACKATHON_TEAM_COUNT) {
       // team_formation's executor handler also dispatches each team's
       // first build turn â€” "First build turns begin same day" (spec Â§3.2)
       // â€” so nothing else needs queuing here on formation day.

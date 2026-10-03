@@ -5,6 +5,28 @@ notes what changed behavior in production and why.
 
 ## 2026-10-03
 
+- **`team_formation` now fits the Worker subrequest cap: 78 → 40 per team.**
+  Follow-through to the partial fix below, and the change that actually reaches
+  the limit. `putFile`'s existence GET is skipped when `createTeamRepo`
+  observed the repo being created (a retry takes the 422 branch and keeps every
+  GET, so idempotency is intact), and `handleTeamFormation` now provisions one
+  team per queue item with a continuation enqueued for the second — no new
+  state needed, since the loop head already skips teams at status `building`,
+  making termination structural. `scripts/check_team_formation_split.cjs` also
+  asserts that removing that skip would be *caught*, so a future break fails a
+  test instead of looping a live event.
+- **Fixed a pre-existing churn loop this exposed:** with both teams `building`,
+  the scheduler's `team_formation` queue count fell to 0, so every 5-minute tick
+  enqueued a no-op item that formed nothing — one wasted item per tick for the
+  rest of formation day. The guard now also checks that fewer than two team rows
+  exist.
+- **All four team repos now carry the `.gitignore` negations**, verified by
+  driving the self-heal against `arena-team-alpha-75504818` and
+  `arena-team-beta-75504818` — the only two with both the missing negations and
+  an agent's own `/.pydeps/` entry. Both artifacts un-ignored, the agent's entry
+  intact, and the `*.log` rule deliberately left in place (the negations are
+  what make the harness's files win; dropping the blanket rule would start
+  tracking every stray runtime log).
 - **`.gitignore` negations now self-heal at every harness sync.**
   `ensureGitignoreTracksArtifacts` appends only the missing
   `!VERIFICATION_FAILURE.log` / `!VERIFICATION_NOTE.log` lines instead of
