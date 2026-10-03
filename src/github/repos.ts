@@ -37,6 +37,7 @@ import nacl from "tweetnacl";
 import { blake2b } from "@noble/hashes/blake2.js";
 import type { Env } from "../env";
 import { githubRequest, GitHubApiError } from "./client";
+import { countMainRepoFetch } from "../observability/subrequests";
 
 // The Arena's own management repo — where team repos' scaffold files (the
 // generic build-turn workflow, Dockerfile, OpenCode config) are read from.
@@ -389,6 +390,7 @@ export async function ensureGitignoreTracksArtifacts(env: Env, repoFullName: str
 }
 
 async function fetchMainRepoFile(path: string): Promise<string> {
+  countMainRepoFetch();
   const res = await fetch(`https://raw.githubusercontent.com/${MAIN_REPO}/master/${path}`);
   if (!res.ok) throw new Error(`Failed to fetch scaffold file ${path} from ${MAIN_REPO}: ${res.status}`);
   return res.text();

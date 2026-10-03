@@ -5,6 +5,33 @@ notes what changed behavior in production and why.
 
 ## 2026-10-03
 
+- **`team_formation` now measures its own subrequest cost**, replacing the
+  arithmetic the previous two fixes were derived from. `src/observability/subrequests.ts`
+  counts the calls that draw on the per-invocation budget — GitHub requests
+  (counted in `githubRequest`, the single boundary all GitHub calls pass
+  through), main-repo harness/scaffold fetches, and the D1 statements in the
+  formation path — and `handleTeamFormation` records the totals to a new
+  `worker_subrequest_log` table from a `finally` block, so a *failed* run
+  records its cost too. That is precisely the case worth knowing, and it is the
+  one that produced every failure in this file.
+  - Covers three failure modes that would make the measurement worthless:
+    measurement windows must not bleed across invocations (Workers reuse
+    isolates, so module state could inflate every total after the first); the
+    counter must not silently become a no-op reporting a comfortable number;
+    and the logging INSERT must not itself trip the cap it measures. All three
+    asserted in `scripts/check_subrequest_counter.mjs` (11 cases).
+  - Stated limits: it counts what the arena issues, so a total is a **lower
+    bound** — it cannot see subrequests Cloudflare makes internally — and D1
+    statements made by callees are not counted. Both err toward under-reporting,
+    so an under-cap log that still hits the cap means something outside this
+    module is issuing requests, which is the case worth catching.
+  - **Already falsifies one of my own numbers:** the GitHub-only model said 40
+    per team; adding the 6–7 direct D1 statements puts an item at ~47. Still
+    under 50, but by ~3 rather than ~10. The fix was likely sufficient and is
+    closer to the ceiling than previously admitted — established by counting,
+    not by more arithmetic.
+  - No live formation has run since (event_284f548c still in deep_research), so
+    the first real number arrives with the next hackathon.
 - **`team_formation` now fits the Worker subrequest cap: 78 → 40 per team.**
   Follow-through to the partial fix below, and the change that actually reaches
   the limit. `putFile`'s existence GET is skipped when `createTeamRepo`

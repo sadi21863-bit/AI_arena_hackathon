@@ -8,6 +8,7 @@
  */
 
 import type { Env } from "../env";
+import { countGitHubRequest } from "../observability/subrequests";
 
 const API_BASE = "https://api.github.com";
 
@@ -18,6 +19,10 @@ export class GitHubApiError extends Error {
 }
 
 export async function githubRequest(env: Env, method: string, path: string, body?: unknown): Promise<any> {
+  // Every call here is exactly one Worker subrequest. Counted so a
+  // team_formation run reports its real GitHub cost instead of a model — see
+  // src/observability/subrequests.ts and incident §10.
+  countGitHubRequest();
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {

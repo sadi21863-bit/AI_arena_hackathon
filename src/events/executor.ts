@@ -18,6 +18,9 @@ import { scoreTarget } from "../judges/scoring";
 import { pairwiseRunoff, RUNOFF_MARGIN, type RunoffVerdict } from "../judges/runoff";
 import { handleTribunalReflect, handleTribunalCrossExamine, handleTribunalSynthesize } from "../tribunal/reflection";
 import { claimNext, markCompleted, markFailed, resetStuckItems, enqueue, type QueueItem } from "./queue";
+import {
+  beginSubrequestTracking, endSubrequestTracking, subrequestTotal, countDbStatement,
+} from "../observability/subrequests";
 import { requirePayloadField } from "./payload-utils";
 import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence, dispatchTurnIfNeeded } from "./build-turns";
 import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
@@ -561,10 +564,46 @@ async function applyRunoff(
 }
 
 async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
+  // Measure this task's real subrequest cost. Incident §10's fix was derived
+  // from arithmetic over the code (78 -> 40 per team) and nothing had confirmed
+  // it; this writes what actually happened, so the next formation either
+  // validates the model or shows where it was wrong. GitHub and main-repo
+  // fetches are counted at their call sites; the D1 statements below are
+  // counted here, and callee-side statements are not — so the total is a lower
+  // bound, which is the safe direction to be wrong in.
+  beginSubrequestTracking();
+  let formationOutcome = "completed";
+  try {
+    await runTeamFormation(env, item);
+  } catch (err) {
+    formationOutcome = "failed";
+    throw err;
+  } finally {
+    const c = endSubrequestTracking();
+    const total = subrequestTotal(c);
+    // The INSERT itself costs a subrequest, so it is counted after the totals
+    // are read; a missing row is far better than a logging statement that can
+    // itself trip the cap it exists to measure.
+    console.log(`team_formation ${item.event_id}: github=${c.github} mainRepo=${c.mainRepo} db=${c.db} total=${total} outcome=${formationOutcome}`);
+    try {
+      await env.DB.prepare(
+        `INSERT INTO worker_subrequest_log
+           (id, event_id, task_type, github_calls, main_repo_fetches, db_statements, total, cap, outcome)
+         VALUES (?, ?, 'team_formation', ?, ?, ?, ?, 50, ?)`
+      ).bind(`subreq_${crypto.randomUUID()}`, item.event_id, c.github, c.mainRepo, c.db, total, formationOutcome).run();
+    } catch (err) {
+      console.log(`subrequest log insert failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+}
+
+async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
+  countDbStatement();
   const event = await env.DB.prepare(`SELECT parent_event_id FROM archive_events WHERE id = ?`)
     .bind(item.event_id).first<{ parent_event_id: string | null }>();
   if (!event?.parent_event_id) throw new Error(`Hackathon event ${item.event_id} has no parent_event_id set`);
 
+  countDbStatement();
   const parent = await env.DB.prepare(`SELECT status FROM archive_events WHERE id = ?`)
     .bind(event.parent_event_id).first<{ status: string }>();
   if (parent?.status !== "judged") {
@@ -590,6 +629,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
   //    lower-similarity idea, then the fewer-strikes agent, then the earlier
   //    submission wins. COALESCE keeps legacy pre-conduct rows (NULL sim/
   //    strikes) at a neutral value instead of sorting first.
+  countDbStatement();
   const candidates = await env.DB.prepare(
     `SELECT i.id, i.agent_id, i.co_agent_id, i.title, i.one_liner, i.problem, i.solution, i.build_scope,
             i.ideathon_score, i.recycle_sim, i.created_at, a.conduct_strikes
@@ -623,6 +663,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
     const idea = top2[i];
     const teamName = teamNames[i];
 
+    countDbStatement();
     let team = await env.DB.prepare(
       `SELECT id, repo_url, status FROM hackathon_teams WHERE event_id = ? AND team_name = ?`
     ).bind(item.event_id, teamName).first<{ id: string; repo_url: string; status: string }>();
@@ -640,6 +681,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
       // repo_url stores "owner/repo", not the html URL — that's what every
       // GitHub API call needs; the html URL is trivially derivable
       // (https://github.com/<repo_url>) whenever display needs it.
+      countDbStatement();
       await env.DB.prepare(
         `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'forming')`
       ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
@@ -690,6 +732,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`),
     });
+    countDbStatement();
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
 
     // Provision at most ONE team per queue item.

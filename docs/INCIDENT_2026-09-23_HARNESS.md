@@ -106,7 +106,59 @@ The cost: one extra queue item and one 5-minute cron tick before the second
 team starts building. Not on the critical path — spec §8 starts build turns on
 day 1, and formation is a day-0 step.
 
-## 10.4 Verified on the repos that still carried the bug
+## 10.4 The fix is now measured, not just modelled
+
+Everything above is arithmetic over the code. That is a weaker claim than it
+looks: the same reasoning produced a fix, and if the arithmetic was wrong the fix
+is wrong too. Nothing confirmed either.
+
+So `team_formation` now measures itself. `src/observability/subrequests.ts`
+counts the calls that draw on the per-invocation budget — GitHub API requests
+(counted in `githubRequest`, which is the single boundary every GitHub call goes
+through), main-repo fetches of harness/scaffold files, and the D1 statements in
+the formation path — and `handleTeamFormation` writes the totals to
+`worker_subrequest_log` in a `finally`, so a **failed** run records its cost too,
+which is precisely the case worth knowing. It also logs a one-line summary.
+
+Three properties this had to get right, each covered by
+`scripts/check_subrequest_counter.mjs` (11 cases):
+
+- **Windows must not bleed across invocations.** Workers reuse isolates, so
+  module-scoped state could attribute one invocation's calls to the next one's
+  total and inflate every measurement after the first. Every window resets
+  explicitly at the start of the task it describes, and the test asserts a fresh
+  window reads zero.
+- **The counter must not measure an empty path.** The test asserts the real call
+  sites are wired (`countGitHubRequest` in `githubRequest`, `countMainRepoFetch`
+  in `fetchMainRepoFile`, ≥6 `countDbStatement` calls in the formation path), so
+  the instrumentation cannot silently become a no-op that reports a
+  comfortable number.
+- **The logging statement must not become the failure it exists to measure.** The
+  `INSERT` runs after the totals are read and its failure is swallowed: a missing
+  row beats a log write that trips the cap it is counting.
+
+**Honest limits of the measurement.** It counts what the arena issues, which is
+the bulk of an invocation's subrequests; it cannot see subrequests Cloudflare
+makes internally, so a logged total is a lower bound, never an overestimate.
+D1 statements made by *callees* of `handleTeamFormation` (`recordBuildTurn`,
+`assignTeamMembers`, `nextBuildAuthor`, `recordTurnTaken`) are not counted,
+which is the same direction — under-reporting. So if a real run logs a total
+under 50 and still hits the cap, the conclusion is not "the model was right" but
+"something outside this module is issuing requests", and that is the case worth
+catching.
+
+**One prediction this already falsifies.** The GitHub-only model said 40 per
+team. Adding the 6–7 direct D1 statements puts a formation item at roughly 47 —
+still under 50, but by a margin of ~3 rather than the ~10 the GitHub-only figure
+implied. The fix was probably sufficient; it is closer to the ceiling than the
+earlier write-up admitted, and the measurement is what established that rather
+than more arithmetic.
+
+No live formation has run since instrumentation landed — `event_284f548c` is
+still in `deep_research` — so the first real number arrives with the next
+hackathon. Until then the model remains a model, now with a way to check it.
+
+## 10.5 Verified on the repos that still carried the bug
 
 The self-heal was driven against `arena-team-alpha-75504818` and
 `arena-team-beta-75504818` — the only two repos with both the missing negations
