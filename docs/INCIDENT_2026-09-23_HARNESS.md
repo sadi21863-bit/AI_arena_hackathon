@@ -64,11 +64,28 @@ trap that the PowerShell `>` redirection reintroduced (the same trap as the
 2026-09-28 harness-sync incident).
 
 **Design gap this exposes:** `.gitignore` is a scaffold file (one-time), not a
-harness file (re-synced every turn). So scaffold fixes only apply to future
-repos; existing repos keep the broken version until manually synced. For a file
-that is now load-bearing for the harness contract, that distinction is wrong —
-it should be promoted to `HARNESS_FILES` so it self-heals. Proposed, not yet
-implemented.
+harness file (re-synced every turn), so a scaffold fix only reaches repos created
+after it. The obvious fix — promote `.gitignore` into `HARNESS_FILES` — is
+**wrong**, and checking showed why: agents legitimately edit that file.
+`arena-team-alpha-75504818` turn 1 appended `/.pydeps/`, and beta c5ad953c turn 8
+touched it too. `syncTeamHarness` overwrites any file whose content differs from
+main's, so promoting it would silently delete those additions on the next
+dispatch.
+
+So the shipped fix appends the negations instead of replacing the file:
+`ensureGitignoreTracksArtifacts` (`repos.ts`) runs at the top of every
+`syncTeamHarness`, adds only the genuinely-missing `!VERIFICATION_*` lines, and
+leaves everything else alone. Idempotent, one GET when already correct, and a
+failure there never blocks a dispatch. Both agents' lines and the harness
+contract survive.
+
+Verified on the real `arena-team-alpha-75504818` file — the one repo pair that
+had *both* the bug and an agent's own entry: `VERIFICATION_FAILURE.log` and
+`VERIFICATION_NOTE.log` flipped from ignored to tracked, `/.pydeps/` survived,
+and `app.log` stayed ignored. `scripts/check_gitignore_patch.cjs` covers the
+decision logic (10 cases: fixed scaffold, historical copy, already-patched
+no-op, half-patched, agent-line preservation, and a real `git check-ignore`
+round-trip).
 
 # 2026-09-30 — A new event built nothing for 27 hours because `createTeamRepo` never set the Zen keys
 

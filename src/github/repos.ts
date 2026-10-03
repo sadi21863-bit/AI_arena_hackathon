@@ -226,6 +226,18 @@ export async function syncTeamHarness(env: Env, repoFullName: string): Promise<s
   if (!owner || !repo) return [];
   const updated: string[] = [];
 
+  // Patch rather than overwrite — see ensureGitignoreTracksArtifacts for why
+  // .gitignore cannot simply join HARNESS_FILES. Runs first so the negations
+  // are in place before any turn can fail verification.
+  try {
+    const patched = await ensureGitignoreTracksArtifacts(env, repoFullName);
+    if (patched.length) updated.push(`.gitignore (+${patched.join(", ")})`);
+  } catch {
+    // Never let a hygiene patch block a dispatch. If it fails, the turn still
+    // runs; the verify report is simply lost again, which is the status quo
+    // this exists to end, not a new failure mode.
+  }
+
   for (const path of HARNESS_FILES) {
     let canonical: string;
     try {
@@ -258,6 +270,62 @@ export async function syncTeamHarness(env: Env, repoFullName: string): Promise<s
   }
 
   return updated;
+}
+
+/**
+ * Ensures a team repo's `.gitignore` cannot ignore the harness's own
+ * required-reading artifacts, WITHOUT overwriting the file.
+ *
+ * Why this is not just "add .gitignore to HARNESS_FILES": agents legitimately
+ * edit `.gitignore` (alpha-75504818 turn 1 appended `/.pydeps/`; beta
+ * c5ad953c turn 8 touched it too). `syncTeamHarness` overwrites any file whose
+ * content differs from main's, so promoting it would silently delete those
+ * additions on the next dispatch. The agents' lines are their work; the
+ * negations are the harness's contract. Both must survive, so this appends
+ * only when a required line is genuinely absent.
+ *
+ * Idempotent, and a no-op once the lines are present, so it costs at most one
+ * GET per dispatch. The failure it prevents is severe and silent: `*.log`
+ * matched `VERIFICATION_FAILURE.log`, so `git add -A` skipped the verify
+ * step's report and it never reached ANY of the four team repos across two
+ * events (incident §9.5) — every agent was told to read a file that could not
+ * exist in its repo.
+ */
+const GITIGNORE_ARTIFACTS = ["VERIFICATION_FAILURE.log", "VERIFICATION_NOTE.log"] as const;
+
+export async function ensureGitignoreTracksArtifacts(env: Env, repoFullName: string): Promise<string[]> {
+  const [owner, repo] = repoFullName.split("/");
+  if (!owner || !repo) return [];
+
+  let current: string;
+  try {
+    const res = await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/.gitignore`);
+    current = base64ToUtf8(String((res as { content?: string }).content ?? "").replace(/\n/g, ""));
+  } catch (err) {
+    if (!(err instanceof GitHubApiError) || err.status !== 404) throw err;
+    return []; // no .gitignore at all — nothing to patch (scaffold writes one)
+  }
+
+  const missing = GITIGNORE_ARTIFACTS.filter((name) => !new RegExp(`^!${name}$`, "m").test(current));
+  if (missing.length === 0) return [];
+
+  const block = [
+    "",
+    "# Arena verification artifacts — tracked on purpose.",
+    "# The verify step writes these; the turn prompt tells the next agent to read",
+    "# them. A blanket '*.log' above would make `git add -A` skip them, so they",
+    "# would never reach the repo. Appended by the arena, not overwriting: agents",
+    "# add their own entries here (e.g. /.pydeps/) and those must survive.",
+    ...missing.map((name) => `!${name}`),
+  ].join("\n");
+
+  const res = await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/.gitignore`);
+  await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/.gitignore`, {
+    message: "Arena: track VERIFICATION_FAILURE.log / VERIFICATION_NOTE.log",
+    content: utf8ToBase64(current + "\n" + block),
+    ...(((res as { sha?: string }).sha) ? { sha: (res as { sha?: string }).sha } : {}),
+  });
+  return missing;
 }
 
 async function fetchMainRepoFile(path: string): Promise<string> {
