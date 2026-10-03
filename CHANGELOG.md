@@ -3,6 +3,21 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-03
+
+- **Hackathon `event_7308f1fe` completed. Alpha won: avg 8.0 (range 7–9) vs beta
+  avg 6.0 (range 3–8).** 14 judge scores total. Alpha's turns succeeded
+  consistently (t14–t17 all success); beta's turns failed on test errors
+  (`src/app.test.ts`, `src/services/textract.test.ts`,
+  `src/services/categorize.test.ts`) and the agent was repeatedly killed by the
+  silence watchdog (exit 137). The `.gitignore` fix landed too late to help
+  beta during this event (its last turn was 4h before the fix), but is in
+  place for all future events.
+- **New ideathon `event_284f548c` started** (deep_research phase, created
+  2026-10-02 04:16 UTC). System healthy: cron fresh, `/health` ok, no team
+  repos yet (expected for ideathon). The corrected `.gitignore` will be in
+  every new team repo created from this point forward.
+
 ## 2026-09-30
 
 - **Live incident: `event_7308f1fe` built nothing for ~27 hours because
