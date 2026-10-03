@@ -1,3 +1,83 @@
+# 2026-10-03 — `team_formation` items die on the Worker subrequest cap (156 against a limit of 50)
+
+The lowest-severity item in this record: it never cost a live event anything,
+because the harness's idempotency made the retry succeed anyway. It is written
+down because the measurement is the useful part, and because the fix that
+measurement implies is **not** the one that was shipped.
+
+## 10.1 What happened
+
+On `event_7308f1fe`, 4 of 5 `team_formation` queue items failed with:
+
+```
+Too many subrequests by single Worker invocation.
+```
+
+The 5th succeeded and both teams were created, so the event was unaffected —
+`handleTeamFormation` is idempotent per team (`team?.status === "building"`
+skips, and `putFile` skips existing paths), so a retry after the partial run
+completed the work. `checkForStalledEvents` did not fire and no build turn was
+lost. This is the only item in the file where the harness recovered on its own,
+which is why it sits at the bottom.
+
+## 10.2 Measured cost, not guessed
+
+One `team_formation` item provisions **both** teams: `handleTeamFormation`
+loops `top2` (executor.ts:622). Per team:
+
+| step | subrequests |
+|---|---|
+| `fetchMainRepoFile` × 14 `HARNESS_FILES` (main repo raw) | 14 |
+| `putFile` GET+PUT × (README + 14 harness) | 30 |
+| `putFile` GET+PUT × 6 `SCAFFOLD_FILES` | 12 |
+| `setRepoSecret` — public-key GET + PUT × 4 secrets | 8 |
+| `syncTeamHarness` GET × 14, immediately after | ~14 |
+| **per team** | **~78** |
+| **per item (2 teams)** | **~156** |
+
+Cloudflare's cap is 50 subrequests per Worker invocation on the free plan and
+1000 on paid. 156 against 50 is a 3× overrun, which is exactly the observed 4-of-5
+failure rate — the 5th run presumably got further before hitting the wall, or
+the accounting differs slightly from this table. **The table is arithmetic from
+the code, not a runtime measurement**; it has not been instrumented, so treat
+it as a model that is consistent with the evidence rather than a verified count.
+
+## 10.3 What was fixed, and what was deliberately not
+
+Fixed (both provably redundant, neither changes behaviour):
+
+- **The pre-dispatch harness sync is now skipped for a repo the same item just
+  created.** `createTeamRepo` writes all 14 `HARNESS_FILES` from the same
+  `fetchMainRepoFile` source seconds earlier, so the sync was a guaranteed
+  no-op costing ~14 main-repo fetches + 14 contents GETs. The sync moved from
+  `executor.ts` into `dispatchTurnIfNeeded` (`build-turns.ts`) so it sits
+  directly upstream of dispatch and the `justCreated` flag travels with it.
+  Every other caller still syncs — a repo that predates the tick may genuinely
+  have drifted, which is the bug the sync was added for (§7.2).
+- **The four `setRepoSecret` calls now share one `public-key` fetch.** The key
+  is stable for the invocation, so 4 GETs became 1 (`setTeamRepoSecrets`).
+
+Item cost: **156 → 122.**
+
+**Not fixed, and this is the point:** 122 is still 2.4× the cap. Splitting the
+item so one team is provisioned per queue item brings the per-team cost to ~61 —
+which is *also* still over 50. Getting under the cap therefore needs a third
+change beyond the two above, and each remaining option has a real cost:
+
+- putFile's existence GET is only needed for idempotency; for a brand-new repo
+  the first PUT always 404s, so the GET could be skipped when the caller knows
+  the repo is fresh (saves ~21/team, bringing per-team to ~40, under the cap);
+- or raise the Workers plan to the paid 1000-subrequest limit, which removes the
+  constraint entirely and costs money;
+- or split team_formation into two task types, which changes queue semantics and
+  the scheduler's phase-transition assumptions.
+
+None of these is taken here. The event recovered on its own, the current ideathon
+has no teams yet, and shipping a partial mitigation while describing it as a fix
+would repeat this file's worst habit. **Recommendation: skip putFile's
+existence GET for known-fresh repos first** — it is the smallest change that
+actually reaches the cap, and it is purely an optimisation of a redundant call.
+
 # 2026-10-02 — `*.log` in `.gitignore` silently swallowed the harness's required-reading artifact
 
 The deepest root cause found in this record, and the one that explains every

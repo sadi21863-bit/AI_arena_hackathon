@@ -17,6 +17,7 @@
 
 import type { Env } from "../env";
 import { listBuildTurnRuns, dispatchBuildTurn } from "../github/dispatch";
+import { syncTeamHarness } from "../github/repos";
 import { githubRequest } from "../github/client";
 
 export interface BuildTurnRow {
@@ -70,8 +71,39 @@ export async function recordBuildTurn(
  */
 export async function dispatchTurnIfNeeded(
   env: Env,
-  input: { repoFullName: string; team: "alpha" | "beta"; turnId: string; taskPrompt: string }
+  input: {
+    repoFullName: string;
+    team: "alpha" | "beta";
+    turnId: string;
+    taskPrompt: string;
+    /**
+     * Set when the calling item created this repo moments earlier, so the
+     * pre-dispatch harness sync is provably redundant: createTeamRepo already
+     * wrote all HARNESS_FILES from the same main-repo source, making the sync a
+     * guaranteed no-op that still costs ~14 main-repo fetches plus 14 contents
+     * GETs.
+     *
+     * That redundancy was a large share of a ~156-subrequest team_formation
+     * item against the Worker free-plan subrequest cap of 50 — 4 of 5 items on
+     * event_7308f1fe died with "Too many subrequests by single Worker
+     * invocation" (incident §10). Skipping is safe precisely BECAUSE the repo is
+     * new: every other caller passes false and still syncs, since a repo that
+     * predates the tick may genuinely have drifted.
+     */
+    justCreated?: boolean;
+  }
 ): Promise<boolean> {
+  // Pre-dispatch harness sync. An out-of-date harness still runs the turn, so
+  // failure here must never block a dispatch.
+  if (!input.justCreated) {
+    try {
+      const synced = await syncTeamHarness(env, input.repoFullName);
+      if (synced.length) console.log(`harness synced for ${input.repoFullName}: ${synced.join(", ")}`);
+    } catch (err) {
+      console.log(`harness sync failed for ${input.repoFullName} (dispatching anyway): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   try {
     const runs = await listBuildTurnRuns(env, input.repoFullName, 20);
     if (runs.some((r) => r.name.includes(input.turnId))) return false; // run already exists — skip

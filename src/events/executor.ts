@@ -629,6 +629,9 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
 
     if (team?.status === "building") continue; // already fully formed — idempotent no-op
 
+    // True only when THIS item created the repo, so the harness sync below can
+    // be skipped as provably redundant (see its call site).
+    let justCreated = false;
     if (!team) {
       const repo = await createTeamRepo(env, teamName, item.event_id, {
         title: idea.title, oneLiner: idea.one_liner, problem: idea.problem, solution: idea.solution, buildScope: idea.build_scope,
@@ -641,6 +644,7 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
         `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'forming')`
       ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
       team = { id: teamId, repo_url: repo.fullName, status: "forming" };
+      justCreated = true;
     }
 
     await recordBuildTurn(env, {
@@ -658,6 +662,11 @@ async function handleTeamFormation(env: Env, item: QueueItem): Promise<void> {
 
     await dispatchTurnIfNeeded(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
+      // A repo created moments ago by createTeamRepo already carries the
+      // current harness, so the pre-dispatch sync is skipped as a provable
+      // no-op — see dispatchTurnIfNeeded's justCreated doc for why that
+      // redundancy was over the subrequest cap.
+      justCreated,
       // Imperative lead + architecture demoted to trailing reference, not the
       // prompt's bulk — found live (2026-07-28, see docs/INVESTIGATION_2026-07-28.md
       // NEW-1) that a prompt ending in build_scope's ~185-word architecture
@@ -696,7 +705,7 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const idea = await env.DB.prepare(`SELECT title, build_scope FROM archive_ideas WHERE id = ?`)
     .bind(team.idea_id).first<{ title: string; build_scope: string }>();
 
-  // Bring the harness up to date before running a turn with it. Team repos
+// Bring the harness up to date before running a turn with it. Team repos
   // were scaffolded once at creation and never refreshed, so a team formed
   // days earlier was still running that day's workflow — missing `run-name`
   // (which is how reconcileBuildTurns matches a run to a turn, so conclusions
@@ -704,14 +713,12 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   // was landing in the main repo and reaching nobody. Failing to sync must not
   // block the turn: an out-of-date harness still runs, and skipping the build
   // entirely would be the worse outcome.
-  try {
-    const synced = await syncTeamHarness(env, team.repo_url);
-    if (synced.length) console.log(`harness synced for ${team.repo_url}: ${synced.join(", ")}`);
-  } catch (err) {
-    console.log(`harness sync failed for ${team.repo_url} (dispatching anyway): ${err instanceof Error ? err.message : err}`);
-  }
+  //
+  // The sync itself now lives in dispatchTurnIfNeeded (build-turns.ts), which
+  // also owns dispatch, so the harness is guaranteed current before the run is
+  // triggered and the `justCreated` no-op skip travels with it.
 
-  // countPayloadFieldMatches, not `payload LIKE '%"teamId":"..."%'` — D1
+  // countPayloadFieldMatches, not `payload LIKE '%"teamId":"...%'` — D1
   // throws "LIKE or GLOB pattern too complex" on any pattern containing a
   // literal `"` (found live 2026-07-22, see payload-utils.ts).
   // Turn number comes from build_turns now, not from counting completed

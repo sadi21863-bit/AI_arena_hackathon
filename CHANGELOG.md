@@ -5,6 +5,33 @@ notes what changed behavior in production and why.
 
 ## 2026-10-03
 
+- **`.gitignore` negations now self-heal at every harness sync.**
+  `ensureGitignoreTracksArtifacts` appends only the missing
+  `!VERIFICATION_FAILURE.log` / `!VERIFICATION_NOTE.log` lines instead of
+  overwriting the file, and runs first in `syncTeamHarness`. The 10-02 fix
+  corrected `repo-scaffold/.gitignore`, but that file is a *scaffold* file —
+  copied once at repo creation — so `arena-team-alpha-75504818` and
+  `arena-team-beta-75504818` still carried the broken copy and would have
+  swallowed every future verify report. Promoting `.gitignore` into
+  `HARNESS_FILES` was considered and **rejected**: agents edit that file
+  (alpha turn 1 appended `/.pydeps/`), and `syncTeamHarness` overwrites any
+  file whose content differs from main's, so it would silently delete their
+  additions. Verified on the real alpha file — the one repo with both the bug
+  and an agent's own entry: both artifacts flipped ignored→tracked,
+  `/.pydeps/` survived, `app.log` stayed ignored. 10 cases in
+  `scripts/check_gitignore_patch.cjs`.
+- **Reduced `team_formation` subrequest cost 156 → 122 (cap is 50).** 4 of 5
+  items on `event_7308f1fe` died with "Too many subrequests by single Worker
+  invocation". Two provably-redundant sources removed: the pre-dispatch harness
+  sync no longer runs for a repo the same item just created (`createTeamRepo`
+  already wrote all 14 harness files from the same source), and the four
+  `setRepoSecret` calls share one `public-key` fetch. **Still 2.4× over the cap
+  — this is a partial mitigation, not a fix**, and the incident record is
+  explicit about what remains: skipping `putFile`'s existence GET for
+  known-fresh repos (~40/team, under the cap), raising the Workers plan, or
+  splitting the item per team. The event recovered on its own via per-team
+  idempotency, so this never cost a live event anything. Full analysis in
+  `docs/INCIDENT_2026-09-23_HARNESS.md` §10.
 - **Hackathon `event_7308f1fe` completed. Alpha won: avg 8.0 (range 7–9) vs beta
   avg 6.0 (range 3–8).** 14 judge scores total. Alpha's turns succeeded
   consistently (t14–t17 all success); beta's turns failed on test errors

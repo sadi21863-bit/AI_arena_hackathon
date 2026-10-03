@@ -94,10 +94,52 @@ function sealSecret(publicKeyBase64: string, value: string): string {
   return bytesToBase64(sealed);
 }
 
-async function setRepoSecret(env: Env, owner: string, repo: string, secretName: string, value: string): Promise<void> {
-  const { key, key_id } = await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`);
+async function setRepoSecret(env: Env, owner: string, repo: string, secretName: string, value: string, publicKey?: { key: string; key_id: string }): Promise<void> {
+  // The repo's public key is stable for the life of the invocation, so a
+  // caller setting several secrets fetches it once and passes it in. Each
+  // unshared fetch is a subrequest, and team_formation is already close to the
+  // Worker subrequest cap (see setTeamRepoSecrets).
+  const pk = publicKey ?? await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`);
+  const { key, key_id } = pk as { key: string; key_id: string };
   const encrypted_value = sealSecret(key, value);
   await githubRequest(env, "PUT", `/repos/${owner}/${repo}/actions/secrets/${secretName}`, { encrypted_value, key_id });
+}
+
+/**
+ * Sets every secret a team repo needs, fetching the public key exactly once.
+ *
+ * Split out of createTeamRepo (2026-10-03): one `team_formation` item
+ * provisions BOTH teams in a single Worker invocation (executor.ts loops
+ * `top2`), and 4 of 5 items on event_7308f1fe died with "Too many subrequests
+ * by single Worker invocation". Measured cost per team was ~78 subrequests
+ * (14 main-repo fetches, 30 for harness putFile GET+PUT pairs, 12 for
+ * scaffold, 14 for the harness sync) — ~156 for the item against the free-plan
+ * cap of 50.
+ *
+ * The four secrets were each fetching the same public key independently: 4
+ * GETs where 1 suffices. Sharing it drops a team to ~75 and is free of
+ * behavioural risk — the key does not change mid-invocation. That alone does
+ * not fit the item under 50; the remaining reduction has to come from splitting
+ * the item per team, which is the honest fix and is NOT taken here because it
+ * changes queue semantics.
+ */
+async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promise<void> {
+  const wanted: Array<[string, string | undefined]> = [
+    ["CF_ACCOUNT_ID", env.CF_ACCOUNT_ID],
+    ["CF_API_TOKEN", env.CF_API_TOKEN],
+    // Zen pool keys. Optional, so a Worker holding only one pool still forms
+    // teams; the workflow reads a missing second key as "no failover" rather
+    // than as misconfiguration. Provisioning these is what stopped a new
+    // hackathon from repeating the 27-hour, 14-turn outage where every build
+    // turn refused to run for want of credentials (incident §9).
+    ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
+    ["OPENCODE_API_KEY_2", env.OPENCODE_API_KEY_2],
+  ];
+  const present = wanted.filter(([, v]) => !!v) as Array<[string, string]>;
+  if (present.length === 0) return;
+
+  const publicKey = await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`) as { key: string; key_id: string };
+  await Promise.all(present.map(([name, value]) => setRepoSecret(env, owner, repo, name, value, publicKey)));
 }
 
 /**
@@ -574,17 +616,7 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
     await putFile(env, owner, repoName, path, await fetchMainRepoFile(`repo-scaffold/${path}`), `Scaffold: ${path}`);
   }
 
-  await Promise.all([
-    setRepoSecret(env, owner, repoName, "CF_ACCOUNT_ID", env.CF_ACCOUNT_ID),
-    setRepoSecret(env, owner, repoName, "CF_API_TOKEN", env.CF_API_TOKEN),
-    // Zen pool keys (2026-09-30). Optional, so a Worker holding only one pool
-    // still forms teams: the workflow treats a missing second key as "no
-    // failover" rather than as a misconfiguration. Provisioning these here is
-    // what stops a new hackathon from repeating the 27-hour, 14-turn outage
-    // where every build turn refused to run for want of credentials.
-    ...(env.OPENCODE_API_KEY ? [setRepoSecret(env, owner, repoName, "OPENCODE_API_KEY", env.OPENCODE_API_KEY)] : []),
-    ...(env.OPENCODE_API_KEY_2 ? [setRepoSecret(env, owner, repoName, "OPENCODE_API_KEY_2", env.OPENCODE_API_KEY_2)] : []),
-  ]);
+  await setTeamRepoSecrets(env, owner, repoName);
 
   return { fullName: `${owner}/${repoName}` };
 }
