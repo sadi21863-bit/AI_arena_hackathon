@@ -735,26 +735,34 @@ async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
     countDbStatement();
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
 
-    // Provision at most ONE team per queue item.
+    // Provision at most ONE team per queue item, AND make sure the continuation
+    // runs in a later Worker invocation.
     //
-    // The subrequest cap is per Worker INVOCATION, and a single invocation also
-    // drains other queue items (processQueue(limit=3)), so the budget is shared
-    // across the whole batch. One team's provisioning is ~40 subrequests — under
-    // the free-plan cap of 50 — but doing both teams in one item was ~80 and
-    // killed 4 of 5 team_formation items on event_7308f1fe with "Too many
-    // subrequests by single Worker invocation" (incident §10).
+    // Both halves are required, and the first version got the second wrong.
+    // Measured live on event_41cbabb7 (2026-10-08): item 1 completed at 53
+    // subrequests, then the continuation FAILED at 19 with "Too many
+    // subrequests by single Worker invocation". Splitting the item was not
+    // enough, because `enqueue` makes the continuation immediately claimable
+    // and `processQueue(limit=3)` drains up to 3 items per invocation — so both
+    // teams still ran in ONE invocation, sharing one budget. The second team was
+    // left with an empty repo, no secrets, and no hackathon_teams row.
     //
-    // A continuation item is safe and needs no new state: the loop head skips any
-    // team already at status 'building', which line 693 above has just set, so
-    // the follow-up forms only the remaining team and then enqueues nothing
-    // further. Termination is therefore structural — the work list shrinks by one
-    // per item — not a counter that could run away.
+    // `scheduledFor` pushes the continuation past this invocation: claimNext only
+    // takes items whose scheduled_for has passed, so the next cron tick picks it
+    // up in a fresh invocation with an unshared budget. 60s is comfortably longer
+    // than the remainder of this batch and shorter than the 5-minute cron period,
+    // so it costs nothing in wall-clock terms.
     //
-    // Costs one extra queue item and one cron tick (5 min) before the second team
-    // starts building. That is not on the critical path: spec §8 starts build
-    // turns on day 1, and team formation is a day-0 step.
+    // Termination stays structural — the loop head skips teams already at status
+    // 'building', which the tail sets — so the work list shrinks by one per item
+    // rather than relying on a counter that could run away.
     if (i < top2.length - 1) {
-      await enqueue(env, { eventId: item.event_id, taskType: "team_formation", priority: 1 });
+      await enqueue(env, {
+        eventId: item.event_id,
+        taskType: "team_formation",
+        priority: 1,
+        scheduledFor: new Date(Date.now() + 60_000),
+      });
       return;
     }
   }

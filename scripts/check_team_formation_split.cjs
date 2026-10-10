@@ -76,5 +76,30 @@ const empty = simulate([]);
 check("empty top2 enqueues nothing", empty.formed.length === 0 && empty.items === 1,
   `formed=${empty.formed} items=${empty.items}`);
 
+// 9. REGRESSION GUARD for the bug this missed the first time.
+//
+// Splitting the item is not sufficient on its own: `enqueue` makes the
+// continuation immediately claimable and processQueue(limit=3) drains up to 3
+// items per Worker invocation, so both teams still shared ONE subrequest budget.
+// Measured live on event_41cbabb7: item 1 completed at 53 subrequests, the
+// continuation failed at 19, and the second team was left with an empty repo.
+//
+// The invariant is that the continuation is NOT claimable in the invocation that
+// created it. `scheduledFor` is what enforces that (claimNext only takes items
+// whose scheduled_for has passed), so assert it is set and in the future.
+const exec = require("fs").readFileSync("src/events/executor.ts", "utf8");
+const contBlock = exec.match(/if \(i < top2\.length - 1\) \{[\s\S]{0,400}?\n {4}\}/);
+check("continuation block exists", !!contBlock, "if (i < top2.length - 1) not found");
+const block = contBlock ? contBlock[0] : "";
+check("continuation sets scheduledFor (not immediately claimable)",
+  /scheduledFor\s*:/.test(block),
+  "a continuation with no scheduledFor is claimed in the SAME invocation — this is the live bug on event_41cbabb7");
+check("continuation schedules into the future",
+  /scheduledFor\s*:\s*new Date\(Date\.now\(\)\s*\+\s*\d/.test(block),
+  "scheduledFor must be a future offset, not a past or fixed date");
+// And the enqueue must still be inside the guarded block (not fire unconditionally).
+check("scheduledFor is on the continuation's enqueue call",
+  /enqueue\([\s\S]{0,300}scheduledFor/.test(block), "enqueue must carry the delay");
+
 console.log(failed === 0 ? "\nall team_formation split cases passed" : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);
