@@ -3,6 +3,45 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-11
+
+- **`event_41cbabb7` produced nothing and is unrecoverable.** Two independent
+  faults, one of them mine:
+  - **Beta never formed.** The 2026-10-03 one-team-per-item split was
+    insufficient. The continuation was enqueued with no `scheduledFor`, so
+    `processQueue(limit=3)` claimed it in the SAME Worker invocation, which had
+    already spent 53 subrequests. The cap is per invocation, not per item, so
+    both teams shared one budget; beta starved and died with "Too many
+    subrequests", leaving an empty repo with no commits, no files, no secrets
+    and no team row. Fixed by scheduling the continuation 60s out so
+    `claimNext` takes it in a fresh invocation.
+  - **Alpha: 19 turns, 0 successful.** Every attempt died on `401 Upstream
+    request failed: Invalid credential`. The harness reported each as "the
+    agent emitted text without writing any files", which points at the prompt
+    and the model; both were fine. The agent never made a single API call.
+- **The instrumented subrequest counter earned its place immediately** — its
+  first live rows caught the regression above within one formation, and
+  corrected the cost model: a single team is **53** subrequests and completes,
+  so the cap is above 53 and the earlier ~47 estimate was low. The failure was
+  invocation-level budget sharing, which is why reducing per-item work alone
+  could never have fixed it.
+- **Two harness gaps made a credential outage look like an agent-discipline
+  problem.** The crash/provider signature grep had no auth patterns, so the
+  operator-facing signature line printed **empty** on the one error a human
+  could act on; and the Enforce gate reported "no files written" as agent
+  laziness, when it could equally mean the model was never reached. Auth
+  signatures are now in the signature grep, and the no-file-changes branch
+  checks for them first and exits with "the agent never reached the model... NOT
+  an agent-discipline failure". Covered by
+  `scripts/check_credential_guard.mjs` (10 cases).
+- **The 2026-09-30 `createTeamRepo` credential fix is verified working for the
+  first time**: alpha's repo carries all four secrets automatically. The
+  provisioning was correct — the key **values** had expired underneath it,
+  sometime between 2026-10-02 (last successful turn) and 2026-10-08.
+- **BLOCKING, needs the user: the Zen pool keys in `.env` are dead** and must
+  be replaced, or every future build turn fails the same way. This fix makes
+  the failure *legible*; it does not self-heal it.
+
 ## 2026-10-03
 
 - **`team_formation` now measures its own subrequest cost**, replacing the

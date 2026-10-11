@@ -1,3 +1,104 @@
+# 2026-10-11 — `event_41cbabb7` produced nothing: dead Zen keys, reported as an agent-discipline failure
+
+The third consecutive instance of this file's central lesson, and the most
+expensive. The instrumented subrequest counter (added 2026-10-03 specifically so
+claims would be measured rather than modelled) caught a regression within its
+first live run.
+
+## 11.1 What the instrumentation immediately found
+
+The counter's first rows, from the 2026-10-08 formation:
+
+```
+gh=28 mr=19 db=6  TOTAL=53/50  completed   <- formed alpha
+gh=1  mr=13 db=5  TOTAL=19/50  FAILED      <- continuation, starved
+```
+
+The continuation — introduced on 2026-10-03 — was enqueued with no
+`scheduledFor`, so `processQueue(limit=3)` claimed it **in the same Worker
+invocation**, which had already spent 53. The subrequest cap is per invocation,
+not per item, so both teams shared one budget. Beta starved and died with "Too
+many subrequests", leaving an **empty repo: no commits, no files, no secrets, no
+`hackathon_teams` row**.
+
+Splitting the item was necessary but not sufficient. Fixed by scheduling the
+continuation 60s out, so `claimNext` (which only takes items whose
+`scheduled_for` has passed) picks it up in a fresh invocation. The four new
+assertions were verified to **fail against the pre-fix code**, so they are real
+guards rather than assertions written to match whatever is there.
+
+It also corrected the cost model: a single team is **53** subrequests and
+*completes*, so the cap is above 53 and my earlier ~47 estimate was low. The
+failure was invocation-level budget sharing — which is why reducing per-item work
+alone could never have fixed it, and why the arithmetic kept pointing the wrong
+way.
+
+## 11.2 The real cause: the pool keys died, and the harness said otherwise
+
+Beta's absence was mine. Alpha's silence was not.
+
+Alpha had **19 turns, 0 successful**, all failing as *"the agent emitted text
+without writing any files"* — which sent this investigation straight at the
+prompt and the model, both of which were fine. The actual error in the turn log:
+
+```
+{"type":"error","error":{"name":"APIError",
+ "message":"Upstream request failed: Invalid credential","statusCode":401,
+ "isRetryable":false, "responseHeaders":{"cf-ray":"...-MSP"}}}
+```
+
+**The agent never made a single API call.** It cannot be an agent-discipline
+failure; it could not have run. Timeline, from the data:
+
+| when | what |
+|---|---|
+| 2026-09-23 | `.env` last modified — keys captured |
+| 2026-09-30 | those keys set on team repos |
+| 2026-10-02 02:16 | **last successful build turn** using them |
+| 2026-10-08 | new event; alpha repo created with those keys |
+| 2026-10-08 → 10-11 | 19 turns, all `401 Invalid credential` |
+
+The keys worked through 2026-10-02 and were dead by 2026-10-08. `createTeamRepo`'s
+credential fix **did work** — alpha's repo carries all four secrets
+(`CF_ACCOUNT_ID`, `CF_API_TOKEN`, `OPENCODE_API_KEY`, `OPENCODE_API_KEY_2`), the
+first time provisioning happened automatically rather than by hand. The
+provisioning was correct; the values had expired underneath it.
+
+## 11.3 Two harness gaps that turned this into 19 silent failures
+
+**The signature print was empty on a 401.** `team-build-turn.yml`'s
+crash/provider-error grep matched 429s, 5xx, timeouts and unknown models — but
+not `Invalid credential`. So the operator-facing signature line printed nothing
+on the one error a human could act on. An `isRetryable: false` auth failure
+matches no failover pattern, which is correct (a second pool key from the same
+account fails identically, so attempt 2 would burn an identical failure) — but
+"we correctly chose not to retry" should not also mean "we said nothing".
+
+**The Enforce gate named the wrong culprit.** Zero file changes has two very
+different causes, and it reported both as agent laziness. Fixed by checking for
+an auth signature *before* the generic message and exiting with a distinct
+error: *"the agent never reached the model… This is NOT an agent-discipline
+failure and NOT a prompt problem."* Auth patterns were also added to the
+signature grep so the line is no longer empty. `scripts/check_credential_guard.mjs`
+(10 cases) asserts the guard sits inside the no-file-changes branch, exits
+before the misleading message, matches the provider's actual text, and appears
+in the signature print.
+
+## 11.4 Outcome, stated plainly
+
+`event_41cbabb7` is `complete` and unrecoverable: one team, 19 failed turns,
+**0 judge scores**, 0 product files. Alpha's repo contains only its 5 scaffold
+commits. It is a terminal event and there is no repair path — the honest
+statement is that the arena produced nothing for this cycle and the result
+should not be read as a competitive outcome.
+
+What would have caught it on turn 1 instead of turn 19: the empty signature line
+above, or a health check that treats "N consecutive turns failing with no
+provider signature" as an alert rather than as ordinary churn. Neither exists.
+The credential failure is still operator-only — the fix makes it *legible*, not
+self-healing, and the next cycle starts again with the same dead keys until they
+are replaced.
+
 # 2026-10-03 — `team_formation` items die on the Worker subrequest cap (156 against a limit of 50)
 
 The lowest-severity item in this record: it never cost a live event anything,

@@ -444,7 +444,12 @@ jobs:
           echo "--- stderr ---"
           cat opencode-turn.err.log 2>/dev/null || echo "opencode-turn.err.log not found"
           echo "--- crash/provider-error signature (empty means neither the P0-0a id bug recurred nor the provider errored) ---"
-          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+          # Auth signatures added 2026-10-11 after event_41cbabb7 burned 19 turns
+          # on dead pool keys with no signal at all: the 401 was outside every
+          # pattern here, so the signature printed EMPTY on a turn that had failed
+          # at the credential boundary. An error the operator must act on (rotate
+          # keys) must be visible in this line, not inferred from the exit code.
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated|Invalid credential|\"statusCode\":401|401 Unauthorized|unauthorized|invalid[_ ]api[_ ]key" \
             opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output
@@ -470,6 +475,23 @@ jobs:
           # package.json always counts.
           CHANGED=$(git status --porcelain -- . ':!opencode-turn.log' ':!opencode-turn.err.log' ':!opencode-turn.attempt1.log' ':!opencode-turn.attempt1.err.log' ':!opencode-turn.attempt2.log' ':!opencode-turn.attempt2.err.log' ':!package-lock.json' ':!yarn.lock' ':!pnpm-lock.yaml' ':!poetry.lock' ':!uv.lock' ':!Cargo.lock' ':!composer.lock' ':!go.sum')
           if [ -z "$CHANGED" ] && [ "$NOW_HEAD" = "$START_HEAD" ]; then
+            # "No files written" has two very different causes, and conflating them
+            # sent a whole event's investigation the wrong way. Measured live on
+            # event_41cbabb7: 19 consecutive turns reported that the agent "emitted
+            # text without writing any files", when opencode had never made a single
+            # API call — every attempt died on `401 Upstream request failed: Invalid
+            # credential`. The prompt looked broken; the pool keys were dead. The
+            # agent never ran, so it cannot be the agent's fault.
+            #
+            # Auth failures are deliberately NOT retried on the failover model: a
+            # second pool key from the same account fails identically, so attempt 2
+            # would burn an identical failure. What matters is naming it correctly,
+            # so this exits before the generic "agent emitted text" message below.
+            if grep -qiE 'Invalid credential|401 Unauthorized|"statusCode":401|unauthorized|invalid[_ ]api[_ ]key' \
+                 opencode-turn.log opencode-turn.err.log opencode-turn.attempt*.log opencode-turn.attempt*.err.log 2>/dev/null; then
+              echo "::error::CREDENTIAL FAILURE - the agent never reached the model. Zen returned 401 / Invalid credential, so no turn can produce files until the pool keys are replaced. This is NOT an agent-discipline failure and NOT a prompt problem."
+              exit 1
+            fi
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."
             exit 1
           fi
