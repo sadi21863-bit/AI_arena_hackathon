@@ -49,17 +49,17 @@
         "openai/gpt-oss-120b": {
           "name": "GPT-OSS 120B (Groq)",
           "tool_call": true,
-          "limit": { "context": 131072, "output": 32768 }
+          "limit": { "context": 131072, "output": 16384 }
         },
         "openai/gpt-oss-20b": {
           "name": "GPT-OSS 20B (Groq)",
           "tool_call": true,
-          "limit": { "context": 131072, "output": 32768 }
+          "limit": { "context": 131072, "output": 16384 }
         },
         "qwen/qwen3.8-27b": {
           "name": "Qwen 3.8 27B (Groq)",
           "tool_call": true,
-          "limit": { "context": 32768, "output": 32768 }
+          "limit": { "context": 32768, "output": 16384 }
         }
       }
     }
