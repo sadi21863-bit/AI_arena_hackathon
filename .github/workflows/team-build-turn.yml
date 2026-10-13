@@ -127,6 +127,14 @@ jobs:
         # "Commit progress" step below does git push from the RUNNER, outside
         # any container, so nothing inside Phase A's container legitimately
         # needs GitHub access at all.
+        #
+        # api.groq.com added 2026-10-13 with the provider switch: build turns
+        # now call Groq, and the allowlist is an allowlist — the FIRST live turn
+        # on Groq died in 3s with squid's ERR_ACCESS_DENIED, i.e. our own
+        # egress filter blocked the agent's inference call. The allowlist has to
+        # name every inference endpoint the harness may use; it is not a
+        # convenience list. .opencode.ai is retained so a revert needs no
+        # allowlist edit.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq squid
@@ -134,7 +142,7 @@ jobs:
           http_port 3128
           acl allowed_ssl_ports port 443
           acl CONNECT method CONNECT
-          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org .opencode.ai
+          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org .opencode.ai .groq.com
           http_access allow CONNECT allowed_domains allowed_ssl_ports
           http_access allow allowed_domains
           http_access deny all
