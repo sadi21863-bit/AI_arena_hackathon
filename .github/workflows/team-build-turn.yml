@@ -42,12 +42,12 @@ on:
       model:
         description: "OpenCode model id for this turn (Zen free ids churn — config, not workflow edit)"
         required: false
-        default: "groq/openai/gpt-oss-120b"
+        default: "groq/qwen/qwen3.8-27b"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
         required: false
-        default: "groq/qwen/qwen3.8-27b"
+        default: "groq/openai/gpt-oss-20b"
         type: string
   repository_dispatch:
     types: [team-build-turn]
@@ -252,11 +252,23 @@ jobs:
           # Model ids via env for the same interpolation reason as the prompt
           # (dispatch-controlled values, never inline). MODEL is the pinned
           # build model; FALLBACK_MODEL is attempt 3 when the pinned model
-          # fails on both keys. gpt-oss-120b is the primary: verified to
-          # sustain a multi-turn file-writing loop. qwen3.8-27b is the
-          # fallback — same agentic capability, different upstream.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/openai/gpt-oss-120b' }}
-          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/qwen/qwen3.8-27b' }}
+          # fails on both keys.
+          #
+          # PRIMARY IS qwen3.8-27b, NOT gpt-oss-120b, and the reason is a real
+          # integration break rather than a preference (measured 2026-10-13):
+          # gpt-oss-120b completes a first tool call fine, then the NEXT request
+          # is rejected with "'messages.2': for 'role:assistant' the following
+          # must be satisfied [property 'reasoning_content'...]" — it requires a
+          # reasoning_content field on assistant history that OpenCode's message
+          # serialization does not emit. Every multi-turn agent session hits this
+          # on its second tool call, so it is not an edge case; the model works,
+          # the driver cannot talk to it. qwen3.8-27b was verified to sustain
+          # turn 2 WITH the assistant tool_call in history, which is the exact
+          # shape that broke gpt-oss. gpt-oss-20b is the fallback for the same
+          # family, so it carries the same limitation — it is a third-attempt
+          # different-upstream safety net, not a working primary.
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/qwen/qwen3.8-27b' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/openai/gpt-oss-20b' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
