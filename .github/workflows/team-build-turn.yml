@@ -42,12 +42,12 @@ on:
       model:
         description: "OpenCode model id for this turn (Zen free ids churn — config, not workflow edit)"
         required: false
-        default: "groq/gpt-oss-120b"
+        default: "groq/openai/gpt-oss-120b"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
         required: false
-        default: "groq/qwen3.8-27b"
+        default: "groq/qwen/qwen3.8-27b"
         type: string
   repository_dispatch:
     types: [team-build-turn]
@@ -255,8 +255,8 @@ jobs:
           # fails on both keys. gpt-oss-120b is the primary: verified to
           # sustain a multi-turn file-writing loop. qwen3.8-27b is the
           # fallback — same agentic capability, different upstream.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/gpt-oss-120b' }}
-          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/qwen3.8-27b' }}
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/openai/gpt-oss-120b' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/qwen/qwen3.8-27b' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"

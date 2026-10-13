@@ -46,21 +46,18 @@
         "apiKey": "{env:GROQ_API_KEY}"
       },
       "models": {
-        "gpt-oss-120b": {
+        "openai/gpt-oss-120b": {
           "name": "GPT-OSS 120B (Groq)",
-          "modelID": "openai/gpt-oss-120b",
           "tool_call": true,
           "limit": { "context": 131072, "output": 32768 }
         },
-        "gpt-oss-20b": {
+        "openai/gpt-oss-20b": {
           "name": "GPT-OSS 20B (Groq)",
-          "modelID": "openai/gpt-oss-20b",
           "tool_call": true,
           "limit": { "context": 131072, "output": 32768 }
         },
-        "qwen3.8-27b": {
+        "qwen/qwen3.8-27b": {
           "name": "Qwen 3.8 27B (Groq)",
-          "modelID": "qwen/qwen3.8-27b",
           "tool_call": true,
           "limit": { "context": 32768, "output": 32768 }
         }
