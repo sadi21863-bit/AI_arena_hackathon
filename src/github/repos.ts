@@ -128,11 +128,16 @@ async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promis
   const wanted: Array<[string, string | undefined]> = [
     ["CF_ACCOUNT_ID", env.CF_ACCOUNT_ID],
     ["CF_API_TOKEN", env.CF_API_TOKEN],
-    // Zen pool keys. Optional, so a Worker holding only one pool still forms
-    // teams; the workflow reads a missing second key as "no failover" rather
-    // than as misconfiguration. Provisioning these is what stopped a new
-    // hackathon from repeating the 27-hour, 14-turn outage where every build
-    // turn refused to run for want of credentials (incident §9).
+    // Build-provider keys — Groq since the 2026-10-13 provider switch. Zen's
+    // free tier is gated to the first-party client (403 FreeTierError to any
+    // headless client, verified 2026-10-12), so a new team repo needs GROQ keys
+    // or every build turn refuses to run — the same 27-hour outage as §9.
+    // Optional, so a Worker holding only one key still forms teams; the
+    // workflow reads a missing second key as "no failover" rather than as
+    // misconfiguration. The Zen keys are provisioned too when present, so
+    // reverting the provider is a one-line model change with no re-scaffold.
+    ["GROQ_API_KEY", env.GROQ_API_KEY],
+    ["GROQ_API_KEY_2", env.GROQ_API_KEY_2],
     ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
     ["OPENCODE_API_KEY_2", env.OPENCODE_API_KEY_2],
   ];
@@ -453,8 +458,8 @@ export interface HarnessDrift {
  * failover attempt", not "cannot run". One pool is a degraded but working turn,
  * so it is reported separately instead of failing the check.
  */
-export const REQUIRED_BUILD_SECRETS = ["CF_ACCOUNT_ID", "CF_API_TOKEN", "OPENCODE_API_KEY"] as const;
-export const OPTIONAL_BUILD_SECRETS = ["OPENCODE_API_KEY_2"] as const;
+export const REQUIRED_BUILD_SECRETS = ["CF_ACCOUNT_ID", "CF_API_TOKEN", "GROQ_API_KEY"] as const;
+export const OPTIONAL_BUILD_SECRETS = ["GROQ_API_KEY_2"] as const;
 
 export interface CredentialCheck {
   repo: string;

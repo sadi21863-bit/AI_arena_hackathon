@@ -42,12 +42,12 @@ on:
       model:
         description: "OpenCode model id for this turn (Zen free ids churn — config, not workflow edit)"
         required: false
-        default: "opencode/nemotron-3-ultra-free"
+        default: "groq/gpt-oss-120b"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
         required: false
-        default: "opencode/big-pickle"
+        default: "groq/qwen3.8-27b"
         type: string
   repository_dispatch:
     types: [team-build-turn]
@@ -227,17 +227,28 @@ jobs:
           # misleading Nvidia 503). Only the ACTIVE key is passed into the
           # container (-e ZEN_ACTIVE_KEY below), so the sandbox never holds
           # the spare pool's key.
-          ZEN_KEY_1: ${{ secrets.OPENCODE_API_KEY }}
-          ZEN_KEY_2: ${{ secrets.OPENCODE_API_KEY_2 }}
+          #
+          # PROVIDER SWITCH (2026-10-13): build turns now run on Groq, not
+          # OpenCode Zen. Zen's free tier is gated to the first-party client
+          # ("can only be used from within OpenCode") and returns 403
+          # FreeTierError to ANY headless client — with a valid API key AND
+          # with no auth header at all (both probed 2026-10-12). There is no
+          # device-code endpoint, so an OAuth session cannot be minted
+          # headlessly either. gpt-oss-120b and qwen3.8-27b on Groq were
+          # verified agentic (multi-turn tool-calling, writing module + test)
+          # before this switch. The Zen keys are retained in secrets so a
+          # revert is a one-line model change, but nothing reads them for
+          # dispatch now.
+          ZEN_KEY_1: ${{ secrets.GROQ_API_KEY }}
+          ZEN_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
           # Model ids via env for the same interpolation reason as the prompt
           # (dispatch-controlled values, never inline). MODEL is the pinned
-          # build model; FALLBACK_MODEL is attempt 3 when both pools fail the
-          # pinned model — upstream-outage survival (proven live 2026-09-24:
-          # big-pickle built clean through a 19h Nvidia outage that killed
-          # nemotron on both pools). Empty/missing falls back to the pinned
-          # model, which disables attempt 3 without touching the logic below.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'opencode/nemotron-3-ultra-free' }}
-          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'opencode/big-pickle' }}
+          # build model; FALLBACK_MODEL is attempt 3 when the pinned model
+          # fails on both keys. gpt-oss-120b is the primary: verified to
+          # sustain a multi-turn file-writing loop. qwen3.8-27b is the
+          # fallback — same agentic capability, different upstream.
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/gpt-oss-120b' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/qwen3.8-27b' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -281,7 +292,7 @@ jobs:
             FALLBACK_KEY=""
           fi
           if [ -z "$PRIMARY_KEY" ]; then
-            echo "::error::Neither Zen pool key is configured (OPENCODE_API_KEY and OPENCODE_API_KEY_2 are both empty) — refusing to run a turn with no credentials"
+            echo "::error::Neither build provider key is configured (GROQ_API_KEY and GROQ_API_KEY_2 are both empty) — refusing to run a turn with no credentials"
             exit 1
           fi
 
@@ -323,6 +334,7 @@ jobs:
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
             -e ZEN_MODEL="$ATTEMPT_MODEL" \
+            -e GROQ_API_KEY="$ZEN_ACTIVE_KEY" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
@@ -332,7 +344,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && KEY="$ZEN_ACTIVE_KEY" && printf "{\"opencode\":{\"type\":\"api\",\"key\":\"%s\"},\"opencode-go\":{\"type\":\"api\",\"key\":\"%s\"}}" "$KEY" "$KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$ZEN_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"groq\":{\"type\":\"api\",\"key\":\"%s\"}}" "$GROQ_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$ZEN_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
