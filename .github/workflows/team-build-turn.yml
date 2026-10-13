@@ -342,7 +342,7 @@ jobs:
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
             -e ZEN_MODEL="$ATTEMPT_MODEL" \
-            -e GROQ_API_KEY="$ZEN_ACTIVE_KEY" \
+            -e GROQ_API_KEY="$ATTEMPT_KEY" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
