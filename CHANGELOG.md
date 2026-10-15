@@ -39,6 +39,20 @@ notes what changed behavior in production and why.
   therefore cannot sustain even one turn/day at this consumption. The
   provider's own 429 text confirms the unlock: 10 credits → 1,000 free model
   requests/day. Reset is UTC midnight, not a rolling window.
+- **Dispatch now self-heals a repo missing credentials.** `setTeamRepoSecrets`
+  ran only at `createTeamRepo`, so a repo created before a provider switch
+  never gained the new key — the live shape on 2026-10-13, when existing team
+  repos lacked `OPEN_ROUTER_API_KEY` until a human set it by hand. The drift
+  was already *reported* on `/headroom`; nothing repaired it. The pre-dispatch
+  path now lists the repo's secret names (one subrequest in the steady state —
+  dispatch sits near the free-plan cap of 50 — and the `!justCreated` skip the
+  formation path relies on is preserved) and re-seals only the missing names,
+  leaving present values untouched. Name-only by design: GitHub never returns
+  values, so a rotated value under an unchanged name stays a manual operation
+  (`scripts/set_repo_secret.mjs`). Provisioning and the `/headroom` reporting
+  lists now derive from one `BUILD_SECRET_SPEC`, so they cannot disagree again
+  (they did once: the `_2` failover keys were provisioned but unreported).
+  Locked by `scripts/check_credential_repair.mjs` (12 cases).
 
 ## 2026-10-11
 

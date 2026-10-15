@@ -17,7 +17,7 @@
 
 import type { Env } from "../env";
 import { listBuildTurnRuns, dispatchBuildTurn } from "../github/dispatch";
-import { syncTeamHarness } from "../github/repos";
+import { ensureTeamRepoSecrets, syncTeamHarness } from "../github/repos";
 import { githubRequest } from "../github/client";
 
 export interface BuildTurnRow {
@@ -77,17 +77,17 @@ export async function dispatchTurnIfNeeded(
     turnId: string;
     taskPrompt: string;
     /**
-     * Set when the calling item created this repo moments earlier, so the
-     * pre-dispatch harness sync is provably redundant: createTeamRepo already
-     * wrote all HARNESS_FILES from the same main-repo source, making the sync a
-     * guaranteed no-op that still costs ~14 main-repo fetches plus 14 contents
-     * GETs.
+     * Set when the calling item created this repo moments earlier, so both
+     * pre-dispatch repairs are provably redundant: createTeamRepo already
+     * wrote all HARNESS_FILES from the same main-repo source AND set every
+     * secret from the same Worker env, making the harness sync and the
+     * credential check guaranteed no-ops that still cost a fetch each.
      *
      * That redundancy was a large share of a ~156-subrequest team_formation
      * item against the Worker free-plan subrequest cap of 50 — 4 of 5 items on
      * event_7308f1fe died with "Too many subrequests by single Worker
      * invocation" (incident §10). Skipping is safe precisely BECAUSE the repo is
-     * new: every other caller passes false and still syncs, since a repo that
+     * new: every other caller passes false and still repairs, since a repo that
      * predates the tick may genuinely have drifted.
      */
     justCreated?: boolean;
@@ -101,6 +101,21 @@ export async function dispatchTurnIfNeeded(
       if (synced.length) console.log(`harness synced for ${input.repoFullName}: ${synced.join(", ")}`);
     } catch (err) {
       console.log(`harness sync failed for ${input.repoFullName} (dispatching anyway): ${err instanceof Error ? err.message : err}`);
+    }
+
+    // Pre-dispatch credential sync — the same drift class as the harness sync
+    // above, for the repo's Actions secrets instead of its files: a secret
+    // added to the Worker env after a repo was created never reached that repo
+    // (the OpenRouter switch shape, 2026-10-13). One list call in the steady
+    // state; a public key + PUTs only when a name is genuinely missing.
+    // Best-effort like the harness sync: a repo with a missing secret still
+    // gets dispatched — the workflow's credential guard fails that turn
+    // loudly, which beats never dispatching.
+    try {
+      const provisioned = await ensureTeamRepoSecrets(env, input.repoFullName);
+      if (provisioned.length) console.log(`provisioned missing secrets for ${input.repoFullName}: ${provisioned.join(", ")}`);
+    } catch (err) {
+      console.log(`credential sync failed for ${input.repoFullName} (dispatching anyway): ${err instanceof Error ? err.message : err}`);
     }
   }
 
