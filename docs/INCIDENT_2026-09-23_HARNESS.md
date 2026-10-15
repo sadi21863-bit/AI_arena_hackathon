@@ -1,3 +1,27 @@
+# 2026-10-15 — Correction: the 2026-10-11 Zen keys were not dead
+
+The 2026-10-11 entry below blames expired pool keys. That diagnosis is wrong,
+and it matters because the wrong version is the actionable one ("replace the
+keys"). The evidence, gathered 2026-10-15 while migrating the harness:
+
+- **The keys authenticate.** `GET /v1/models` against Zen with the same values
+  returns 200; only *inference* was refused. Nothing was expired.
+- **The real failure was an entitlement refusal.** Zen's free tier rejects
+  headless/CI clients. Upstream sent 403 `FreeTierError` wrapped in a generic
+  `401 Invalid credential`, which is exactly what made it read as expiry in the
+  turn logs quoted below.
+- **Nothing was rotatable to fix it** — the provider, not the credential, was
+  the blocker. Build turns moved to OpenRouter on 2026-10-15, so §11.4's closing
+  line ("the next cycle starts again with the same dead keys until they are
+  replaced") is superseded: there is no key to replace; the harness no longer
+  calls Zen.
+- **Both §11.3 guards were kept and re-pointed.** The signature grep now also
+  matches `FreeTierError`/`FreeUsageLimitError`, and the operator-facing message
+  says "PROVIDER ACCESS FAILURE — do NOT rotate the keys: they authenticate
+  fine". `scripts/check_credential_guard.mjs` now asserts the guard never
+  advises rotation for a provider-side entitlement refusal (it previously
+  matched its own negation, so the check was a false positive).
+
 # 2026-10-11 — `event_41cbabb7` produced nothing: dead Zen keys, reported as an agent-discipline failure
 
 The third consecutive instance of this file's central lesson, and the most

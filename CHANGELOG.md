@@ -3,6 +3,43 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-15
+
+- **Correction to 2026-10-11: the Zen pool keys were never dead.** They
+  authenticate — `GET /v1/models` with the same values returns 200. Build turns
+  failed on Zen's *free-tier entitlement*: the provider refuses headless/CI
+  clients (upstream 403 `FreeTierError`, surfaced to the CLI as a generic
+  `401 Invalid credential`, which is what made it look like expiry). Rotating
+  the keys would have changed nothing. The standing "Zen pool keys are dead,
+  replace them" action item is **withdrawn**; the migration below is the fix.
+  The credential guard's advice was rewritten to match — it now reads PROVIDER
+  ACCESS FAILURE and explicitly "Do NOT rotate the keys".
+- **Build turns now run on OpenRouter**
+  (`openrouter/nvidia/nemotron-3.5-lightning:free`, fallback
+  `openrouter/dots-studio/dots-3-note-preview:free`), replacing Zen (free tier
+  refuses headless clients) and Groq (measured 2026-10-13: its ~4,000-token
+  practical per-request ceiling cannot carry the ~13.5K-token opening request,
+  so trimming could never close the gap). `ZEN_*` identifiers are gone from the
+  workflow; `OPEN_ROUTER_API_KEY`/`_2` are the pool.
+- **Found live (verification turn 001): a loud retry loop burns the whole job
+  timeout.** After a provider error the agent re-compacted and retried for the
+  full 120-minute job cap — emitting a JSON event every few seconds, so the
+  silence watchdog never fired. It recorded as a 'cancelled' run, and the
+  compaction eventually summarised the task away entirely ("no specific user
+  intent or coding task has been established"). Two guards added to
+  `team-build-turn.yml`: `WATCHDOG_MAX_MINUTES` (default 60 — caps total
+  Phase-A wall time across ALL attempts, with `budget_left()` refusing new
+  failover attempts a spent budget cannot pay for) and
+  `ContextOverflowError`/`context_length_exceeded`/`Request too large` in both
+  the provider-error and debug signature greps.
+- **One build turn consumed ~110 free-model requests and exhausted the free
+  daily cap (50).** Measured via `GET /api/v1/key` (`free_model_daily_requests`,
+  which moved 18 → 128 during the turn); a 429 does *not* increment that
+  counter, so those were successful requests, not retries. The free tier
+  therefore cannot sustain even one turn/day at this consumption. The
+  provider's own 429 text confirms the unlock: 10 credits → 1,000 free model
+  requests/day. Reset is UTC midnight, not a rolling window.
+
 ## 2026-10-11
 
 - **`event_41cbabb7` produced nothing and is unrecoverable.** Two independent
