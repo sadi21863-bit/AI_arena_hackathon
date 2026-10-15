@@ -369,6 +369,12 @@ jobs:
           # on the SAME provider — OpenRouter's free-tier daily cap is per
           # account, so a second key on the same account adds no quota. Unset
           # _2 behaves exactly like before.
+          # Cadence note (2026-10-15): with the free tier, a team's day is one
+          # budgeted session on its pinned pool (the scheduler holds dispatches
+          # when a pool's cap is spent — src/events/build-quota.ts), so the
+          # failover chain above is a recovery path for early deaths, not a
+          # second helping: by the time the daily cap is hit, the other pool is
+          # either unset (shared-pool case) or another team's account.
           # Git identity via env, not `git config`: with .git/config mounted
           # read-only (see RO_MOUNTS above), `git config user.name` would
           # fail with "could not lock config file" and every agent commit
@@ -425,6 +431,19 @@ jobs:
           # see a normally-finished turn and the watchdog would wrongly fire.
           while [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ]; do
             sleep 30
+            # Free-tier daily-cap death (2026-10-15). `free-models-per-day` is
+            # unrecoverable until the UTC reset — opencode retries straight
+            # into the same wall, and that retry loop is either silent (the
+            # 10-min silence watchdog) or loud-but-useless. Kill as soon as
+            # the signature appears in the logs so the failover chain below
+            # (other pool, then other model) and the next day's dispatch
+            # proceed with real information instead of 10 wasted minutes.
+            if grep -qE "free-models-per-day|free_model_daily|FreeUsageLimitError" opencode-turn.log opencode-turn.err.log 2>/dev/null; then
+              echo "::error::OpenRouter free-tier daily request cap exhausted (provider signature in turn logs) — killing container ${CONTAINER} instead of retrying an unrecoverable wall. Quota resets at UTC midnight; committed work is the handoff."
+              docker kill "$CONTAINER" 2>/dev/null || true
+              TIMED_OUT=1
+              break
+            fi
             BYTES=$(( $(wc -c < opencode-turn.log 2>/dev/null || echo 0) + $(wc -c < opencode-turn.err.log 2>/dev/null || echo 0) ))
             # File changes count as liveness only when the WORKING SET grows
             # or shrinks — not merely being non-empty, or one write would keep
@@ -481,7 +500,11 @@ jobs:
             # could not see, so the turn got NO model failover — and the
             # fallback model is a different upstream with different limits,
             # exactly the retry that can succeed.
-            grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+            # free-models-per-day added 2026-10-15 (same day, later): the
+            # OpenRouter free-tier daily-cap signature the watchdog now kills
+            # on must count as a provider error, or the pool failover would
+            # not fire for exactly the failure it exists for.
+            grep -qiE "FreeUsageLimitError|free usage exceeded|free-models-per-day|free_model_daily|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
           attempt_failed() {

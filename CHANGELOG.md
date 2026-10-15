@@ -53,6 +53,29 @@ notes what changed behavior in production and why.
   lists now derive from one `BUILD_SECRET_SPEC`, so they cannot disagree again
   (they did once: the `_2` failover keys were provisioned but unreported).
   Locked by `scripts/check_credential_repair.mjs` (12 cases).
+- **The free tier becomes the schedule: daily sessions, quota-gated dispatch,
+  an extended build window.** Measured 2026-10-15: one build turn consumes
+  ~110 free-model requests against a hard 50/day/account cap that resets at
+  UTC midnight (not rolling), so every turn past the first of a UTC day
+  walked into a guaranteed 429 wall — and the scheduler, which has dispatched
+  on turn COMPLETION rather than the calendar since 2026-08-01, kept feeding
+  it. `MAX_BUILD_TURNS_PER_DAY` drops 6 → 2, the second dispatch is gated on
+  a live quota probe (`src/events/build-quota.ts`: one `GET /api/v1/key`,
+  fail-open, cached per pool — a spent pool holds until the UTC reset, sound
+  because `remaining` only decreases within a day), and the hackathon's
+  build window extends from days 1-2 to days 1-4 — a deliberate spec §3.2
+  deviation, because ~50 requests/day funds one session per team per day and
+  five sessions is what a team needs. The turn prompt now says so: one
+  coherent milestone, commit each increment, last commit is tomorrow's
+  handoff. `scripts/health_check.js` mirrors the new cap. Locked by
+  `scripts/check_build_quota.mjs`.
+- **A spent free pool fails fast in the workflow instead of burning 10
+  minutes of silence.** `team-build-turn.yml` kills the turn's container the
+  moment OpenRouter's `free-models-per-day` signature appears in its logs
+  (the retry is unrecoverable until the UTC reset — previously the turn
+  waited out the 10-min silence watchdog), and the signature now counts as a
+  provider error so the pool/model failover chain fires on exactly the
+  failure it exists for.
 
 ## 2026-10-11
 

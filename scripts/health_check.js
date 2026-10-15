@@ -26,8 +26,13 @@
 const API = process.env.ARENA_API || "https://arena-api.sadi21863.workers.dev";
 const GH = "https://api.github.com";
 
-/** Mirrors MAX_BUILD_TURNS_PER_DAY in src/events/scheduler.ts. */
-const MAX_BUILD_TURNS_PER_DAY = 6;
+/**
+ * Mirrors MAX_BUILD_TURNS_PER_DAY in src/events/scheduler.ts.
+ * Dropped 6 -> 2 on 2026-10-15: the free-tier request budget (~50/day/account)
+ * funds one substantive turn per team per UTC day, with a quota-probe-gated
+ * second dispatch as early-failure recovery.
+ */
+const MAX_BUILD_TURNS_PER_DAY = 2;
 /** Cron is every 5 minutes; three missed ticks is a real signal, one is noise. */
 const CRON_STALE_MINUTES = 16;
 /** ARENA_CADENCE_SLOT_MS is 10 days; nothing new in 13 means the cadence stopped. */

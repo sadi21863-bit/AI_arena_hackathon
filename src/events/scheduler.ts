@@ -12,12 +12,15 @@
  *   Day 3-4:            Architecture (top 6 ideas by interaction signal)
  *   Day 5+:             ready_for_judging -> judged (Week 5, Â§13)
  *
- * Hackathon phase boundaries (spec Â§3.2, 3-day event):
- *   Day 0:   team_formation â€” create both team repos, dispatch each team's
+ * Hackathon phase boundaries (spec §3.2's 3-day event, extended 2026-10-15 to
+ * a 5-day build window by the free-tier request budget — see
+ * hackathonPhaseForDay and MAX_BUILD_TURNS_PER_DAY):
+ *   Day 0:   team_formation — create both team repos, dispatch each team's
  *            first build turn same day ("First build turns begin same day")
- *   Day 1-2: building â€” one additional build-turn dispatch per team per
- *            calendar day
- *   Day 3+:  ready_for_judging -> judged -> tribunal -> complete (Week 5)
+ *   Day 1-4: building — up to two build-turn dispatches per team per calendar
+ *            day, the second only while the provider's free-tier quota probe
+ *            still shows budget (early-failure recovery)
+ *   Day 5+:  ready_for_judging -> judged -> tribunal -> complete (Week 5)
  *
  * Past ready_for_judging, progression is STATUS-driven, not day-driven â€”
  * the day-offset formulas below have no further day boundaries and would
@@ -36,17 +39,26 @@ import { cancelPendingForEvent } from "./queue";
 import { pairwiseSimilarities } from "../agents/memory";
 import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
+import { buildDispatchBudgetAllows, openRouterKeyForTeam } from "./build-quota";
 import { finalizeWithPartialScores } from "../judges/scoring";
 import { DAILY_CAPS, TASK_MODELS, unitsUsedToday } from "../router";
 
 /**
- * Ceiling on build turns per team per day. Turns are gated on the previous
- * one COMPLETING rather than on the calendar, so without a ceiling a turn
- * that fails in seconds would loop against the GitHub Actions quota. Spec
- * Â§3.2's shape (a few turns a day) is preserved; what changes is that a team
- * finishing early moves on instead of idling until midnight.
+ * Ceiling on build turns per team per UTC day. Turns are gated on the
+ * previous one COMPLETING rather than on the calendar, so without a ceiling
+ * a turn that fails in seconds would loop against the GitHub Actions quota.
+ *
+ * 2, not 6 (2026-10-15): the binding budget is now the provider's free tier —
+ * one measured build turn consumes ~110 model requests against a hard
+ * 50/day/account cap that resets at UTC midnight. A turn that reaches the cap
+ * has spent the day's budget, so the common case is one substantive turn per
+ * team per day; the second dispatch exists for the recovery shape only — a
+ * turn that fails EARLY for a non-quota reason (provider 5xx, harness bug)
+ * while most of the day's quota is still unspent. The live quota probe
+ * (build-quota.ts) is what tells the two apart: it blocks the second dispatch
+ * when the cap is actually spent.
  */
-const MAX_BUILD_TURNS_PER_DAY = 6;
+const MAX_BUILD_TURNS_PER_DAY = 2;
 
 /**
  * Attempt cap for stall prevention. Found live auditing production
@@ -107,9 +119,14 @@ export type HackathonPhase = "team_formation" | "building" | "ready_for_judging"
 // every phase shared one inference pool. They are not worth moving: budget
 // pools are per-UTC-day while phases are multi-day, so serialization was
 // never the binding constraint, and the cadence is narrative pacing per
-// spec §3 (6-day ideathon + 3-day hackathon). If this ever changes,
-// phaseForDay, hackathonPhaseForDay, and DAY_GATED_PHASE_STARTS_AT_DAY must
-// move together — they encode the same schedule twice.
+// spec §3 (6-day ideathon + 3-day hackathon). ONE exception, 2026-10-15:
+// the hackathon's build window moved from days 1-2 to days 1-4 — not for
+// pacing, but because the build provider's free tier caps at ~50 model
+// requests per day per account, so real work now arrives in one daily
+// session per team instead of continuous turns (see
+// MAX_BUILD_TURNS_PER_DAY). If this ever changes again, phaseForDay,
+// hackathonPhaseForDay, and DAY_GATED_PHASE_STARTS_AT_DAY must move
+// together — they encode the same schedule twice.
 export function phaseForDay(daysElapsed: number): Exclude<Phase, "judged"> {
   if (daysElapsed < 2) return "deep_research";
   if (daysElapsed < 3) return "ideation_critique";
@@ -120,7 +137,10 @@ export function phaseForDay(daysElapsed: number): Exclude<Phase, "judged"> {
 
 export function hackathonPhaseForDay(daysElapsed: number): Exclude<HackathonPhase, "judged" | "tribunal" | "complete"> {
   if (daysElapsed < 1) return "team_formation";
-  if (daysElapsed < 3) return "building";
+  // 1-4, not 1-2 (2026-10-15): five daily sessions per team — day 0's first
+  // turn plus days 1-4 — is what the free-tier request budget can fund
+  // (~50 requests/day/account; see MAX_BUILD_TURNS_PER_DAY and build-quota.ts).
+  if (daysElapsed < 5) return "building";
   return "ready_for_judging";
 }
 
@@ -602,12 +622,15 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       .bind(event.id).all<{ id: string; team_name: string }>();
 
     // A team's next turn is gated on its previous turn COMPLETING, not on the
-    // calendar rolling over. The old rule was one dispatch per team per UTC
-    // day, which meant a turn finishing in ten minutes left the team idle for
-    // the rest of the day â€” the agents were waiting on a date, not on work.
-    // A per-day ceiling still applies so a fast-failing turn can't spin the
-    // GitHub Actions quota, and the queue-level guard below keeps a dispatch
-    // from being enqueued twice while one is still pending.
+    // calendar rolling over — under the paid pool a turn finishing in ten
+    // minutes let the team move on instead of idling until midnight (the
+    // agents were waiting on a date, not on work). That stays. What the
+    // free-tier switch changed (2026-10-15) is the daily ceiling and what
+    // fills it: ~50 requests/day/account means one substantive turn spends
+    // the day's budget, so MAX_BUILD_TURNS_PER_DAY is 2 (not 6) and the loop
+    // asks build-quota.ts whether budget actually remains before sending a
+    // dispatch into a likely 429 wall. The queue-level guard below still
+    // keeps a dispatch from being enqueued twice while one is pending.
     const today = new Date().toISOString().slice(0, 10);
     const todaysDispatches = await env.DB.prepare(
       `SELECT payload FROM event_queue WHERE event_id = ? AND task_type = 'dispatch_build_turn'
@@ -646,11 +669,13 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // clears, but the queue stops accumulating identical failures.
     const dispatchFailures = await failedAttemptCounts(env, event.id, "dispatch_build_turn", "teamId");
 
-    // One dispatch per tick across ALL teams (not one per team): both teams
-    // share a single OPENCODE_API_KEY, i.e. one Zen rate pool, so same-tick
-    // dispatches synchronize the heaviest burst (turn-startup model calls) of
-    // both agents against the same undocumented cap. Staggering starts by ≥5
-    // min costs nothing real (288 ticks/day vs ≤12 dispatches needed) and
+    // One dispatch per tick across ALL teams (not one per team). Zen-era
+    // reason, still true for the shared-pool case: with OPEN_ROUTER_API_KEY_2
+    // unset both teams spend ONE 50/day account, so same-tick dispatches
+    // synchronize the heaviest burst (turn-startup model calls) of both
+    // agents against the same cap; with it set the teams are on separate
+    // accounts and the stagger is merely harmless. Staggering starts by ≥5
+    // min costs nothing real (288 ticks/day vs ≤10 dispatches needed) and
     // turns still overlap on the GitHub side — only the starts are spread.
     // Full mutual exclusion was considered and rejected: it would couple beta
     // to alpha's worst-case 120-min job and halve velocity for unobserved
@@ -683,6 +708,17 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
         recentTurns.results.every((t) => t.conclusion === "failure") &&
         Date.now() - Date.parse(recentTurns.results[0].dispatched_at + "Z") < 30 * 60 * 1000
       ) {
+        continue;
+      }
+      // Last gate, and the only one that costs a network call (one GET,
+      // cached per pool until it can change — build-quota.ts; fail-open on
+      // probe errors). Deliberately after every cheap local check so the
+      // probe is only ever spent on a candidate that would otherwise
+      // dispatch right now. This is what keeps a spent free-tier pool from
+      // re-dispatching into a guaranteed 429 wall all day.
+      if (!(await buildDispatchBudgetAllows(
+        openRouterKeyForTeam(team.team_name, env.OPEN_ROUTER_API_KEY, env.OPEN_ROUTER_API_KEY_2)
+      ))) {
         continue;
       }
 
