@@ -56,7 +56,13 @@ let changed = 0;
 let unchanged = 0;
 
 for (const path of harnessFiles) {
-  const local = fs.readFileSync(path);
+  // Normalise CRLF -> LF before pushing. On Windows the working copy is CRLF
+  // (core.autocrlf) while git stores LF, and the Worker's own syncTeamHarness
+  // fetches the LF blob from raw.githubusercontent. Pushing the CRLF working
+  // copy made the team repo byte-different from main, which the harness-drift
+  // probe (blob-SHA comparison) reads as permanent drift. Found live
+  // 2026-10-15: 1065 CRLF lines, identical after normalisation.
+  const local = Buffer.from(fs.readFileSync(path, "utf8").replace(/\r\n/g, "\n"), "utf8");
   const content = local.toString("base64");
 
   // Need the current blob sha to update an existing file.
