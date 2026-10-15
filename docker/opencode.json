@@ -38,28 +38,28 @@
     }
   },
   "provider": {
-    "groq": {
+    "openrouter": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Groq",
+      "name": "OpenRouter",
       "options": {
-        "baseURL": "https://api.groq.com/openai/v1",
-        "apiKey": "{env:GROQ_API_KEY}"
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "{env:OPEN_ROUTER_API_KEY}"
       },
       "models": {
-        "openai/gpt-oss-120b": {
-          "name": "GPT-OSS 120B (Groq)",
+        "nvidia/nemotron-3.5-lightning:free": {
+          "name": "Nemotron 3.5 Lightning (OpenRouter free)",
           "tool_call": true,
-          "limit": { "context": 131072, "output": 16384 }
+          "limit": { "context": 1000000, "output": 16384 }
         },
-        "openai/gpt-oss-20b": {
-          "name": "GPT-OSS 20B (Groq)",
+        "dots-studio/dots-3-note-preview:free": {
+          "name": "Dots 3 Note Preview (OpenRouter free)",
           "tool_call": true,
-          "limit": { "context": 131072, "output": 16384 }
+          "limit": { "context": 512000, "output": 16384 }
         },
-        "qwen/qwen3.8-27b": {
-          "name": "Qwen 3.8 27B (Groq)",
+        "nvidia/nemotron-3-ultra-550b-a55b:free": {
+          "name": "Nemotron 3 Ultra 550B (OpenRouter free)",
           "tool_call": true,
-          "limit": { "context": 32768, "output": 16384 }
+          "limit": { "context": 1000000, "output": 16384 }
         }
       }
     }

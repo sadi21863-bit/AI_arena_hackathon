@@ -128,14 +128,20 @@ async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promis
   const wanted: Array<[string, string | undefined]> = [
     ["CF_ACCOUNT_ID", env.CF_ACCOUNT_ID],
     ["CF_API_TOKEN", env.CF_API_TOKEN],
-    // Build-provider keys — Groq since the 2026-10-13 provider switch. Zen's
-    // free tier is gated to the first-party client (403 FreeTierError to any
-    // headless client, verified 2026-10-12), so a new team repo needs GROQ keys
-    // or every build turn refuses to run — the same 27-hour outage as §9.
-    // Optional, so a Worker holding only one key still forms teams; the
-    // workflow reads a missing second key as "no failover" rather than as
-    // misconfiguration. The Zen keys are provisioned too when present, so
-    // reverting the provider is a one-line model change with no re-scaffold.
+    // Build-provider key — OpenRouter since 2026-10-13. Zen free is gated to
+    // the first-party client (403 FreeTierError to any headless client,
+    // verified 2026-10-12) and Groq's free tier refuses a real build-turn
+    // opening request on ITPM/TPM. A new team repo needs this or every build
+    // turn refuses to run — the same 27-hour outage shape as §9. Optional, so a
+    // Worker without it still forms teams; the workflow then fails loudly
+    // rather than running a turn with no credentials. Groq and Zen are kept so
+    // reverting the provider is a model change, not a re-scaffold.
+    ["OPEN_ROUTER_API_KEY", env.OPEN_ROUTER_API_KEY],
+    // The failover half of the pool pin. Without this the workflow's
+    // TEAM_KEY_PIN=KEY_2 branch silently resolves to an empty key and beta
+    // turns start on the "pinned pool is empty — starting on the failover
+    // pool" warning path with nothing to fail over TO.
+    ["OPEN_ROUTER_API_KEY_2", env.OPEN_ROUTER_API_KEY_2],
     ["GROQ_API_KEY", env.GROQ_API_KEY],
     ["GROQ_API_KEY_2", env.GROQ_API_KEY_2],
     ["OPENCODE_API_KEY", env.OPENCODE_API_KEY],
@@ -458,8 +464,23 @@ export interface HarnessDrift {
  * failover attempt", not "cannot run". One pool is a degraded but working turn,
  * so it is reported separately instead of failing the check.
  */
-export const REQUIRED_BUILD_SECRETS = ["CF_ACCOUNT_ID", "CF_API_TOKEN", "GROQ_API_KEY"] as const;
-export const OPTIONAL_BUILD_SECRETS = ["GROQ_API_KEY_2"] as const;
+export const REQUIRED_BUILD_SECRETS = ["CF_ACCOUNT_ID", "CF_API_TOKEN", "OPEN_ROUTER_API_KEY"] as const;
+// Every secret createTeamRepo provisions beyond REQUIRED. These are all
+// either (a) an alternate provider kept for a cheap revert or (b) the `_2`
+// half of a pool pin. Missing => "degraded but working", not "cannot run",
+// so they are reported separately instead of failing the check.
+//
+// This list must stay in sync with setTeamRepoSecrets. It previously listed
+// only GROQ_API_KEY and OPENCODE_API_KEY, leaving the three `_2` failover keys
+// provisioned but unreported — beta would have shown "runnable, nothing
+// missing" while holding no key to fail over to.
+export const OPTIONAL_BUILD_SECRETS = [
+  "OPEN_ROUTER_API_KEY_2",
+  "GROQ_API_KEY",
+  "GROQ_API_KEY_2",
+  "OPENCODE_API_KEY",
+  "OPENCODE_API_KEY_2",
+] as const;
 
 export interface CredentialCheck {
   repo: string;

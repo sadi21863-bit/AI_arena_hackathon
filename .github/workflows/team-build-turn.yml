@@ -40,14 +40,14 @@ on:
         required: true
         type: string
       model:
-        description: "OpenCode model id for this turn (Zen free ids churn — config, not workflow edit)"
+        description: "OpenCode model id for this turn (free-model ids churn — config, not workflow edit)"
         required: false
-        default: "groq/qwen/qwen3.8-27b"
+        default: "openrouter/nvidia/nemotron-3.5-lightning:free"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
         required: false
-        default: "groq/openai/gpt-oss-20b"
+        default: "openrouter/dots-studio/dots-3-note-preview:free"
         type: string
   repository_dispatch:
     types: [team-build-turn]
@@ -142,7 +142,7 @@ jobs:
           http_port 3128
           acl allowed_ssl_ports port 443
           acl CONNECT method CONNECT
-          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org .opencode.ai .groq.com
+          acl allowed_domains dstdomain .registry.npmjs.org .pypi.org .files.pythonhosted.org .opencode.ai .openrouter.ai .groq.com
           http_access allow CONNECT allowed_domains allowed_ssl_ports
           http_access allow allowed_domains
           http_access deny all
@@ -206,7 +206,7 @@ jobs:
         # reconciled as a 'cancelled' run. (An earlier companion fix — an
         # upstream timeout inside the retired Workers AI shim — went away
         # with the shim on 2026-09-21; this watchdog is now the only hang
-        # guard, which is all a Zen-driven turn needs.)
+        # guard, which is all a provider-driven turn needs.)
         #
         # This watchdog is the belt-and-suspenders: the container runs
         #       in the background while this step watches the turn logs AND
@@ -233,42 +233,52 @@ jobs:
           # directly in bash silently yields EMPTY (found live 2026-09-23:
           # test 002 ran its whole turn on an empty key and died on a
           # misleading Nvidia 503). Only the ACTIVE key is passed into the
-          # container (-e ZEN_ACTIVE_KEY below), so the sandbox never holds
-          # the spare pool's key.
+          # container (-e OPEN_ROUTER_API_KEY below, fed from ATTEMPT_KEY), so
+          # the sandbox never holds the spare pool's key.
           #
-          # PROVIDER SWITCH (2026-10-13): build turns now run on Groq, not
-          # OpenCode Zen. Zen's free tier is gated to the first-party client
-          # ("can only be used from within OpenCode") and returns 403
-          # FreeTierError to ANY headless client — with a valid API key AND
-          # with no auth header at all (both probed 2026-10-12). There is no
-          # device-code endpoint, so an OAuth session cannot be minted
-          # headlessly either. gpt-oss-120b and qwen3.8-27b on Groq were
-          # verified agentic (multi-turn tool-calling, writing module + test)
-          # before this switch. The Zen keys are retained in secrets so a
-          # revert is a one-line model change, but nothing reads them for
-          # dispatch now.
-          ZEN_KEY_1: ${{ secrets.GROQ_API_KEY }}
-          ZEN_KEY_2: ${{ secrets.GROQ_API_KEY_2 }}
+          # PROVIDER HISTORY (2026-10-13): build turns now run on OpenRouter.
+          # Two providers were ruled out by measurement first, not preference:
+          #   1. OpenCode Zen — free tier is gated to the first-party client
+          #      ("can only be used from within OpenCode"), returning 403
+          #      FreeTierError to ANY headless client, with a valid API key AND
+          #      with no auth header at all (probed 2026-10-12). No device-code
+          #      endpoint exists, so no headless OAuth session either.
+          #   2. Groq — gpt-oss-120b and qwen3.8-27b were both verified agentic
+          #      (multi-turn tool-calling, writing module + test), but the free
+          #      tier refuses a real build-turn opening request: a 13,542-token
+          #      request is rejected against the ~4K ITPM ceiling. Measured, not
+          #      assumed — the arena's always-sent content alone (~4.5K tokens,
+          #      before any skill loads) already exceeds it, so skill trimming
+          #      cannot close the gap.
+          # OpenRouter free models carry 512K-1M context with no per-minute wall,
+          # which is why they were chosen. The Zen and Groq keys stay in secrets so
+          # a revert is a model change, not a re-scaffold; nothing dispatches on them.
+          OR_KEY_1: ${{ secrets.OPEN_ROUTER_API_KEY }}
+          OR_KEY_2: ${{ secrets.OPEN_ROUTER_API_KEY_2 }}
           # Model ids via env for the same interpolation reason as the prompt
           # (dispatch-controlled values, never inline). MODEL is the pinned
           # build model; FALLBACK_MODEL is attempt 3 when the pinned model
           # fails on both keys.
           #
-          # PRIMARY IS qwen3.8-27b, NOT gpt-oss-120b, and the reason is a real
-          # integration break rather than a preference (measured 2026-10-13):
-          # gpt-oss-120b completes a first tool call fine, then the NEXT request
-          # is rejected with "'messages.2': for 'role:assistant' the following
-          # must be satisfied [property 'reasoning_content'...]" — it requires a
+          # MODEL HISTORY, kept because the reasoning is reusable. PRIMARY was
+          # qwen3.8-27b on Groq and gpt-oss-120b was rejected as primary NOT by
+          # preference but by a real integration break (measured 2026-10-13):
+          # gpt-oss completes a first tool call fine, then the NEXT request is
+          # rejected with "'messages.2': for 'role:assistant' the following must
+          # be satisfied [property 'reasoning_content'...]" — it requires a
           # reasoning_content field on assistant history that OpenCode's message
-          # serialization does not emit. Every multi-turn agent session hits this
-          # on its second tool call, so it is not an edge case; the model works,
-          # the driver cannot talk to it. qwen3.8-27b was verified to sustain
-          # turn 2 WITH the assistant tool_call in history, which is the exact
-          # shape that broke gpt-oss. gpt-oss-20b is the fallback for the same
-          # family, so it carries the same limitation — it is a third-attempt
-          # different-upstream safety net, not a working primary.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'groq/qwen/qwen3.8-27b' }}
-          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'groq/openai/gpt-oss-20b' }}
+          # serialization never emits. Every multi-turn agent session hits this
+          # on its second tool call, so it is not an edge case: the model works,
+          # the driver cannot talk to it.
+          # The current pair is OpenRouter free: nemotron-3.5-lightning primary,
+          # dots-3-note-preview as the attempt-3 different-upstream safety net.
+          # Both were verified agentic by direct API probe (multi-turn
+          # tool-calling, writing module + test) BEFORE being pinned here.
+          # Free-model availability is volatile; if the pinned primary starts
+          # 404ing or returning provider errors, re-probe the catalog rather than
+          # assuming the id rotted.
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'openrouter/nvidia/nemotron-3.5-lightning:free' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'openrouter/dots-studio/dots-3-note-preview:free' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -299,12 +309,12 @@ jobs:
           done
 
           # Key selection: pinned pool first, other pool as failover.
-          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$ZEN_KEY_2" ]; then
-            PRIMARY_KEY="$ZEN_KEY_2"
-            FALLBACK_KEY="$ZEN_KEY_1"
+          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$OR_KEY_2" ]; then
+            PRIMARY_KEY="$OR_KEY_2"
+            FALLBACK_KEY="$OR_KEY_1"
           else
-            PRIMARY_KEY="$ZEN_KEY_1"
-            FALLBACK_KEY="$ZEN_KEY_2"
+            PRIMARY_KEY="$OR_KEY_1"
+            FALLBACK_KEY="$OR_KEY_2"
           fi
           if [ -z "$PRIMARY_KEY" ] && [ -n "$FALLBACK_KEY" ]; then
             echo "::warning::Pinned pool key is empty — starting on the failover pool"
@@ -312,7 +322,7 @@ jobs:
             FALLBACK_KEY=""
           fi
           if [ -z "$PRIMARY_KEY" ]; then
-            echo "::error::Neither build provider key is configured (GROQ_API_KEY and GROQ_API_KEY_2 are both empty) — refusing to run a turn with no credentials"
+            echo "::error::Neither build provider key is configured (OPEN_ROUTER_API_KEY is empty) — refusing to run a turn with no credentials"
             exit 1
           fi
 
@@ -323,7 +333,7 @@ jobs:
           run_attempt() {
             ATTEMPT_KEY="$1"
             ATTEMPT_MODEL="$2"
-          # One Zen key per team, pinned by repo name (*alpha* -> key 1,
+          # One OpenRouter key per team, pinned by repo name (*alpha* -> key 1,
           # *beta* -> key 2 when present), WITH same-turn failover: if the
           # pinned pool errors (429/quota/5xx signature in the turn logs)
           # the attempt's logs are archived and the turn re-runs once on the
@@ -334,8 +344,10 @@ jobs:
           # failed attempt, not a dead team. Kept ABOVE `docker run`: comment
           # lines inside the -e chain break it (`-e: command not found`,
           # found live 2026-09-23).
-          # Caveat from Groq: separate pools only if the keys belong to
-          # SEPARATE accounts. Unset _2 behaves exactly like before.
+          # Caveat: separate pools only if the keys belong to SEPARATE accounts
+          # on the SAME provider — OpenRouter's free-tier daily cap is per
+          # account, so a second key on the same account adds no quota. Unset
+          # _2 behaves exactly like before.
           # Git identity via env, not `git config`: with .git/config mounted
           # read-only (see RO_MOUNTS above), `git config user.name` would
           # fail with "could not lock config file" and every agent commit
@@ -352,9 +364,8 @@ jobs:
             -e HTTP_PROXY=http://host.docker.internal:3128 \
             -e HTTPS_PROXY=http://host.docker.internal:3128 \
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
-            -e ZEN_ACTIVE_KEY="$ATTEMPT_KEY" \
-            -e ZEN_MODEL="$ATTEMPT_MODEL" \
-            -e GROQ_API_KEY="$ATTEMPT_KEY" \
+            -e OR_MODEL="$ATTEMPT_MODEL" \
+            -e OPEN_ROUTER_API_KEY="$ATTEMPT_KEY" \
             -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
@@ -364,7 +375,7 @@ jobs:
             -v "${{ github.workspace }}:/workspace:rw" \
             -w /workspace \
             arena-team-base:latest \
-            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"groq\":{\"type\":\"api\",\"key\":\"%s\"}}" "$GROQ_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$ZEN_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
+            sh -c 'mkdir -p /tmp/.local/share/opencode && printf "{\"openrouter\":{\"type\":\"api\",\"key\":\"%s\"}}" "$OPEN_ROUTER_API_KEY" > /tmp/.local/share/opencode/auth.json && exec opencode run "$1" --model "$OR_MODEL" --auto --format json > opencode-turn.log 2> opencode-turn.err.log' _ "$TASK_PROMPT" &
           DOCKER_PID=$!
 
           LAST_BYTES=0
@@ -511,17 +522,28 @@ jobs:
             # sent a whole event's investigation the wrong way. Measured live on
             # event_41cbabb7: 19 consecutive turns reported that the agent "emitted
             # text without writing any files", when opencode had never made a single
-            # API call — every attempt died on `401 Upstream request failed: Invalid
-            # credential`. The prompt looked broken; the pool keys were dead. The
-            # agent never ran, so it cannot be the agent's fault.
+            # successful API call. The prompt looked broken. It was not.
             #
-            # Auth failures are deliberately NOT retried on the failover model: a
-            # second pool key from the same account fails identically, so attempt 2
-            # would burn an identical failure. What matters is naming it correctly,
-            # so this exits before the generic "agent emitted text" message below.
-            if grep -qiE 'Invalid credential|401 Unauthorized|"statusCode":401|unauthorized|invalid[_ ]api[_ ]key' \
+            # DIAGNOSIS CORRECTED 2026-10-13: this block originally concluded "the
+            # pool keys are dead — replace them" and sent the whole event's operator
+            # down the wrong path. The keys were never expired. Probing the same
+            # keys directly (2026-10-12) showed `/zen/v1/models` returning HTTP 200 —
+            # they authenticate. What fails is the FREE TIER: completions return 403
+            # FreeTierError "OpenCode's free tier can only be used from within
+            # OpenCode", with a valid key AND with no auth header at all. The '401
+            # Invalid credential' string is an UPSTREAM WRAPPER around that rejection,
+            # not the platform rejecting the key. Replacing the keys would have fixed
+            # nothing; switching providers did.
+            #
+            # So this is a PROVIDER-ACCESS failure, not a bad key and not an
+            # agent-discipline failure. It is still not retried on the failover
+            # model: auth-shaped rejections repeat identically on a second key from
+            # the same account, so attempt 2 burns an identical failure. Named
+            # explicitly so it exits before the generic "agent emitted text" message
+            # below and so no operator is told to rotate a working credential.
+            if grep -qiE 'Invalid credential|401 Unauthorized|"statusCode":401|unauthorized|invalid[_ ]api[_ ]key|FreeUsageLimitError|free usage exceeded|FreeTierError' \
                  opencode-turn.log opencode-turn.err.log opencode-turn.attempt*.log opencode-turn.attempt*.err.log 2>/dev/null; then
-              echo "::error::CREDENTIAL FAILURE - the agent never reached the model. Zen returned 401 / Invalid credential, so no turn can produce files until the pool keys are replaced. This is NOT an agent-discipline failure and NOT a prompt problem."
+              echo "::error::PROVIDER ACCESS FAILURE - the agent never reached the model. The request was rejected upstream (401/Invalid credential wrapper, or 403 FreeTierError). Do NOT rotate the keys: they authenticate fine (/models returns 200). The provider's free tier is refusing headless clients. This is NOT an agent-discipline failure and NOT a prompt problem."
               exit 1
             fi
             echo "::error::Build turn produced no file changes and no commits — the agent emitted text without writing any files or committing anything. Failing the job instead of reporting a false success."

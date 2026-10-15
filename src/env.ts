@@ -69,4 +69,11 @@ export interface Env {
   // without them still creates repos instead of throwing at formation time.
   OPENCODE_API_KEY?: string;
   OPENCODE_API_KEY_2?: string;
+
+  // OpenRouter — the build provider since 2026-10-13. Optional like the keys
+  // above so a Worker without it still forms teams; the build workflow then
+  // fails loudly rather than running a credential-less turn. Injected into new
+  // team repos by createTeamRepo for the same reason as the CF_* pair.
+  OPEN_ROUTER_API_KEY?: string;
+  OPEN_ROUTER_API_KEY_2?: string;
 }
