@@ -217,6 +217,14 @@ jobs:
         #       container, fail the turn FAST, so it records a real 'failure'
         #       (never a silent 'cancelled') and the scheduler dispatches the
         #       next turn minutes later instead of 120 minutes later.
+        #
+        # Second guard added 2026-10-15 (WATCHDOG_MAX_MINUTES, default 60):
+        # liveness is not progress. opencode can loop forever on a provider
+        # error — compact, retry, overflow, compact — which keeps the logs
+        # growing (so the silence test stays quiet) while doing zero work.
+        # Such a turn burned the full 120-min job cap on the previous config.
+        # The budget caps total Phase-A wall time across ALL attempts and is
+        # what makes "fail fast" true even when the agent is loud.
         id: agent
         env:
           # Passed via environment, NOT interpolated into the script below:
@@ -283,6 +291,19 @@ jobs:
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
           WATCHDOG_SILENCE_MINUTES="${WATCHDOG_SILENCE_MINUTES:-10}"
+          # Total Phase-A budget, shared across all attempts (see budget_left).
+          # The silence watchdog CANNOT catch a loud-but-useless loop: found
+          # live 2026-10-15, opencode hit ContextOverflowError (request 13.6K
+          # tokens vs a 7000 ITPM cap), then spent the FULL 120-min job timeout
+          # re-compacting the session and retrying — emitting a JSON event
+          # every few seconds the whole time, so LAST_ACTIVE never went stale.
+          # It reconciled as a 'cancelled' run, and the compaction eventually
+          # summarised the task away entirely (the log ends with the model
+          # reporting "No specific user intent or coding task has been
+          # established"). A bounded budget converts that into a real, fast
+          # 'failure' so the scheduler moves on instead of losing 2 hours.
+          WATCHDOG_MAX_MINUTES="${WATCHDOG_MAX_MINUTES:-60}"
+          STEP_START=$(date +%s)
 
           # Harness-critical paths are read-only inside the container. A
           # subverted agent writing a workflow file here is a full
@@ -424,6 +445,15 @@ jobs:
               TIMED_OUT=1
               break
             fi
+            # Loud-but-useless loop guard (see WATCHDOG_MAX_MINUTES above).
+            # Checked after the silence test so a silent hang still gets its
+            # more specific 10-min diagnosis.
+            if [ $(( NOW - STEP_START )) -ge $(( WATCHDOG_MAX_MINUTES * 60 )) ]; then
+              echo "::error::Agent exceeded the ${WATCHDOG_MAX_MINUTES}-min turn budget while still emitting output — killing container ${CONTAINER}. A provider retry/compaction loop is loud but makes no progress, so the silence watchdog cannot see it."
+              docker kill "$CONTAINER" 2>/dev/null || true
+              TIMED_OUT=1
+              break
+            fi
           done
           wait "$DOCKER_PID"
           code=$?
@@ -445,20 +475,31 @@ jobs:
           # pools identically). Attempt 3 is skipped when FALLBACK_MODEL
           # equals MODEL (same model twice would be a pointless re-run).
           provider_error() {
-            grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+            # ContextOverflowError/Request too large added 2026-10-15: opencode's
+            # names for a provider rejecting an over-limit request. Without them
+            # the 2-hour compaction loop logged a provider error the harness
+            # could not see, so the turn got NO model failover — and the
+            # fallback model is a different upstream with different limits,
+            # exactly the retry that can succeed.
+            grep -qiE "FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
           attempt_failed() {
             { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
           }
+          # Never start a failover attempt the turn budget cannot pay for:
+          # each attempt gets its own container but shares STEP_START, so a
+          # spent budget kills an attempt at its first watchdog tick. Skipping
+          # it up front keeps the failure report honest about what was tried.
+          budget_left() { [ $(( $(date +%s) - STEP_START )) -lt $(( WATCHDOG_MAX_MINUTES * 60 )) ]; }
 
           run_attempt "$PRIMARY_KEY" "$MODEL"
-          if attempt_failed && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ]; then
+          if attempt_failed && budget_left && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ]; then
             echo "::warning::Pinned pool errored (provider signature in logs) — failing over to the other pool for one retry"
             mv opencode-turn.log opencode-turn.attempt1.log 2>/dev/null || true
             mv opencode-turn.err.log opencode-turn.attempt1.err.log 2>/dev/null || true
             run_attempt "$FALLBACK_KEY" "$MODEL"
-            if attempt_failed && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$MODEL" ]; then
+            if attempt_failed && budget_left && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$MODEL" ]; then
               echo "::warning::Both pools errored on $MODEL (provider signature in logs) — failing over to model $FALLBACK_MODEL for one retry"
               mv opencode-turn.log opencode-turn.attempt2.log 2>/dev/null || true
               mv opencode-turn.err.log opencode-turn.attempt2.err.log 2>/dev/null || true
@@ -492,7 +533,7 @@ jobs:
           # pattern here, so the signature printed EMPTY on a turn that had failed
           # at the credential boundary. An error the operator must act on (rotate
           # keys) must be visible in this line, not inferred from the exit code.
-          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated|Invalid credential|\"statusCode\":401|401 Unauthorized|unauthorized|invalid[_ ]api[_ ]key" \
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated|Invalid credential|\"statusCode\":401|401 Unauthorized|unauthorized|invalid[_ ]api[_ ]key" \
             opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output
