@@ -409,6 +409,7 @@ jobs:
           LAST_CHANGED=0
           LAST_ACTIVE=$(date +%s)
           TIMED_OUT=0
+          QUOTA_DEATH=0
           # Wait for the container to EXIST before arming the watchdog. The
           # original loop checked `docker inspect ... = "true"` as its entry
           # condition immediately after `docker run ... &`, but docker run
@@ -431,17 +432,38 @@ jobs:
           # see a normally-finished turn and the watchdog would wrongly fire.
           while [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" = "true" ]; do
             sleep 30
-            # Free-tier daily-cap death (2026-10-15). `free-models-per-day` is
-            # unrecoverable until the UTC reset — opencode retries straight
-            # into the same wall, and that retry loop is either silent (the
-            # 10-min silence watchdog) or loud-but-useless. Kill as soon as
-            # the signature appears in the logs so the failover chain below
-            # (other pool, then other model) and the next day's dispatch
-            # proceed with real information instead of 10 wasted minutes.
+            # Free-tier daily-cap death (2026-10-15; corrected same night
+            # after verify-002). The cap is unrecoverable until the UTC reset,
+            # and opencode retries straight into it while writing NOTHING to
+            # either log we watch: verify-002's session log artifact is a pure
+            # progress feed (step_start/tool_use/text events, zero error
+            # lines) and its err log is empty, yet the turn sat ~13 minutes in
+            # opencode's internal 429 retry loop until the silence watchdog
+            # killed it. So a log-grep alone is dead code on exactly this
+            # failure — probe the attempt's pool directly. remaining <= 0
+            # means every further request 429s: kill now, hand off the
+            # commits, resume after the reset. Deliberately NO pool failover
+            # on quota death (attempt_failed vetoes it): FALLBACK_KEY is the
+            # OTHER team's account (TEAM_KEY_PIN), so retrying a spent cap
+            # there would just spend that team's day — the scheduler's probe
+            # (src/events/build-quota.ts) holds dispatches until reset.
+            QUOTA_LEFT=$(curl -s -m 10 -H "Authorization: Bearer $ATTEMPT_KEY" \
+              https://openrouter.ai/api/v1/key 2>/dev/null \
+              | jq -r '.data.free_model_daily_requests.remaining // empty' 2>/dev/null || true)
+            if [ -n "$QUOTA_LEFT" ] && [ "$QUOTA_LEFT" -le 0 ] 2>/dev/null; then
+              echo "::error::OpenRouter free-tier daily request cap exhausted (probe: remaining=${QUOTA_LEFT}) — killing container ${CONTAINER} rather than retrying an unrecoverable wall. Quota resets at UTC midnight; committed work is the handoff."
+              docker kill "$CONTAINER" 2>/dev/null || true
+              TIMED_OUT=1
+              QUOTA_DEATH=1
+              break
+            fi
+            # Belt only (providers that DO surface the signature — Zen-era
+            # behavior; OpenRouter does not, measured above).
             if grep -qE "free-models-per-day|free_model_daily|FreeUsageLimitError" opencode-turn.log opencode-turn.err.log 2>/dev/null; then
               echo "::error::OpenRouter free-tier daily request cap exhausted (provider signature in turn logs) — killing container ${CONTAINER} instead of retrying an unrecoverable wall. Quota resets at UTC midnight; committed work is the handoff."
               docker kill "$CONTAINER" 2>/dev/null || true
               TIMED_OUT=1
+              QUOTA_DEATH=1
               break
             fi
             BYTES=$(( $(wc -c < opencode-turn.log 2>/dev/null || echo 0) + $(wc -c < opencode-turn.err.log 2>/dev/null || echo 0) ))
@@ -478,7 +500,9 @@ jobs:
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "timed_out=$TIMED_OUT" >> "$GITHUB_OUTPUT"
-          if [ "$TIMED_OUT" = "1" ]; then
+          if [ "$QUOTA_DEATH" = "1" ]; then
+            echo "opencode was killed because the pinned pool's free-tier daily cap is spent (exit ${code})"
+          elif [ "$TIMED_OUT" = "1" ]; then
             echo "opencode was killed by the silence watchdog after ${WATCHDOG_SILENCE_MINUTES} min of no activity (exit ${code})"
           else
             echo "opencode exited $code"
@@ -500,15 +524,20 @@ jobs:
             # could not see, so the turn got NO model failover — and the
             # fallback model is a different upstream with different limits,
             # exactly the retry that can succeed.
-            # free-models-per-day added 2026-10-15 (same day, later): the
-            # OpenRouter free-tier daily-cap signature the watchdog now kills
-            # on must count as a provider error, or the pool failover would
-            # not fire for exactly the failure it exists for.
+            # free-models-per-day added 2026-10-15 (same day, later): if a
+            # provider DOES surface the daily-cap signature in the logs, it
+            # must count as a provider error. (The probe path above sets
+            # QUOTA_DEATH, which is vetoed in attempt_failed — an exhausted
+            # daily cap must not fail over to the other team's account.)
             grep -qiE "FreeUsageLimitError|free usage exceeded|free-models-per-day|free_model_daily|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
           attempt_failed() {
-            { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
+            # QUOTA_DEATH vetoes failover on purpose: FALLBACK_KEY is the
+            # other team's account (TEAM_KEY_PIN), so an exhausted daily cap
+            # must not be paid for out of that team's day. The scheduler's
+            # probe (src/events/build-quota.ts) holds dispatches until reset.
+            [ "$QUOTA_DEATH" != "1" ] && { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
           }
           # Never start a failover attempt the turn budget cannot pay for:
           # each attempt gets its own container but shares STEP_START, so a

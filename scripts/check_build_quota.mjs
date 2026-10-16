@@ -124,5 +124,23 @@ check("HTTP error -> allowed (fail-open)", (await buildDispatchBudgetAllows("poo
 globalThis.fetch = async () => { fetchCalls++; return { ok: true, json: async () => "not json at all" }; };
 check("odd body -> allowed (fail-open)", (await buildDispatchBudgetAllows("pool-e", NOW)) === true);
 
+// --- workflow wiring: the harness must probe, kill fast, and never fail
+// over an exhausted daily cap (found live: the original log-grep kill was
+// dead code — OpenRouter's error body never reaches opencode's session log) --
+
+const wf = readFileSync(join(here, "..", ".github", "workflows", "team-build-turn.yml"), "utf8");
+
+check("workflow probes the attempt's pool via /api/v1/key",
+  wf.includes("https://openrouter.ai/api/v1/key") && wf.includes("free_model_daily_requests"));
+check("workflow marks the kill as a quota death", /QUOTA_DEATH=1/.test(wf));
+check("QUOTA_DEATH is initialised per attempt (set -u safe)", /QUOTA_DEATH=0/.test(wf));
+
+const failRegion = wf.slice(wf.indexOf("attempt_failed() {"), wf.indexOf("budget_left() {"));
+check("quota death vetoes pool/model failover (FALLBACK_KEY is the other team's account)",
+  failRegion.length > 0 && failRegion.includes('QUOTA_DEATH" != "1"'),
+  failRegion.length === 0 ? "attempt_failed region not found" : failRegion.split("\n")[1] ?? "");
+check("quota kill names the reset so a quiet day is explained",
+  wf.includes("Quota resets at UTC midnight; committed work is the handoff."));
+
 console.log(failed === 0 ? "\nall build-quota cases passed" : `\n${failed} FAILED`);
 process.exit(failed === 0 ? 0 : 1);

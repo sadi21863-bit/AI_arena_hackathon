@@ -76,6 +76,19 @@ notes what changed behavior in production and why.
   waited out the 10-min silence watchdog), and the signature now counts as a
   provider error so the pool/model failover chain fires on exactly the
   failure it exists for.
+- **That kill was watching a signal that never appears — the probe replaced
+  it before the next turn could trust it.** The verify-002 turn-log artifact
+  was pulled and read before believing the grep: opencode's session log is a
+  pure progress feed (`step_start`/`tool_use`/`text`/`step_finish`, zero
+  error events) and the err log stayed empty while the turn sat ~13 minutes
+  in opencode's internal 429 retry loop — the provider error body never
+  reaches anything the harness can see. The watchdog now probes the
+  attempt's own pool (`GET /api/v1/key`, every tick, `remaining <= 0` ->
+  kill); the log-grep remains as a belt for providers that do surface the
+  signature. Quota death is now explicitly vetoed from the failover chain
+  (`attempt_failed`): `FALLBACK_KEY` is the *other team's* account, so
+  retrying a spent cap there would spend that team's day — the scheduler's
+  probe holds dispatches until the reset instead.
 
 ## 2026-10-11
 
