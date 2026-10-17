@@ -3,6 +3,131 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-17
+
+- **First fully-autonomous free-tier spawn.** Ideathon event_485dd577 was
+  judged (top ideas: "Friction-Track: Internal UX Auditing for Teams" 6.825 ->
+  team alpha, "CommitmentSync" 6.65 -> team beta; judgedIdeas 8, queueFailed
+  35 - the top-2 selection ran on what completed). Child hackathon
+  event_693bc79b formed both teams and created both team repos
+  (arena-team-{alpha,beta}-d3e2e7be) with day-0 turns dispatched to each.
+- **Team formation hit the 50-subrequest cap twice; beta's first turn was
+  stranded until repaired by hand.** Queue items 1 and 3 died with "Too many
+  subrequests by single Worker invocation". Item 1 was recovered by the next
+  cron tick (the re-queue guard at scheduler.ts:610 saw zero non-failed
+  team_formation rows at that moment); item 3 was not - there is no retry path
+  for continuation items, and the same guard can never fire again once both
+  hackathon_teams rows exist (`existing === 0 && formedTeams < 2`). Beta's
+  turn row was stamped dispatched_at before the dispatch call that the cap
+  killed, so it sat "dispatched" with no run and would have been
+  staleness-swept to failed at +2h. Repaired by dispatching turn 1 manually
+  with the exact formation prompt (extracted from executor.ts:725-733,
+  attributed to the roster member whose take was already recorded - Ellis).
+  reconcileBuildTurns linked the manual run to the stranded row by run-name on
+  the next tick (reconciled_at 09:20:54, run_id 39020759917) - correlation by
+  run-name works as designed.
+- **Both strand causes fixed same-day (worker 45bc8e02; workflow fix staged
+  for push).** (a) The scheduler's re-arm guard now counts only pending/claimed
+  team_formation items as in flight and re-fires while any team row sits at
+  'forming' (scheduler.ts) - the exact live state (completed continuation +
+  stuck team) now re-queues, resumes the idempotent handler, and stops once
+  the team flips to 'building'; a failing resume retries at cron cadence,
+  the watchdog this strand never had. (b) Both dispatch handlers now bank the
+  rotation take AFTER the dispatch, gated on (fresh turn row || actually
+  dispatched): a resume either performs the missing dispatch itself (exactly
+  one take, same attribution) or finds the run already exists (no take) -
+  never the double-count + wrong-persona prompt the old pre-dispatch write
+  allowed. (c) team-build-turn.yml kill sites now export a disposition
+  (silence|budget|quota) and the failed-turn report names the real kill
+  instead of assuming the silence watchdog (found when run 39013607598's
+  60-min budget kill was reported as a watchdog kill). Pinned by 12 new
+  check cases in scripts/check_team_formation_split.cjs (including a
+  reproduction of the old guard stranding the team) and re-verified by the
+  probe-kill rehearsal 16/16 against the refreshed machinery; tsc and the
+  full checker suite pass. The workflow edit reaches team repos only once
+  pushed to main (harness sync pulls from there).
+- **Alpha's failed day-0 turn exercised the pool failover live.** Attempt 1
+  (pinned pool) died after ~44 min with "Upstream idle timeout exceeded" - a
+  provider flake, correctly matched by the provider-signature grep - and the
+  failover ran attempt 2 on the OTHER pool (the KEY_2 account) until the
+  60-minute shared turn budget killed it at 08:27. No QUOTA_DEATH kill fired;
+  both pools had fresh daily budgets. Work produced before the kill was
+  committed and pushed (4956778c); VERIFICATION_FAILURE.log honestly records
+  the day-0 state (TS18003 - tsconfig includes src/**/* before src/ exists).
+- **Beta's repaired turn-1 run failed on its own, then was rerun.** The manual
+  run 39020759917 failed in two distinct ways: attempts 1 and 2 (nemotron, on
+  both pools) died on "Upstream idle timeout exceeded" - the same flake that
+  hit alpha's attempt 1, now on both accounts, which is exactly the case the
+  attempt-3 model failover exists for - and attempt 3 (dots-3-note-preview)
+  connected but burned 19.8K reasoning tokens with ZERO output and ended on a
+  length cut, writing nothing. The "Enforce real build output" gate failed the
+  job honestly (no commits, no false success) and reconcileBuildTurns recorded
+  completed/failure at 09:45:53.
+- **The rerun died at the quota probe - correctly, and the first diagnosis was
+  wrong.** Rerunning run 39020759917 (09:47Z) ended in 5m46s with the first
+  live probe kill: "free-tier daily request cap exhausted (probe:
+  remaining=0)", disposition=quota, and the QUOTA_DEATH veto held pool
+  failover back as designed. The probe was reading the truth: the first theory
+  said beta's secret slot held a stale value, but the re-seal (10:08Z) and a
+  fresh dispatch (run 39024406693, 10:18Z) killed identically, and a
+  purpose-built canary (runs 39026940745, 39028544497) read both beta repo
+  secrets directly: slot 1 = fp be6196518490bb5e (0 free - the key alpha's
+  day-0 burned to the cap), slot 2 = fp e02afc8d6d3df473 (43 free). Both
+  values match .env exactly, so the secrets were never stale - beta was
+  reading the WRONG SLOT.
+- **ROOT CAUSE (2026-10-17): TEAM_KEY_PIN was never set on the runner, so
+  every beta run silently used slot 1 - alpha's key.** `TEAM_KEY_PIN` existed
+  only as a docker `-e` flag (workflow L396, which feeds the container) and
+  never as a step env var, so the shell's pin test read empty, fell to the
+  else-branch, and set PRIMARY_KEY="$OR_KEY_1" on every run. Beta probed and
+  burned alpha's key (already at 0 after alpha's day-0) while beta's own key
+  sat in slot 2 as the unreachable fallback - QUOTA_DEATH correctly vetoes
+  cross-pool failover, so the exhaustion never triggered a switch. Alpha was
+  unaffected by luck: its intended slot IS slot 1, so a dead pin and a live
+  pin select the same key. Fixed by adding
+  `TEAM_KEY_PIN: ${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }}`
+  to the Phase A step env block. Verified live: run 39028199597 cleared the
+  probe on its first attempt, and the canary showed slot 2's counter climb
+  7 -> 10 used while slot 1 stayed at 0/51. WHY IT HID FOR SO LONG: the
+  probe-kill rehearsal was 16/16 green because the sim harness exported
+  TEAM_KEY_PIN itself - it tested the key-selection logic while standing in
+  for the very wiring that was missing (same failure class as the stale
+  run.log and the Write-Output tally: a green harness testing the wrong
+  thing). The fix is applied to the beta/alpha repo copies directly (pushed
+  1f8a3f19 / 75e1c7c6) but MUST also be committed and pushed here:
+  syncTeamHarness re-fetches every harness file from raw.githubusercontent
+  master at each dispatch, so the next Worker-dispatched turn would overwrite
+  the team-repo fix with the still-broken committed copy. Pinned by
+  scripts/check_team_key_pin.cjs - fails against the pre-fix workflow (0
+  active TEAM_KEY_PIN assignments) and passes on the fix.
+- **The daily-cap counter is eventually-consistent, not real-time.** During
+  monitoring, free_model_daily_requests lagged 20+ minutes behind known calls
+  (a key showed 0 used long after two calls; another climbed with no new
+  traffic). Any gate or probe that reads it must treat a fresh reading as
+  stale-by-an-unknown-amount; the hard enforcement is the provider's 429.
+  Counter lag alone did NOT explain the beta quota kill - the probe's 0 was
+  real: the dead pin made it read the other team's already-exhausted slot
+  (see the ROOT CAUSE bullet above).
+- **The pinned free model degraded upstream; beta turn 1 still unbuilt at end
+  of day.** With the pin live, run 39028199597 cleared the probe and ran on
+  KEY_2 for ~12 min (3 requests burned; canary counter 7 -> 10), but attempt 1
+  died on "Upstream idle timeout exceeded" mid-discovery, and the pool
+  failover then hit the remaining wall: the other pool is alpha's account,
+  already spent to 0, so its probe killed the retry - QUOTA_DEATH veto and the
+  spent pool both did their jobs. A second dispatch, run 39029396656, died at
+  the FIRST model request with the same idle timeout (480-byte turn log, zero
+  work): provider weather, not harness wiring. Retries stopped to preserve
+  KEY_2's ~35 remaining requests. The same signature hit alpha day-0 attempt 1
+  and beta's original attempts 1-2, so it predates the pin fix. The Worker
+  side never had the dead-pin bug: openRouterKeyForTeam
+  (src/events/build-quota.ts:70) already mirrors the pin (beta -> key 2),
+  which is why the dispatch gate kept allowing beta turns while the runner
+  kept probing key 1. Day-1 note: there is no turn-1 retry path - the next
+  dispatch is turn 2 (MAX+1, src/events/executor.ts:818-821), so beta starts
+  its product under the turn-2 label unless turn 1 is re-run manually first.
+  The temporary secret-probe canary was removed from the beta repo (commit
+  12d0b2fd) after its usage read confirmed the fix.
+
 ## 2026-10-15
 
 - **Correction to 2026-10-11: the Zen pool keys were never dead.** They

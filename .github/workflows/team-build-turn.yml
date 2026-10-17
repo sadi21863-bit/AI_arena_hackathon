@@ -263,6 +263,16 @@ jobs:
           # a revert is a model change, not a re-scaffold; nothing dispatches on them.
           OR_KEY_1: ${{ secrets.OPEN_ROUTER_API_KEY }}
           OR_KEY_2: ${{ secrets.OPEN_ROUTER_API_KEY_2 }}
+          # Runner-side pin for the key-selection block below. This MUST be a
+          # step env var: ${{ }} does not interpolate inside run: shells, and
+          # the docker -e flag further down only feeds the container. Found
+          # live 2026-10-17: with this missing, $TEAM_KEY_PIN read as empty on
+          # the runner, every run silently selected OR_KEY_1 as PRIMARY, and
+          # beta spent its attempts on the other team's (exhausted) key while
+          # its own key sat as the unreachable fallback behind the QUOTA_DEATH
+          # veto - so beta's quota probes read 0 forever while its key had 43
+          # requests left.
+          TEAM_KEY_PIN: ${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }}
           # Model ids via env for the same interpolation reason as the prompt
           # (dispatch-controlled values, never inline). MODEL is the pinned
           # build model; FALLBACK_MODEL is attempt 3 when the pinned model
@@ -410,6 +420,9 @@ jobs:
           LAST_ACTIVE=$(date +%s)
           TIMED_OUT=0
           QUOTA_DEATH=0
+          # Which kill, if any: silence | budget | quota. Exported below so the
+          # report step names the real cause instead of assuming the watchdog.
+          DISPOSITION=""
           # Wait for the container to EXIST before arming the watchdog. The
           # original loop checked `docker inspect ... = "true"` as its entry
           # condition immediately after `docker run ... &`, but docker run
@@ -455,6 +468,7 @@ jobs:
               docker kill "$CONTAINER" 2>/dev/null || true
               TIMED_OUT=1
               QUOTA_DEATH=1
+              DISPOSITION="quota"
               break
             fi
             # Belt only (providers that DO surface the signature — Zen-era
@@ -464,6 +478,7 @@ jobs:
               docker kill "$CONTAINER" 2>/dev/null || true
               TIMED_OUT=1
               QUOTA_DEATH=1
+              DISPOSITION="quota"
               break
             fi
             BYTES=$(( $(wc -c < opencode-turn.log 2>/dev/null || echo 0) + $(wc -c < opencode-turn.err.log 2>/dev/null || echo 0) ))
@@ -484,6 +499,7 @@ jobs:
               echo "::error::Agent silent for ${WATCHDOG_SILENCE_MINUTES} min (no output, no file changes) — killing container ${CONTAINER}"
               docker kill "$CONTAINER" 2>/dev/null || true
               TIMED_OUT=1
+              DISPOSITION="silence"
               break
             fi
             # Loud-but-useless loop guard (see WATCHDOG_MAX_MINUTES above).
@@ -493,6 +509,7 @@ jobs:
               echo "::error::Agent exceeded the ${WATCHDOG_MAX_MINUTES}-min turn budget while still emitting output — killing container ${CONTAINER}. A provider retry/compaction loop is loud but makes no progress, so the silence watchdog cannot see it."
               docker kill "$CONTAINER" 2>/dev/null || true
               TIMED_OUT=1
+              DISPOSITION="budget"
               break
             fi
           done
@@ -500,10 +517,13 @@ jobs:
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "timed_out=$TIMED_OUT" >> "$GITHUB_OUTPUT"
+          echo "disposition=$DISPOSITION" >> "$GITHUB_OUTPUT"
           if [ "$QUOTA_DEATH" = "1" ]; then
             echo "opencode was killed because the pinned pool's free-tier daily cap is spent (exit ${code})"
-          elif [ "$TIMED_OUT" = "1" ]; then
+          elif [ "$DISPOSITION" = "silence" ]; then
             echo "opencode was killed by the silence watchdog after ${WATCHDOG_SILENCE_MINUTES} min of no activity (exit ${code})"
+          elif [ "$DISPOSITION" = "budget" ]; then
+            echo "opencode was killed after exceeding the ${WATCHDOG_MAX_MINUTES}-min turn budget while still emitting output (exit ${code})"
           else
             echo "opencode exited $code"
           fi
@@ -1091,8 +1111,21 @@ jobs:
         # status, without throwing away real progress to get it.
         if: steps.agent.outputs.exit_code != '0'
         run: |
+          # The disposition, not timed_out alone, names the kill: a budget kill
+          # is loud (a retry/compaction loop) and a quota kill is unrecoverable
+          # until the UTC reset, so reporting either as "silence watchdog" sent
+          # the 2026-10-17 diagnosis down the wrong path (run 39013607598 — the
+          # real cause was the 60-min budget; the old message said silence).
+          # timed_out=1 with an empty disposition can only come from an older
+          # synced harness; the generic watchdog line still covers that.
           if [ "${{ steps.agent.outputs.timed_out }}" = "1" ]; then
-            echo "::error::Agent was killed by the silence watchdog (no output and no file changes for 10+ minutes) instead of burning the full job timeout. This turn records a real failure — the scheduler dispatches the next turn minutes from now rather than 2 hours from now. Any files produced before the stall were committed and pushed."
+            if [ "${{ steps.agent.outputs.disposition }}" = "budget" ]; then
+              echo "::error::Agent exceeded the 60-min turn budget while still emitting output (a provider retry/compaction loop makes no progress) — killed rather than burning the full job timeout. This turn records a real failure; any files produced before the kill were committed and pushed."
+            elif [ "${{ steps.agent.outputs.disposition }}" = "quota" ]; then
+              echo "::error::Agent was killed because the pinned pool's free-tier daily request cap is spent; the quota probe holds the next dispatch until the UTC reset, so the committed work is the handoff."
+            else
+              echo "::error::Agent was killed by the silence watchdog (no output and no file changes for 10+ minutes) instead of burning the full job timeout. This turn records a real failure — the scheduler dispatches the next turn minutes from now rather than 2 hours from now. Any files produced before the stall were committed and pushed."
+            fi
           else
             echo "::error::opencode exited ${{ steps.agent.outputs.exit_code }}. Any files it produced before crashing were committed and pushed; this turn is reported failed so the outcome is not silently treated as success."
           fi

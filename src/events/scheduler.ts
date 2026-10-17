@@ -586,14 +586,18 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // until day 1. Read-only status pull; the dispatch guard below and the
     // per-day ceiling are untouched.
     await reconcileBuildTurns(env, event.id);
-    // status != 'failed' â€” found live (2026-07-22 code review): without this
-    // filter, a single failed team_formation attempt (e.g. a transient
-    // GitHub 5xx during createTeamRepo) permanently stalls the whole
-    // hackathon, since this coarse count would forever see the failed row
-    // and never re-queue. handleTeamFormation itself is already idempotent
-    // per-team (see its own header comment) â€” it just needs to actually
-    // get re-invoked to use that.
-    const existing = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation' AND status != 'failed'`)
+    // Only items actually about to run count as in-flight here. The first
+    // version counted `status != 'failed'` (2026-07-22: a single failed
+    // attempt must not permanently stall the hackathon). That held until
+    // event_693bc79b (2026-10-17): the continuation item COMPLETED after
+    // creating the second team's row, then died on its very next statement
+    // (the dispatch call, subrequest cap) -- so the completed row counted as
+    // "work still coming" forever while the team it left behind sat at
+    // 'forming' with nothing queued. Pending/claimed are the only statuses
+    // meaning "a tick will still pick this up"; completed/failed are history.
+    // handleTeamFormation itself is already idempotent per-team (see its own
+    // header comment) -- it just needs to actually get re-invoked to use that.
+    const inFlight = await env.DB.prepare(`SELECT COUNT(*) as n FROM event_queue WHERE event_id = ? AND task_type = 'team_formation' AND status IN ('pending', 'claimed')`)
       .bind(event.id).first<{ n: number }>();
     // ...and do not re-queue once the teams actually exist. Pre-existing churn
     // (found while fixing the subrequest overrun, incident §10): with both teams
@@ -606,8 +610,19 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
     // what legitimately empties the queue mid-formation.
     const formedTeams = await env.DB.prepare(`SELECT COUNT(*) as n FROM hackathon_teams WHERE event_id = ?`)
       .bind(event.id).first<{ n: number }>();
+    // ...and re-arm while any team is stuck at 'forming': its row exists, so
+    // the formed-teams guard alone reads "done", but the handler never
+    // reached its status='building' tail (repo created, first turn not
+    // confirmed) -- the same 2026-10-17 strand, caught by the second half of
+    // this condition. Re-invoking is safe because handleTeamFormation skips
+    // 'building' teams at the loop head and every step before the tail is
+    // idempotent; once the resume completes, forming hits 0 and the re-arm
+    // stops. Failed resumes retry at cron cadence (one item per tick), which
+    // is the watchdog this strand never had.
+    const formingTeams = await env.DB.prepare(`SELECT COUNT(*) as n FROM hackathon_teams WHERE event_id = ? AND status = 'forming'`)
+      .bind(event.id).first<{ n: number }>();
     const HACKATHON_TEAM_COUNT = 2;
-    if ((existing?.n ?? 0) === 0 && (formedTeams?.n ?? 0) < HACKATHON_TEAM_COUNT) {
+    if ((inFlight?.n ?? 0) === 0 && ((formedTeams?.n ?? 0) < HACKATHON_TEAM_COUNT || (formingTeams?.n ?? 0) > 0)) {
       // team_formation's executor handler also dispatches each team's
       // first build turn â€” "First build turns begin same day" (spec Â§3.2)
       // â€” so nothing else needs queuing here on formation day.

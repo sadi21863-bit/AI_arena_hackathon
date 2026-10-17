@@ -689,7 +689,7 @@ async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
       justCreated = true;
     }
 
-    await recordBuildTurn(env, {
+    const freshTurn = await recordBuildTurn(env, {
       turnId: `${team.id}_turn1`, eventId: item.event_id, teamId: team.id, turnNumber: 1,
     });
 
@@ -700,9 +700,8 @@ async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
       teams: [{ teamId: team.id, ideaAgentId: idea.agent_id, ideaCoAgentId: idea.co_agent_id }],
     });
     const opener = await nextBuildAuthor(env, team.id);
-    if (opener) await recordTurnTaken(env, team.id, opener.agent_id);
 
-    await dispatchTurnIfNeeded(env, {
+    const dispatched = await dispatchTurnIfNeeded(env, {
       repoFullName: team.repo_url, team: teamName, turnId: `${team.id}_turn1`,
       // A repo created moments ago by createTeamRepo already carries the
       // current harness, so the pre-dispatch sync is skipped as a provable
@@ -732,6 +731,22 @@ async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
         `What to build: ${idea.one_liner}\nProblem it solves: ${idea.problem}\nSolution: ${idea.solution}\n\n` +
         `Reference architecture notes below are guidance only — use them to inform what you build, do not restate or summarize them:\n${idea.build_scope}`),
     });
+    // The rotation take is banked AFTER the dispatch it pays for, and only
+    // when this attempt either inserted the turn row (first arrival) or
+    // actually dispatched the run (a resume that performed the missing
+    // dispatch). The original order banked the take pre-dispatch,
+    // unconditionally — found live on event_693bc79b (2026-10-17): a
+    // continuation that died exactly AT the dispatch call had already
+    // banked the opener, so a resume would have paired the next member's
+    // turn with the original member's banked take — a double-count on one
+    // side and a wrong-persona prompt on the other. Now a resume that finds
+    // the run already exists banks nothing (that turn's dispatch is done),
+    // and one that performs the dispatch itself banks exactly one take,
+    // attributed to the member the prompt names. The only slack is a crash
+    // landing between the dispatch above and this line, which leaves the
+    // take unbanked — one extra turn for the same opener, the safe direction
+    // (a double-count skips a member and skews attribution).
+    if (opener && (freshTurn || dispatched)) await recordTurnTaken(env, team.id, opener.agent_id);
     countDbStatement();
     await env.DB.prepare(`UPDATE hackathon_teams SET status = 'building' WHERE id = ?`).bind(team.id).run();
 
@@ -805,20 +820,19 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const turnNumber = (prior?.n ?? 1) + 1; // turn 1 is dispatched on formation day
   const turnId = `${teamId}_turn${turnNumber}`;
 
-  await recordBuildTurn(env, { turnId, eventId: item.event_id, teamId, turnNumber });
+  const freshTurn = await recordBuildTurn(env, { turnId, eventId: item.event_id, teamId, turnNumber });
 
   // Rotate the turn through the roster: fewest turns first. Who holds the
   // turn changes what gets built, because turnAttribution puts their persona
   // and build role at the top of the prompt.
   const author = await nextBuildAuthor(env, teamId);
-  if (author) await recordTurnTaken(env, teamId, author.agent_id);
 
   // dispatchTurnIfNeeded, not a bare dispatch: a crash-retry of this item
   // (or a dispatch that timed out after GitHub accepted it) would otherwise
   // fire a SECOND workflow run with the same turn_id — duplicated inference
   // spend and conflicting commits. The run's existence is verified against
   // the Actions API first (see build-turns.ts).
-  await dispatchTurnIfNeeded(env, {
+  const dispatched = await dispatchTurnIfNeeded(env, {
     repoFullName: team.repo_url, team: team.team_name,
     turnId,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
@@ -833,6 +847,12 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
       `4. UPDATE BACKLOG.md: move what you did to "Done", add follow-up items.\n\n` +
       `Reference architecture notes (guidance only):\n${idea?.build_scope}`),
   });
+
+  // Same bank-after-dispatch rule as the formation path above (see its long
+  // comment for the live failure it fixes): one take per turn, written only
+  // when this attempt inserted the row or performed the dispatch — never on
+  // a retry that finds the run already exists.
+  if (author && (freshTurn || dispatched)) await recordTurnTaken(env, teamId, author.agent_id);
 }
 
 /** Ideathon judging — spec §13: all 7 judges score one idea. */
