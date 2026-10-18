@@ -52,12 +52,21 @@ export interface TeamMemberRow {
  * else build the idea they pitched. Everyone not leading is split evenly and
  * deterministically by roster order, so the same event always produces the
  * same rosters and a re-run of team formation is idempotent.
+ *
+ * PRECONDITION — `input.teams` must be EVERY team of the formation, in one
+ * call. The split is a round-robin OVER THE ARRAYS IT IS GIVEN, so a subset
+ * call assigns every non-lead agent to the subset: with one team in the
+ * array, `i % 1` sends all of them there. The executor once called this once
+ * per team inside its loop, and both teams ended up holding all 12 agents
+ * (live defect on event_693bc79b, 2026-10-17, discovered via 12-member
+ * rosters). The caller now collects the whole formation and calls this
+ * exactly once; the check_team_roster_split check guards that structure.
  */
 export async function assignTeamMembers(
   env: Env,
   input: {
     eventId: string;
-    teams: Array<{ teamId: string; ideaAgentId: string; ideaCoAgentId: string | null }>;
+    teams: Array<{ teamId: string; ideaAgentId: string | null; ideaCoAgentId: string | null }>;
   }
 ): Promise<void> {
   const leadOf = new Map<string, string[]>();

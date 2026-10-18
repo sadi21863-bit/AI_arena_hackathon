@@ -654,51 +654,145 @@ async function runTeamFormation(env: Env, item: QueueItem): Promise<void> {
   // Per-team idempotency (2026-07-22 hardening — see the retry-safety gap
   // flagged at Week 4 gate-pass): a prior team_formation attempt for this
   // same event may have already gotten one or both teams partway through.
-  // 'forming' = repo created (createTeamRepo is itself idempotent, see
-  // src/github/repos.ts) but the first build-turn dispatch isn't confirmed
-  // yet; 'building' = dispatch confirmed, this team is fully done and a
-  // retry should skip it entirely rather than fire a duplicate CI run.
+  // 'forming' = team row exists but the first build-turn dispatch isn't
+  // confirmed yet; 'building' = dispatch confirmed, this team is fully done
+  // and phase 1 skips its work entirely rather than fire a duplicate CI run.
+  //
+  // Two phases, because the roster split is only meaningful over the WHOLE
+  // formation: assignTeamMembers round-robins the non-lead agents across
+  // exactly the teams it is given, so it must be called ONCE with every team
+  // of this formation. It used to be called inside the per-team loop with a
+  // single-element array, and with one team in the array every non-lead
+  // agent joined that team (`i % 1` is always that team) — alpha took all 10
+  // non-leads, then beta took all 10 again, leaving both teams on 12-member
+  // rosters (live defect on event_693bc79b, 2026-10-17: found by counting
+  // hackathon_team_members per team, 12 + 12 instead of the intended 6 + 6).
+  // The fix is structural: phase 1 ensures a team ROW exists for every team
+  // of the formation, phase 2 makes the one roster call those rows give ids
+  // to, phase 3 does the per-team work.
+  //
+  // Phase 1 deliberately does NOT create repos. A fresh repo costs ~40-50
+  // tracked subrequests (worker_subrequest_log measured 53-57 for one item)
+  // and two fresh repos in one invocation is exactly what died on the
+  // per-invocation cap ("Too many subrequests by single Worker invocation")
+  // on event_7308f1fe, event_41cbabb7 and event_693bc79b — so exactly one
+  // repo is still created per invocation, in phase 3, by the same item that
+  // dispatches that team's first turn. That keeps `justCreated` honest (see
+  // its doc in build-turns.ts): true only when this item created the repo.
+  //
+  // Leads are read back from each row's persisted idea (the LEFT JOIN), not
+  // recomputed from top2: applyRunoff re-runs its LLM tie-breaker on every
+  // formation attempt, and a flipped verdict between attempts would add the
+  // other pair's leads on top of the first (INSERT OR IGNORE never replaces).
+  // Reading the stored decision back makes every retry compute exactly the
+  // split the first attempt did.
   const teamNames: Array<"alpha" | "beta"> = ["alpha", "beta"];
+
+  countDbStatement();
+  const existingTeams = await env.DB.prepare(
+    `SELECT t.id, t.team_name, t.repo_url, t.status,
+            i.agent_id AS idea_agent_id, i.co_agent_id AS idea_co_agent_id
+     FROM hackathon_teams t LEFT JOIN archive_ideas i ON i.id = t.idea_id
+     WHERE t.event_id = ?`
+  ).bind(item.event_id).all<{
+    id: string; team_name: string; repo_url: string | null; status: string;
+    idea_agent_id: string | null; idea_co_agent_id: string | null;
+  }>();
+  const teamRowByName = new Map(existingTeams.results.map((r) => [r.team_name, r] as const));
+
+  const rosterTeams: Array<{ teamId: string; ideaAgentId: string | null; ideaCoAgentId: string | null }> = [];
+  const pendingByTeam = new Map<"alpha" | "beta", { idea: IdeaForBuild; teamId: string; repoFullName: string | null }>();
+
+  // Phase 1 — ensure a row (and only a row) for every team of the formation.
   for (let i = 0; i < top2.length; i++) {
     const idea = top2[i];
     const teamName = teamNames[i];
+    const existing = teamRowByName.get(teamName);
 
-    countDbStatement();
-    let team = await env.DB.prepare(
-      `SELECT id, repo_url, status FROM hackathon_teams WHERE event_id = ? AND team_name = ?`
-    ).bind(item.event_id, teamName).first<{ id: string; repo_url: string; status: string }>();
+    if (existing?.status === "building") {
+      // Fully formed by an earlier item. Still a party to the phase-2 split:
+      // a retry that only forms the OTHER team must compute the same
+      // per-team assignment, not dump every non-lead onto the one team row
+      // it can see.
+      rosterTeams.push({ teamId: existing.id, ideaAgentId: existing.idea_agent_id, ideaCoAgentId: existing.idea_co_agent_id });
+      continue;
+    }
 
-    if (team?.status === "building") continue; // already fully formed — idempotent no-op
+    let teamId: string;
+    let repoFullName: string | null;
+    let ideaAgentId: string | null;
+    let ideaCoAgentId: string | null;
+    if (existing) {
+      teamId = existing.id;
+      repoFullName = existing.repo_url;
+      ideaAgentId = existing.idea_agent_id;
+      ideaCoAgentId = existing.idea_co_agent_id;
+    } else {
+      teamId = `team_${crypto.randomUUID()}`;
+      // repo_url is nullable (db/schema_hackathon_events.sql) precisely so a
+      // row can exist before its repo does; phase 3 fills it in when the
+      // repo is actually created. The row is staged here because the phase-2
+      // roster rows need this team's id, and ids do not exist until
+      // persisted.
+      countDbStatement();
+      await env.DB.prepare(
+        `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, NULL, 'forming')`
+      ).bind(teamId, item.event_id, idea.id, teamName).run();
+      repoFullName = null;
+      ideaAgentId = idea.agent_id;
+      ideaCoAgentId = idea.co_agent_id;
+    }
+    rosterTeams.push({ teamId, ideaAgentId, ideaCoAgentId });
+    pendingByTeam.set(teamName, { idea, teamId, repoFullName });
+  }
+
+  // Phase 2 — the ONE roster call, before any opener is computed in phase 3.
+  // INSERT OR IGNORE keeps a retry a no-op. Degenerate one-team formation:
+  // the sole team takes every remaining agent — there is nowhere to split to.
+  if (rosterTeams.length) await assignTeamMembers(env, { eventId: item.event_id, teams: rosterTeams });
+
+  // Phase 3 — per-team work, still at most ONE team per queue item (the
+  // early return after the continuation enqueue below is what keeps that
+  // true, and the subrequest-cap history in that comment is why). Termination
+  // stays structural because phase 1 removes 'building' teams from pending,
+  // so the work list shrinks by one per item rather than a counter that could
+  // run away.
+  for (let i = 0; i < top2.length; i++) {
+    const entry = pendingByTeam.get(teamNames[i]);
+    if (!entry) continue; // already 'building' — phase 1 skipped it
+
+    const idea = entry.idea;
+    const teamName = teamNames[i];
 
     // True only when THIS item created the repo, so the harness sync below can
-    // be skipped as provably redundant (see its call site).
+    // be skipped as provably redundant (see its call site). createTeamRepo is
+    // itself idempotent (src/github/repos.ts), so a retried attempt whose 422
+    // reuses an existing repo still lands here and still skips the sync.
     let justCreated = false;
-    if (!team) {
+    let repoFullName = entry.repoFullName;
+    if (!repoFullName) {
       const repo = await createTeamRepo(env, teamName, item.event_id, {
         title: idea.title, oneLiner: idea.one_liner, problem: idea.problem, solution: idea.solution, buildScope: idea.build_scope,
       });
-      const teamId = `team_${crypto.randomUUID()}`;
       // repo_url stores "owner/repo", not the html URL — that's what every
       // GitHub API call needs; the html URL is trivially derivable
       // (https://github.com/<repo_url>) whenever display needs it.
       countDbStatement();
-      await env.DB.prepare(
-        `INSERT INTO hackathon_teams (id, event_id, idea_id, team_name, repo_url, status) VALUES (?, ?, ?, ?, ?, 'forming')`
-      ).bind(teamId, item.event_id, idea.id, teamName, repo.fullName).run();
-      team = { id: teamId, repo_url: repo.fullName, status: "forming" };
+      await env.DB.prepare(`UPDATE hackathon_teams SET repo_url = ? WHERE id = ?`)
+        .bind(repo.fullName, entry.teamId).run();
+      repoFullName = repo.fullName;
       justCreated = true;
     }
+    // Shaped like the old row so the dispatch block below reads unchanged.
+    const team = { id: entry.teamId, repo_url: repoFullName };
 
     const freshTurn = await recordBuildTurn(env, {
       turnId: `${team.id}_turn1`, eventId: item.event_id, teamId: team.id, turnNumber: 1,
     });
 
-    // Roster before the first turn, so turn 1 already belongs to someone —
-    // idempotent (INSERT OR IGNORE), so a retried formation won't duplicate.
-    await assignTeamMembers(env, {
-      eventId: item.event_id,
-      teams: [{ teamId: team.id, ideaAgentId: idea.agent_id, ideaCoAgentId: idea.co_agent_id }],
-    });
+    // Roster was assigned in phase 2 — before this loop — so turn 1 already
+    // belongs to someone; nextBuildAuthor is null only for teams formed
+    // before rosters existed, whose prompt stays un-attributed.
     const opener = await nextBuildAuthor(env, team.id);
 
     const dispatched = await dispatchTurnIfNeeded(env, {

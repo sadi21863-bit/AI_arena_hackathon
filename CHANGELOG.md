@@ -3,6 +3,22 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-18
+
+- **Roster split repaired live; formation now assigns all teams in ONE call.**
+  On event_693bc79b both teams held all 12 agents (12+12 instead of 6+6).
+  Root cause: runTeamFormation called assignTeamMembers once per team with a
+  single-element array, and the round-robin `i % teams.length` inside then
+  sent every non-lead agent to that one team, twice over. Formation now
+  stages a row for every team first (building teams still join the roster
+  read; leads stay deterministic on resume) and makes one assign call for
+  all teams, while repo creation still runs one repo per Worker invocation —
+  the shape the 50-subrequest cap killed twice on 2026-10-17. Live rosters
+  repaired with delete-only, re-runnable SQL (turns_taken = 0 guard; 12+12
+  -> 6+6, all turn counts preserved), verified on D1: 6/6, overlap 0, leads
+  alpha->alex / beta->ellis. Pinned by scripts/check_team_roster_split.cjs
+  (17 checks; 6 of them fail on pre-fix HEAD).
+
 ## 2026-10-17
 
 - **First fully-autonomous free-tier spawn.** Ideathon event_485dd577 was
