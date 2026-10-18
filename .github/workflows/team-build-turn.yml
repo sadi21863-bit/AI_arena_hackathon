@@ -42,7 +42,7 @@ on:
       model:
         description: "OpenCode model id for this turn (free-model ids churn — config, not workflow edit)"
         required: false
-        default: "openrouter/nvidia/nemotron-3.5-lightning:free"
+        default: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
@@ -288,14 +288,20 @@ jobs:
           # serialization never emits. Every multi-turn agent session hits this
           # on its second tool call, so it is not an edge case: the model works,
           # the driver cannot talk to it.
-          # The current pair is OpenRouter free: nemotron-3.5-lightning primary,
-          # dots-3-note-preview as the attempt-3 different-upstream safety net.
-          # Both were verified agentic by direct API probe (multi-turn
-          # tool-calling, writing module + test) BEFORE being pinned here.
+          # The pinned PRIMARY is nemotron-3-super-120b-a12b as of 2026-10-18:
+          # nemotron-3.5-lightning went upstream-dead during 2026-10-17 (empty
+          # 200s, then 90s timeouts, then 109s finish=length with zero content)
+          # — the same failure class that killed run 39020759917's attempts 1-2.
+          # The replacement was verified agentic by direct API probe (multi-turn
+          # tool-calling) BEFORE being pinned here. dots-3-note-preview stays as
+          # the attempt-3 different-upstream safety net, with a known caveat: it
+          # can fail closed by burning its budget on hidden reasoning (19.8K
+          # reasoning tokens, zero output, same run), so the net is best-effort,
+          # not guaranteed.
           # Free-model availability is volatile; if the pinned primary starts
           # 404ing or returning provider errors, re-probe the catalog rather than
           # assuming the id rotted.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'openrouter/nvidia/nemotron-3.5-lightning:free' }}
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'openrouter/nvidia/nemotron-3-super-120b-a12b:free' }}
           FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'openrouter/dots-studio/dots-3-note-preview:free' }}
         run: |
           set +e

@@ -72,7 +72,7 @@ const res = await fetch(
 
 console.log(`  dispatch to ${REPO}`);
 console.log(`  turn_id: ${TURN_ID}`);
-console.log(`  model:   openrouter/nvidia/nemotron-3.5-lightning:free (workflow default)`);
+console.log(`  model:   openrouter/nvidia/nemotron-3-super-120b-a12b:free (workflow default)`);
 console.log(`  prompt:  ${taskPrompt.length} chars`);
 console.log(`  HTTP ${res.status} ${res.status === 204 ? "(accepted)" : await res.text()}`);
 // process.exit() here crashes Node on Windows teardown (libuv assertion in

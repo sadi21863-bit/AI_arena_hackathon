@@ -18,6 +18,18 @@ notes what changed behavior in production and why.
   -> 6+6, all turn counts preserved), verified on D1: 6/6, overlap 0, leads
   alpha->alex / beta->ellis. Pinned by scripts/check_team_roster_split.cjs
   (17 checks; 6 of them fail on pre-fix HEAD).
+- **Pinned build model swapped: nemotron-3.5-lightning -> super-120b (both
+  OpenRouter free), ahead of the first building-phase dispatch (~07:20Z).**
+  Lightning went upstream-dead during 2026-10-17 — empty 200s, then 90s
+  timeouts, then 109s finish=length with zero content — the same class that
+  killed run 39020759917's attempts 1-2 and would have failed both teams'
+  first building turns at attempt 1. The replacement,
+  nvidia/nemotron-3-super-120b-a12b:free, passed a direct agentic probe
+  before being pinned (correct write_file tool call, then a coherent
+  follow-up turn) in the workflow model defaults and the baked
+  docker/opencode.json. dots-3-note-preview stays as the attempt-3 net; it
+  can burn its budget on hidden reasoning, so the net is best-effort, not
+  guaranteed.
 
 ## 2026-10-17
 
