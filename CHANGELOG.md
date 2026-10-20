@@ -3,6 +3,20 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-20
+
+- **First 48h of autonomous building turns: quota-bounded partial turns
+  confirmed; turn prompt now requires clean-install verification.** Alpha ran
+  turns 2-5 and beta turns 2-3 (alpha on the 00:00Z tick, beta the next one),
+  all terminated by their 50 req/day/key pool, all preserved and committed
+  except alpha t4 (a ~1-minute remainder slice, no changes). Alpha t2 broke
+  dependencies (jest@25 vs ts-jest@29 peer) while its own `npm test` passed on
+  a stale node_modules; Phase B's clean install caught it and t3 repaired it.
+  SELF-VERIFY now demands a clean dependency install (and lockfile commit)
+  before a turn may claim green. D1 reconciled all 8 rows; no duplicate
+  dispatches, no stuck turns; both keys end the UTC day at used 56/limit 50.
+  Details: docs/REHEARSAL_2026-10-18_BETA_T1.md (Outcome section).
+
 ## 2026-10-18
 
 - **Roster split repaired live; formation now assigns all teams in ONE call.**

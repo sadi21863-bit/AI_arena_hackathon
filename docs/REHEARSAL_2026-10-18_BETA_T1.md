@@ -57,3 +57,22 @@ upstream-dead.
 Artifact: build-turn-team_9af854a7-928d-4aaf-91f5-800575320050_turn1
 (opencode-turn.log). Run URL:
 https://github.com/AI-arena-hackathon/arena-team-beta-d3e2e7be/actions/runs/39101835248
+
+## Outcome after two days (recorded 2026-10-20)
+
+The quota-shape prediction held exactly. Alpha ran turns 2-5 and beta turns
+2-3, dispatched on the first cron tick of each UTC day (alpha 00:00Z, beta
+00:06Z), every one terminated by the daily request pool, every one preserved
+and committed — except alpha t4 (dispatched with just-enough quota, killed
+~1 minute in, no changes). Work commits: alpha t2 35524b99, t3 343afa0f, t5
+a4cce583; beta t2 5683fb8d, t3 10cfe845. D1 reconciled all 8 rows; head_sha
+stayed turn-start throughout; no duplicate dispatches, no stuck rows.
+
+Alpha t2 broke dependencies (jest@25 vs ts-jest@29 peer) while its local
+`npm test` passed on a stale node_modules — Phase B's clean install caught
+it, t3 repaired it, and t5 reached 15 passing tests plus a clean tsc. The
+turn prompt's SELF-VERIFY step now requires a clean dependency install
+before a turn may claim green (executor.ts). Remaining daily pattern: every
+turn is a 5-20 minute partial slice; on Oct 19 alpha split its pool across
+two turns (t3 substantive, t4 a ~1-minute remainder). Both keys end each
+UTC day at used~56/limit=50/remaining=0.
