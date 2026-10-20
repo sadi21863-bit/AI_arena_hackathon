@@ -30,6 +30,20 @@ notes what changed behavior in production and why.
   docker/opencode.json. dots-3-note-preview stays as the attempt-3 net; it
   can burn its budget on hidden reasoning, so the net is best-effort, not
   guaranteed.
+- **First building turn rehearsed post-swap: real code committed, then
+  quota-killed by design (beta turn 1, run 39101835248).** Re-dispatched
+  beta's turn 1 manually after the swap. super-120b behaved: the agent
+  explored the repo, wrote `src/commitmentsync/main.py` (+83) and
+  `tests/test_main.py` (+58), ran its own lint/tests (pytest 3 passed), and
+  the pipeline committed everything as bdda3f6e (+208/-16) before the in-run
+  quota probe killed the container at free-tier remaining=0 (KEY_2 used
+  54/50). Only "Report agent crash" exited 1 — Enforce, Phase B
+  install/verification, and Commit progress all passed; the D1 row
+  reconciled completed/failure. New operating shape: a 50 req/day/key pool
+  drains in ~5 minutes of agent work at this model's speed, so building
+  turns are quota-bounded partial turns with committed work as the handoff
+  (alpha still fresh on KEY_1 for its ~07:20Z turn 2; beta held until the
+  2026-10-19 UTC reset). See docs/REHEARSAL_2026-10-18_BETA_T1.md.
 
 ## 2026-10-17
 
