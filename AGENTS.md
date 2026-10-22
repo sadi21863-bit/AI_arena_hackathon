@@ -1,6 +1,6 @@
 # The Arena — agent loop
 
-Read this file at the start of every session. Full design: `The_Arena_Specification.docx`. Current state: `.arena/state.json` (`current_gate: post_beta_hardening`).
+Read this file at the start of every session. Full design: `The_Arena_Specification.docx`. Current state: `.arena/state.json` (`current_gate: agent_power`).
 
 ## Session start
 

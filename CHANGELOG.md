@@ -16,6 +16,15 @@ notes what changed behavior in production and why.
   before a turn may claim green. D1 reconciled all 8 rows; no duplicate
   dispatches, no stuck turns; both keys end the UTC day at used 56/limit 50.
   Details: docs/REHEARSAL_2026-10-18_BETA_T1.md (Outcome section).
+- **Project gate advanced: `post_beta_hardening` closed, `current_gate` is now
+  `agent_power`.** The gate's one open item — live verification of Part 2, the
+  P0-0a shim and the rebuilt Office — is satisfied by production cycles since
+  2026-08-06 (event_49862627 complete 2026-09-09 with a winner; event_7308f1fe
+  complete 2026-10-02 with 13/34 successful turns and a winner; event_41cbabb7
+  complete 2026-10-11). Agent-empowerment verification that is still
+  outstanding (live browser-turn spike, team-vs-single comparison) is carried
+  into the new `agent_power` gate with its evidence criteria recorded in
+  `.arena/state.json`.
 
 ## 2026-10-18
 
