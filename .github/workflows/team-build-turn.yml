@@ -42,12 +42,12 @@ on:
       model:
         description: "OpenCode model id for this turn (free-model ids churn — config, not workflow edit)"
         required: false
-        default: "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
+        default: "openrouter/recursive/flint-v1.0:free"
         type: string
       fallback_model:
         description: "Attempt-3 model when both pools fail the pinned model (upstream-outage survival, not quota)"
         required: false
-        default: "openrouter/dots-studio/dots-3-note-preview:free"
+        default: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
         type: string
   repository_dispatch:
     types: [team-build-turn]
@@ -288,21 +288,25 @@ jobs:
           # serialization never emits. Every multi-turn agent session hits this
           # on its second tool call, so it is not an edge case: the model works,
           # the driver cannot talk to it.
-          # The pinned PRIMARY is nemotron-3-super-120b-a12b as of 2026-10-18:
-          # nemotron-3.5-lightning went upstream-dead during 2026-10-17 (empty
-          # 200s, then 90s timeouts, then 109s finish=length with zero content)
-          # — the same failure class that killed run 39020759917's attempts 1-2.
-          # The replacement was verified agentic by direct API probe (multi-turn
-          # tool-calling) BEFORE being pinned here. dots-3-note-preview stays as
-          # the attempt-3 different-upstream safety net, with a known caveat: it
-          # can fail closed by burning its budget on hidden reasoning (19.8K
-          # reasoning tokens, zero output, same run), so the net is best-effort,
-          # not guaranteed.
+          # The pinned PRIMARY is recursive/flint-v1.0:free as of 2026-10-25:
+          # the 2026-10-18 pin (nemotron-3-super-120b-a12b) went upstream-dead on
+          # 2026-10-25 — HTTP 404 "Provider returned error" with "Function ...
+          # Not found for account" on both pools, before a single tool call. It
+          # still listed in the catalog, which is why provider_error() now greps
+          # the generic signature too. Flint was verified agentic by direct API
+          # probe AND a live harness spike (run 40205698968: browser_navigate
+          # x6, browser_snapshot x11, browser_take_screenshot x5, a 7-file
+          # commit, then a by-design quota kill) BEFORE being pinned here.
+          # FALLBACK_MODEL is nemotron-3-ultra-550b-a55b (different upstream,
+          # direct tool-calling probe PASS): the previous dots-3 fallback is
+          # known to fail closed, burning its budget on hidden reasoning and
+          # emitting nothing (INCIDENT_2026-10-17_DEAD_PIN.md §11), so it was
+          # not a safety net in practice.
           # Free-model availability is volatile; if the pinned primary starts
           # 404ing or returning provider errors, re-probe the catalog rather than
           # assuming the id rotted.
-          MODEL: ${{ inputs.model || github.event.client_payload.model || 'openrouter/nvidia/nemotron-3-super-120b-a12b:free' }}
-          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'openrouter/dots-studio/dots-3-note-preview:free' }}
+          MODEL: ${{ inputs.model || github.event.client_payload.model || 'openrouter/recursive/flint-v1.0:free' }}
+          FALLBACK_MODEL: ${{ inputs.fallback_model || github.event.client_payload.fallback_model || 'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free' }}
         run: |
           set +e
           CONTAINER="arena-agent-${{ github.run_id }}"
@@ -555,7 +559,14 @@ jobs:
             # must count as a provider error. (The probe path above sets
             # QUOTA_DEATH, which is vetoed in attempt_failed — an exhausted
             # daily cap must not fail over to the other team's account.)
-            grep -qiE "FreeUsageLimitError|free usage exceeded|free-models-per-day|free_model_daily|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
+            # "Provider returned error"/"statusCode":404 added 2026-10-25:
+            # NVIDIA retired the pinned super-120b endpoint provider-side and
+            # opencode logged only that generic message plus a 404, with the
+            # real cause ("Function ... Not found for account") in the response
+            # body. None of the model-not-found patterns above matched, so a
+            # dead upstream looked like a turn that simply wrote no files —
+            # exactly the case attempt 3 (different upstream) exists for.
+            grep -qiE "FreeUsageLimitError|free usage exceeded|free-models-per-day|free_model_daily|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Provider returned error|\"statusCode\":404|ContextOverflowError|context_length_exceeded|Request too large|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated" \
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
           attempt_failed() {
@@ -611,7 +622,7 @@ jobs:
           # pattern here, so the signature printed EMPTY on a turn that had failed
           # at the credential boundary. An error the operator must act on (rotate
           # keys) must be visible in this line, not inferred from the exit code.
-          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|ContextOverflowError|context_length_exceeded|Request too large|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated|Invalid credential|\"statusCode\":401|401 Unauthorized|unauthorized|invalid[_ ]api[_ ]key" \
+          grep -iE "expected 'id'|InvalidResponseData|FreeUsageLimitError|free usage exceeded|HTTP 429|429 Too Many|\[50[234]\]|upstream idle timeout|gateway timeout|service unavailable|Unexpected server error|Provider returned error|ContextOverflowError|context_length_exceeded|Request too large|Failed to execute statement|model .*not.?found|unknown model|MODEL_NOT_FOUND|model .*deprecated|Invalid credential|\"statusCode\":401|\"statusCode\":404|401 Unauthorized|unauthorized|invalid[_ ]api[_ ]key" \
             opencode-turn.log opencode-turn.err.log 2>/dev/null || true
 
       - name: Enforce real build output

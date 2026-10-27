@@ -64,8 +64,8 @@ RUN npm install -g "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" && \
 # by that mount.
 #
 # No custom provider block: the driver model comes from the dispatch (`model`
-# input, default openrouter/nvidia/nemotron-3-super-120b-a12b:free, with
-# `fallback_model` default openrouter/dots-studio/dots-3-note-preview:free as
+# input, default openrouter/recursive/flint-v1.0:free as of 2026-10-25, with
+# `fallback_model` default openrouter/nvidia/nemotron-3-ultra-550b-a55b:free as
 # attempt 3 when both pools fail the pinned model) authenticated via
 # auth.json, not from config. A `workers-ai`
 # provider block lived here until 2026-09-21 and was removed with the shim

@@ -331,21 +331,33 @@ flags as the container minus the chromium path — `--headless --isolated
   file schema (`config.d.ts`) confirms `browser.launchOptions`,
   `browserName: 'chromium'`, `imageResponses: 'omit'`, `outputDir`.
 
-NOT yet verified (needs real infra — the gate):
-- Image builds (apk chromium + global npm install + non-root chromium launch
-  with the launch options).
-- A live spike turn: `opencode-turn.log` should show `browser_navigate` /
-  `browser_snapshot` events and none of the P0-0a crash signatures
-  (`expected 'id'`, `InvalidResponseData`).
-- Turn duration/cost delta vs the pre-change turns.
+VERIFIED live 2026-10-25 (run 40205698968, alpha team repo
+`arena-team-alpha-d28b420c`, model `openrouter/recursive/flint-v1.0:free`):
+- The image builds (apk chromium + global npm install + non-root chromium
+  launch with the launch options) and the turn runs.
+- `opencode-turn.log` records `browser_navigate` ×6, `browser_snapshot` ×11
+  and `browser_take_screenshot` ×5, with none of the P0-0a crash signatures
+  (`expected 'id'`, `InvalidResponseData`). The turn built a tap-counter page,
+  tested it, committed 7 files (`5c0746b`), then was quota-killed after the
+  browser step — the expected free-tier turn shape, not a harness failure.
+- Turn duration/cost: 7.5m wall clock, ended by the 50-requests/day/key cap
+  after the browser evidence. No like-for-like pre-change control was run; the
+  shape matches the 2026-10-18 rehearsal's quota-bounded turn.
 
-Spike run (user): `gh workflow run team-build-turn.yml -f team=alpha
--f turn_id=spike-ui-001 -f task_prompt="Build a tiny single-page web app with
-one interactive button, add a test, and verify the page in the browser."`,
-then grep the run's `opencode-turn.log` for `browser_navigate|browser_snapshot`
-and for `expected 'id'|InvalidResponseData`. Docker is not available on the
-development machine (verified 2026-08-11), so the image build + Alpine
-chromium launch can only be verified via this spike.
+The dispatched prompt added one instruction to the spec's spike prompt: use
+the Playwright tools (`browser_navigate`, `browser_snapshot`,
+`browser_take_screenshot`) so the log records the check. Without it a small
+model can claim a browser verification in prose while making no tool call.
+
+The spike also found and fixed two dispatch-form bugs: the model id must carry
+OpenCode's `openrouter/` prefix, and the model must be declared in
+`docker/opencode.json`. It also found the 2026-10-18 pin
+(`nemotron-3-super-120b-a12b`) dead upstream (provider 404, see
+`docs/SPIKE_BROWSER_TURN_2026-10-22.md`); the production pin is now
+`recursive/flint-v1.0:free` with `nemotron-3-ultra-550b-a55b:free` as the
+attempt-3 fallback. Docker is still unavailable on the development machine
+(verified 2026-08-11), so this dispatched run remains the only proof of the
+Alpine chromium path.
 
 ## 5. Risks and mitigations
 

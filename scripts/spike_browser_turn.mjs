@@ -21,7 +21,7 @@
 // days between events are the free window (no build turns are dispatched).
 //
 // Usage:
-//   node scripts/spike_browser_turn.mjs [--turn-id spike-ui-002] [--dry-run]
+//   node scripts/spike_browser_turn.mjs [--turn-id spike-ui-002] [--model <id>] [--dry-run]
 //   node scripts/spike_browser_turn.mjs --run <runId>     # evidence check only
 //
 // Exit codes: 0 evidence PASS, 1 evidence FAIL, 2 setup/API error,
@@ -34,12 +34,17 @@ import { spawnSync } from "node:child_process";
 
 const REPO = "AI-arena-hackathon/arena-team-alpha-d28b420c";
 const WORKFLOW = "team-build-turn.yml";
-const MODEL = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+const DEFAULT_MODEL = "openrouter/recursive/flint-v1.0:free";
 
-// Verbatim from SPEC_AGENT_EMPOWERMENT_2026-08-11.md §4 "Spike run".
+// SPEC_AGENT_EMPOWERMENT_2026-08-11.md §4 "Spike run", plus the one explicit
+// instruction the spec's acceptance needs from a small model: name the browser
+// tools. Without it a turn can "verify in the browser" by reading the HTML and
+// still pass its own prose, leaving no browser_* tool call in the log.
 const SPIKE_PROMPT =
   "Build a tiny single-page web app with one interactive button, add a test, " +
-  "and verify the page in the browser.";
+  "and verify the page in the browser. Start a local server, then use the " +
+  "Playwright browser tools (browser_navigate, browser_snapshot) and take a " +
+  "screenshot with browser_take_screenshot so the turn log records the check.";
 
 const dotenv = Object.fromEntries(
   fs.readFileSync(".env", "utf8")
@@ -65,6 +70,11 @@ const getArg = (name) => {
 const dryRun = args.includes("--dry-run");
 const runOnly = getArg("--run");
 const turnId = getArg("--turn-id") || "spike-ui-002";
+// OpenCode's provider prefix is required here; the workflow's `model` input
+// takes the same form. Overridable because a free model can die upstream
+// between the pin and the spike (super-120b's NVIDIA endpoint did on
+// 2026-10-25: HTTP 404 "Function not found for account").
+const model = getArg("--model") || DEFAULT_MODEL;
 
 const headers = {
   Authorization: `Bearer ${token}`,
@@ -100,9 +110,9 @@ const syncHarness = () => {
 const dispatch = async () => {
   await api("POST", `/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches`, {
     ref: "main",
-    inputs: { team: "alpha", turn_id: turnId, task_prompt: SPIKE_PROMPT, model: MODEL },
+    inputs: { team: "alpha", turn_id: turnId, task_prompt: SPIKE_PROMPT, model },
   });
-  console.log(`  dispatched turn_id=${turnId} model=${MODEL}`);
+  console.log(`  dispatched turn_id=${turnId} model=${model}`);
   console.log(`  prompt: "${SPIKE_PROMPT}"`);
 
   const deadline = Date.now() + 3 * 60_000;
@@ -145,16 +155,38 @@ const poll = async (run) => {
   process.exit(2);
 };
 
-const downloadLogs = (runId) => {
+const downloadLogs = async (runId) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `arena-spike-${turnId}-`));
-  const r = spawnSync(
-    "gh",
-    ["run", "download", String(runId), "-R", REPO, "-n", `build-turn-${turnId}`, "-D", dir],
-    { stdio: "inherit", env: { ...process.env, GH_TOKEN: token } },
-  );
-  if (r.status !== 0) {
-    console.error(`  artifact download failed - fetch it manually: gh run download ${runId} -R ${REPO} -n build-turn-${turnId}`);
+  let artifact;
+  try {
+    // REST, not `gh run download`: gh keeps its own OAuth token, which expired
+    // here on 2026-10-22 (401) and then hit a TLS handshake timeout mid-spike.
+    // The .env token is the one that dispatched the run, so it can read it.
+    const arts = await api("GET", `/repos/${REPO}/actions/runs/${runId}/artifacts`);
+    artifact = (arts.artifacts || []).find((a) => a.name === `build-turn-${turnId}`);
+  } catch (err) {
+    console.error(`  artifact list failed: ${err.message}`);
     return null;
+  }
+  if (!artifact) {
+    console.error(`  no artifact named build-turn-${turnId} - the upload step may have failed`);
+    return null;
+  }
+  const res = await fetch(
+    `https://api.github.com/repos/${REPO}/actions/artifacts/${artifact.id}/zip`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    console.error(`  artifact download failed: HTTP ${res.status}`);
+    return null;
+  }
+  const zip = path.join(dir, "artifact.zip");
+  fs.writeFileSync(zip, Buffer.from(await res.arrayBuffer()));
+  const rx = spawnSync("tar", ["-xf", zip, "-C", dir], { stdio: "inherit" });
+  if (rx.status !== 0) {
+    // bsdtar extracts zip everywhere we run this; PowerShell is the fallback
+    // for a Windows box without tar.exe.
+    spawnSync("powershell", ["-NoProfile", "-Command", `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${dir}' -Force`], { stdio: "inherit" });
   }
   return dir;
 };
@@ -192,7 +224,7 @@ const main = async () => {
   } else if (dryRun) {
     console.log(`  dry run - would sync ${REPO}, then dispatch:`);
     console.log(`    turn_id: ${turnId}`);
-    console.log(`    model:   ${MODEL}`);
+    console.log(`    model:   ${model}`);
     console.log(`    prompt:  "${SPIKE_PROMPT}"`);
     return;
   } else {
@@ -206,7 +238,7 @@ const main = async () => {
     process.exit(2);
   }
 
-  const dir = downloadLogs(run.id);
+  const dir = await downloadLogs(run.id);
   if (!dir) process.exit(3);
 
   const evidence = analyse(dir);

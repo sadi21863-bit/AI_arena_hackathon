@@ -173,10 +173,11 @@
     },
     "agent_power": {
       "status": "in_progress",
-      "checked_at": "2026-10-22T13:45:00.000000+00:00",
+      "checked_at": "2026-10-27T05:21:56.000000+00:00",
       "details": {
         "definition": "docs/SPEC_AGENT_EMPOWERMENT_2026-08-11.md \u2014 P1 (Playwright MCP + ui-verify/skill-creator skills) and P2 (prompt browser self-verify + .arena/skills discovery) landed 2026-08-11; P3 (team turn with subagents) is config-only prep, deferred.",
-        "pending": ["live spike verification: image build + a browser turn that logs browser_navigate/browser_snapshot and a real screenshot (runbook + dispatch script ready: docs/SPIKE_BROWSER_TURN_2026-10-22.md, scripts/spike_browser_turn.mjs - run in an ideathon window, no build turns)", "team-vs-single comparison from P3/P4 before deciding the default", "P4 measure/decide + any tier-2 allowlist proposal"],
+        "pending": ["team-vs-single comparison from P3/P4 before deciding the default", "P4 measure/decide + any tier-2 allowlist proposal"],
+        "resolved": ["live spike verification: PASSED 2026-10-25 (run 40205698968, alpha repo arena-team-alpha-d28b420c, model openrouter/recursive/flint-v1.0:free) - browser_navigate x6, browser_snapshot x11, browser_take_screenshot x5, crash signatures 0; 7 files committed (5c0746b) then a by-design quota kill. The same spike found the 2026-10-18 pin (nemotron-3-super-120b-a12b) dead upstream (provider 404 on both pools); the production pin is now recursive/flint-v1.0:free with nemotron-3-ultra-550b-a55b as the attempt-3 fallback."],
         "context": "The daily-quota hackathon model is verified end-to-end: event_693bc79b completed 2026-10-22 under it (16 quota-bounded turns, 0 build successes, winner still declared) and the next ideathon auto-started 20 minutes later. See docs/REHEARSAL_2026-10-18_BETA_T1.md."
       },
       "threshold": "The empowerment spec is verified against a live turn (browser tool-call evidence in opencode-turn.log), and the team-vs-single comparison is reported before any default changes."

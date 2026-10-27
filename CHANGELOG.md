@@ -3,6 +3,31 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-27
+
+- **Live browser-turn spike PASSED — `agent_power` pending item resolved.**
+  Run 40205698968 in alpha's terminal repo (`arena-team-alpha-d28b420c`, model
+  `openrouter/recursive/flint-v1.0:free`) logged `browser_navigate` ×6,
+  `browser_snapshot` ×11, `browser_take_screenshot` ×5 and zero P0-0a crash
+  signatures. The turn built a tap-counter page, tested it, committed 7 files
+  (`5c0746b`), and was then killed by the free-tier daily cap — the expected
+  quota-bounded shape. This is the live proof of the Alpine chromium image
+  build and Playwright MCP path that the empowerment spec could not verify
+  without real infra. Runbook/evidence table:
+  `docs/SPIKE_BROWSER_TURN_2026-10-22.md`.
+- **Production build-model pin replaced: super-120b died upstream.** The
+  2026-10-18 pin `nvidia/nemotron-3-super-120b-a12b:free` returned provider
+  404 ("Function ... Not found for account") on both pools before any tool
+  call, while still appearing in the OpenRouter catalog. The pin is now
+  `recursive/flint-v1.0:free` (verified by direct tool-call probe and the
+  passing spike), with `nemotron-3-ultra-550b-a55b:free` as the attempt-3
+  fallback; the old dots-3 fallback is retired from that slot because it is
+  known to fail closed on hidden reasoning
+  (`docs/INCIDENT_2026-10-17_DEAD_PIN.md` §11). `provider_error()` now treats
+  the generic `Provider returned error` / `"statusCode":404` signatures as
+  failover triggers, and `scripts/spike_browser_turn.mjs` gained `--model`
+  plus REST artifact download.
+
 ## 2026-10-22
 
 - **Event `event_693bc79b` completed autonomously — winner: alpha,
