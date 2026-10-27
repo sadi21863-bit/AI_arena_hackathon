@@ -3,7 +3,7 @@
  * arena_longitudinal_sim.js — ADAPTIVE AGENTS ACROSS ARENAS (long-run dynamics).
  *
  * Covers the gaps the single-arena sims assumed away:
- *  - agents persist across arenas (12 agents, 20 arenas/monthly cycles)
+ *  - agents persist across arenas (12 agents, 20 consecutive arena cycles)
  *  - agents LEARN: violators calibrate their violation rate against being
  *    caught (reinforcement), straddlers aim just inside the evolution band,
  *    cyclers alternate, the suspended wait out the privilege penalty

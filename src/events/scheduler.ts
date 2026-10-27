@@ -1399,7 +1399,7 @@ export function computeNextArenaStart(latestIdeathonStartDate: string): Date {
 }
 
 /**
- * Spec Â§1: "The Arena is a monthly autonomous AI competition." Everything
+ * Spec Â§1: "The Arena is a continuous autonomous AI competition." Everything
  * above this point drives an event that already exists -- nothing actually
  * created the NEXT one automatically. Found live (2026-07-29) checking
  * production: both real judged ideathons only got a hackathon because one

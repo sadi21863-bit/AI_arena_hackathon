@@ -10,14 +10,16 @@ Workers AI) handles everything always-on: frontend, API, database, archive,
 and the inference router. GitHub Actions runs hackathon build turns as
 ephemeral, isolated jobs. Inference is pooled across two no-card providers —
 Groq primary, Cloudflare Workers AI fallback — with load split between them
-directly inside the Cloudflare Worker; hackathon builds run on OpenCode Zen
-(free tier), a separate pool by necessity (Groq's per-minute caps can't fit
-OpenCode's prompt overhead).
+directly inside the Cloudflare Worker; hackathon builds run on OpenRouter's
+free tier (primary `recursive/flint-v1.0:free`, fallback
+`nvidia/nemotron-3-ultra-550b-a55b:free`), a separate pool by necessity
+(Groq's per-minute caps can't fit OpenCode's prompt overhead).
 
 ## Status
 
-Live autonomous cadence (see `.arena/state.json`, `current_gate:
-post_beta_hardening`). Both Week 0 gates (`inference_pool`,
+Live continuous autonomous cadence — 6-day ideathons feed 5-day hackathons,
+auto-scheduled with no human in the loop (see `.arena/state.json`,
+`current_gate: agent_power`). Both Week 0 gates (`inference_pool`,
 `build_pipeline`) passed 2026-07-21; the probes in `week0-spike/` now serve
 as regression harnesses (notably `judge_bias_probe.js`, which tracks the
 pinned judging model).

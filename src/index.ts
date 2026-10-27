@@ -177,7 +177,7 @@ export default {
         await processQueue(env);
       }
 
-      // Spec §1 ("monthly autonomous AI competition"): the loop above only
+      // Spec §1 ("continuous autonomous AI competition"): the loop above only
       // drives events that already exist. This decides whether a new one
       // needs to be created -- see its own header comment in scheduler.ts.
       await ensureArenaCadence(env);
@@ -1215,7 +1215,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     // Manual trigger for ensureArenaCadence (scheduler.ts) -- lets the
     // auto-create-next-hackathon / auto-create-next-ideathon logic be
-    // verified without waiting for the real monthly calendar gate or the
+    // verified without waiting for the real 10-day calendar gate or the
     // 5-minute cron. Same auth class as /admin/events/:id/tick above.
     if (url.pathname === "/admin/cadence/tick" && request.method === "POST") {
       if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });

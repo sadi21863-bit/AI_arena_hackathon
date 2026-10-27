@@ -94,24 +94,24 @@ async function main() {
       created.push(autoHackathon.id);
     }
 
-    console.log("\n=== Test 2: next ideathon only auto-starts once cycle is done AND >=1 month has passed ===");
+    console.log("\n=== Test 2: next ideathon only auto-starts once cycle is done AND the next 10-day slot has arrived ===");
     if (autoHackathon) {
       console.log("Sub-test 2a: cycle done but calendar gate NOT yet reached -- should NOT create a new ideathon.");
       d1(`UPDATE archive_events SET status='complete' WHERE id='${autoHackathon.id}'`);
-      // ideathonA's start_date is "now" (just created) -- next slot is ~1 month away, so this should be a no-op.
+      // ideathonA's start_date is "now" (just created) -- next slot is ~10 days away, so this should be a no-op.
       const beforeCount = (await getEvents("ideathon")).length;
       tick = await authed("/admin/cadence/tick", { method: "POST" });
       console.log("  ->", tick.status, await tick.text());
       const afterCount = (await getEvents("ideathon")).length;
       if (afterCount === beforeCount) {
-        console.log(`PASS: ideathon count unchanged (${beforeCount}) -- correctly waited for the monthly gate.`);
+        console.log(`PASS: ideathon count unchanged (${beforeCount}) -- correctly waited for the 10-day calendar gate.`);
       } else {
         console.log(`FAIL: ideathon count changed ${beforeCount} -> ${afterCount} -- should not have fired yet.`);
       }
 
-      console.log("\nSub-test 2b: backdate ideathonA's start_date >1 month back -- should NOW auto-create the next ideathon.");
-      const overAMonthAgo = new Date(Date.now() - 32 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 19);
-      const dateResp = await authed(`/admin/events/${ideathonA}/start-date`, { method: "PATCH", body: JSON.stringify({ startDate: overAMonthAgo }) });
+      console.log("\nSub-test 2b: backdate ideathonA's start_date past the next 10-day slot -- should NOW auto-create the next ideathon.");
+      const pastNextSlot = new Date(Date.now() - 32 * 24 * 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 19);
+      const dateResp = await authed(`/admin/events/${ideathonA}/start-date`, { method: "PATCH", body: JSON.stringify({ startDate: pastNextSlot }) });
       console.log("  start-date PATCH ->", dateResp.status);
 
       const before2 = new Set((await getEvents("ideathon")).map((e) => e.id));
@@ -120,7 +120,7 @@ async function main() {
       const after2 = await getEvents("ideathon");
       const newOnes = after2.filter((e) => !before2.has(e.id));
       if (newOnes.length === 1) {
-        console.log(`PASS: next ideathon auto-created (${newOnes[0].id}) once the monthly gate + completed cycle both held.`);
+        console.log(`PASS: next ideathon auto-created (${newOnes[0].id}) once the 10-day gate + completed cycle both held.`);
         created.push(newOnes[0].id);
       } else {
         console.log(`FAIL: expected exactly 1 new ideathon, got ${newOnes.length}.`);
