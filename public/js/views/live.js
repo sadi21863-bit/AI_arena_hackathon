@@ -273,8 +273,12 @@ export async function mount(el, params) {
 
     const calFailed = i.calibration && i.calibration.passed === false;
     const activeSummary = (summary || []).find((s) => s.id === cycle.activeEvent.id);
-    const quality = activeSummary?.quality;
-    const lowConfidence = quality && quality.level === "low";
+    // Prefer the active phase's label, but a past cycle often has a completed
+    // hackathon with zero scored teams while its ideathon is low-confidence.
+    // Falling back to the ideathon's label keeps the caveat visible instead of
+    // letting an unrated child hide it.
+    const quality = [activeSummary?.quality, i.quality, h?.quality].find((q) => q?.level === "low");
+    const lowConfidence = !!quality;
 
     render(el, html`
       <header class="v-live__masthead">
