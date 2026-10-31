@@ -58,7 +58,8 @@ the-arena/
 
 ## Docs map
 
-- `INCIDENT_2026-09-23_HARNESS.md` — latest: prompt-injection kills, Zen key pinning/failover, harness bugs caught by test turns.
+- `INCIDENT_2026-10-31_SUBREQUEST_STALL.md` — latest: 53/50 subrequest cap wedged a hackathon, then an abandoned `building` event wedged cadence; both fixed. `RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` — forward-looking triage for dead models, quota walls, subrequest caps and abandoned events.
+- `INCIDENT_2026-09-23_HARNESS.md` — prompt-injection kills, Zen key pinning/failover, harness bugs caught by test turns.
 - `ARENA_BACKLOG.md` — the 2026-07-27 external review (Part 1 landed, Part 2 decided in `PART2_DECISIONS_2026-07-31.md`); history + open proposals.
 - `INVESTIGATION_2026-07-28.md` / `INVESTIGATION_2026-08-15.md` / `CODE_REVIEW_2026-07-22.md` / `BUILD_TURN_CORRECTION_2026-08-01.md` — dated build logs; read as history.
 - `ARENA_CONDUCT_V3.md` — conduct-layer design spec (§10 folds in the old `ARCHITECTURE_COMPARISON.md`).

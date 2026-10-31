@@ -555,3 +555,52 @@ polling, a per-phase narrative summary ("Day 3: Casey and Iris both landed on
 elder-care logistics from opposite directions") would make the public view
 readable to someone who isn't already tracking the data. Routes to the cheap
 tier, non-time-critical, same pattern as tribunal reflection.
+
+---
+
+## 2026-10-31 — follow-ups from the current-state review
+
+The 2026-10-31 incident (`docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`) fixed
+the immediate outage. These are the remaining hardening items, scoped so they
+are not mistaken for done.
+
+### R-1 — Alert on quota/subrequest failures (P1, not implemented)
+
+`docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` lists the thresholds; none has a
+push destination. Add an optional `ALERT_WEBHOOK_URL` secret and emit on: 3
+consecutive `team_formation` failures, subrequest total ≥45/50, a dispatch with
+no `run_id`, cron heartbeat older than 15 minutes, and OpenRouter remaining ≤5.
+Acceptance: a test failure produces one alert and a healthy tick produces none.
+Until then the checks are manual (`/headroom` + runbook §0).
+
+### R-2 — Post-event calibration over the judged population (P1, not implemented)
+
+The pre-event gate is Pearson on 3 anchors — a sanity check, not a stable
+estimate. After judging, re-score the actual 15-20 judged ideas with the same
+panel (or derive the retrospective from the existing `judge_scores`) and
+measure correlation/drift against the event's ranks. Store it per event and
+surface it in `/headroom`. Acceptance: n ≥15 per event, a documented drift
+threshold, and one retrospective that either passes or explains a drift. Keep
+the 3-anchor gate for speed; this is the statistical check, not a replacement.
+
+### R-3 — Sampled artifact audit against output contracts (P1, not implemented)
+
+Row existence is not output. After each hackathon, sample ≥10 ideas, critiques
+and build repos and check the contract: idea has a specific
+problem/solution/build_scope; critique has strength/weakness/suggestion; build
+repo has a real commit, a test or `VERIFICATION_REPORT`, and a non-empty diff.
+Record pass/fail per sample. Acceptance: a report per event and a failure that
+names the missing contract, not just "queue completed".
+
+### R-4 — Provider death runbook (done 2026-10-31)
+
+`docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` covers dead models, 429s,
+subrequest caps and abandoned events. Keep it current when the model or harness
+changes.
+
+### R-5 — Second independent build account (deferred, owner decision)
+
+Two keys on one OpenRouter account do not double the 50/day cap; a second
+account does, but doubles the credential surface and the pin/failover matrix.
+Not taken without an explicit owner decision. The fallback model is the cheaper
+mitigation.

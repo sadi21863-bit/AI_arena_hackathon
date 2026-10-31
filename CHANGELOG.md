@@ -3,6 +3,32 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-10-31
+
+- **Hackathon `event_382ab43e` failed before any build turn — 53 subrequests
+  against a cap of 50, then a cadence wedge.** `team_formation` failed 288
+  times from Oct 28 09:41Z to Oct 29 09:36Z; both team rows stayed `forming`
+  with `repo_url = NULL`, and 12 dispatch attempts (turns 2-7 per team) died on
+  `Cannot read properties of null (reading 'split')`. The measured cost was 30
+  GitHub calls + 19 template fetches + 4 DB statements; the 20 per-file
+  Contents PUTs were the bulk. The watchdog abandoned the event on Oct 30
+  10:45Z, and the cadence guard then treated the abandoned `building` event as
+  still-running even though revival only handles day-gated statuses — so no
+  future ideathon could start. Fixed: the scaffold seeds the empty repo with
+  one Contents PUT and writes the other 19 files in one Git tree commit (~38
+  fresh, ~10 retry), secret provisioning lists and sets only missing names,
+  dispatch throws a named error on a null repo, and the cadence guard only
+  blocks for statuses revival can restore. The event is closed `complete`
+  with no winner; the next ideathon is due 2026-11-01 08:46Z. Evidence:
+  `worker_subrequest_log` 53/50 and
+  `docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`.
+- **Provider/quota failure runbook and review follow-ups recorded.** Added
+  `docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` (triage queries, dead-model
+  playbook, abandoned-event recovery, alert thresholds) and scoped the
+  post-event calibration and sampled artifact-audit work in
+  `docs/ARENA_BACKLOG.md`. The public repo description was corrected from
+  "monthly" to the continuous ideathon/hackathon cadence.
+
 ## 2026-10-27
 
 - **Live browser-turn spike PASSED — `agent_power` pending item resolved.**
