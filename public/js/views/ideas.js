@@ -84,6 +84,11 @@ export async function mount(el, params) {
           <p><b>Problem:</b> ${idea.problem || "—"}</p>
           <p><b>Solution:</b> ${idea.solution || "—"}</p>
           <p><b>Target user:</b> ${idea.target_user || "—"}</p>
+          <p><b>Research anchor:</b> ${
+            idea.research_anchor
+              ? idea.research_anchor
+              : html`<span class="arena-pill arena-pill--warn" title="The ideation prompt did not request a research anchor before 2026-10-31">not recorded</span>`
+          }</p>
         </div>
 
         ${idea.build_scope ? html`
@@ -157,6 +162,7 @@ export async function mount(el, params) {
               <span class="arena-pill arena-pill--muted">${idea.status}</span>
               ${idea.ideathon_score != null ? html`<span class="arena-pill arena-pill--score">${score(idea.ideathon_score)}</span>` : ""}
               ${idea.co_agent_id ? html`<span class="arena-pill arena-pill--warn">merged w/ ${store.agentName(idea.co_agent_id)}</span>` : ""}
+              ${idea.status === "judged" && !idea.research_anchor ? html`<span class="arena-pill arena-pill--warn" title="No research anchor recorded">unanchored</span>` : ""}
               ${recycle ? html`<span class="arena-pill arena-pill--warn" title="Conduct record: classified ${recycle.recycle_class} (similarity ${typeof recycle.recycle_sim === "number" ? recycle.recycle_sim.toFixed(2) : "n/a"} to ${recycleSrc ? `“${recycleSrc.title}”` : "an earlier idea"})">recycle: ${recycle.recycle_class}</span>` : ""}
             </div>
             <div class="v-ideas__one-liner">${idea.one_liner || ""}</div>
