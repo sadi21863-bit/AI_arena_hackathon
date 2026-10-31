@@ -418,9 +418,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         ).first();
         rankingQuality = (
           await env.DB.prepare(
-            `SELECT event_id, confidence_level, judged_population, retrospective_correlation,
-                    retrospective_band, computed_at
-             FROM event_quality_snapshots ORDER BY computed_at DESC LIMIT 8`,
+            `SELECT q.event_id, q.confidence_level, q.judged_population,
+                    q.retrospective_correlation, q.retrospective_band, q.computed_at,
+                    e.type AS event_type, e.start_date
+             FROM event_quality_snapshots q
+             LEFT JOIN archive_events e ON e.id = q.event_id
+             WHERE q.confidence_level != 'unrated'
+             ORDER BY e.start_date DESC, q.computed_at DESC LIMIT 8`,
           ).all()
         ).results;
       } catch (err) {

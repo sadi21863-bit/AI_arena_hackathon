@@ -112,7 +112,7 @@ function qualityPanel(rows) {
       ${list.map((row) => html`
         <div class="arena-note ${row.confidence_level === "low" ? "arena-note--warn" : ""}">
           <span>${row.confidence_level === "low" ? "⚠" : row.confidence_level === "high" ? "✓" : "◆"}</span><span>
-            <b>${row.confidence_level.toUpperCase()}</b> · ${shortId(row.event_id, 18)} ·
+            <b>${row.confidence_level.toUpperCase()}</b> · ${row.event_type ?? "event"} ${shortId(row.event_id, 18)} ·
             n=${row.judged_population} ·
             r=${row.retrospective_correlation ?? "n/a"} (${row.retrospective_band}) ·
             ${row.computed_at} UTC
