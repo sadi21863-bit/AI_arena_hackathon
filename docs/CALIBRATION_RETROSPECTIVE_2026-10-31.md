@@ -89,8 +89,11 @@ change scores, or change weights — it makes the limit visible in the product.
   `recordEventQuality`/`snapshot_event_quality.mjs` store a durable snapshot in
   `event_quality_snapshots`, surfaced at `/headroom.ranking_quality`. The live
   API remains the source of truth.
-- For small events, consider expanding the judged set or a sampled re-score.
-  For all events, track per-judge correlation across several events before
-  changing weights or removing a judge.
+- For small events, do **not** automatically expand the judged set. The
+  evidence and the decision (no population threshold guarantees agreement; a
+  full Workers AI pass cannot fit the cap) are in
+  `docs/JUDGED_POPULATION_DECISION_2026-10-31.md`. For all events, track
+  per-judge correlation across several events before changing weights or
+  removing a judge.
 - Do not change the gate thresholds or judge weights from this single pass.
   This is a diagnostic baseline, not a verdict.

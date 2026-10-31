@@ -5,6 +5,12 @@ notes what changed behavior in production and why.
 
 ## 2026-10-31
 
+- **Judged-population decision recorded.** The Arena will not automatically
+  expand small-event judging populations. The retrospective shows population
+  size alone does not predict agreement (31 targets → 0.554, 12 → 0.717), and a
+  full Workers AI pass cannot fit the 9.5k/day neuron cap. Small populations
+  stay labelled low-confidence; a manual re-score needs a recorded reason.
+  Decision and triggers: `docs/JUDGED_POPULATION_DECISION_2026-10-31.md`.
 - **Quality snapshots and a semantic-lite audit layer.** `recordEventQuality`
   writes `event_quality_snapshots` when an event reaches terminal judging, and
   `scripts/snapshot_event_quality.mjs` backfills/refreshes every terminal event

@@ -39,6 +39,32 @@ only if they will operate the system, the Cloudflare/provider credentials),
 then updates this file and `.github/CODEOWNERS` in the same change. Until that
 happens, the bus factor is one and a single absence can stop the cadence.
 
+## If the owner is unavailable
+
+This is the minimum a second operator needs to keep the cadence alive. It does
+not grant decision rights over providers, spend or judge weights.
+
+1. `GET /health`, `GET /headroom`, `GET /alerts`, `GET /events/summary`.
+   Check `cron.stale`, not just `cron.last_error`.
+2. Identify the active event and phase. If `queueFailed` is rising, use
+   `docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` before retrying anything.
+3. If the Worker needs a code fix: apply pending migrations first
+   (`node scripts/apply_schema.js --remote`), then push to `master`; the
+   `deploy-worker.yml` / `deploy-pages.yml` workflows deploy on path-scoped
+   pushes. Do not deploy a Worker that reads a column before the migration.
+4. If the build provider is holding dispatches, read
+   `docs/QUOTA_POSTURE_2026-10-31.md`. Do not add a provider, a second account,
+   paid credit, or rotate keys on your own. A hold is a valid state.
+5. If an event needs to be closed, follow runbook §D and record the reason.
+   Do not hand-write a `repo_url` for a repo that was never scaffolded.
+6. Escalate provider/spend/cadence/judge-weight decisions to the owner.
+   Operational fixes, migrations and documentation are fair game.
+
+Access needed for that handoff: repository write (or at least Actions +
+issues), Cloudflare account access for D1/Workers/Pages, and read access to the
+GitHub org that owns the team repos. Provider keys are only needed for
+rotation, which is an owner decision.
+
 ## Review cadence
 
 - **Every scheduled tick (5 min):** the Worker drives events; `/alerts` records

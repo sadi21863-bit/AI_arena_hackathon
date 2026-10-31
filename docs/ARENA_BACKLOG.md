@@ -582,7 +582,7 @@ holds dispatches and a long hold becomes a `capacity_pause`. Acceptance: a
 test failure produces one alert and a healthy tick produces none; external
 delivery needs an `ALERT_WEBHOOK_URL` value and a one-time delivery test.
 
-### R-2 — Post-event calibration over the judged population (P1, partial — public confidence label landed 2026-10-31)
+### R-2 — Post-event calibration over the judged population (P1, done 2026-10-31)
 
 `scripts/calibration_retrospective.mjs` applies the gate's Pearson metric to
 the existing `judge_scores` (leave-one-out panel means) and prints the
@@ -608,9 +608,13 @@ from the live API. `/headroom.ranking_quality` shows the recent snapshots
 refresh. The live API remains the source of truth; the snapshot is history, not
 a second gate.
 
-Still open: decide whether to expand the judged population for small events
-(the review's 15–20 suggestion; the 36-target event measured 0.918). Do not
-change gate thresholds or judge weights from one event.
+Decision recorded 2026-10-31: do **not** automatically expand the judged
+population. Population size alone does not predict agreement (a 31-target
+event measured 0.554; a 12-target event measured 0.717), and a full Workers AI
+pass cannot fit the 9.5k/day neuron cap. Small populations stay labelled
+low-confidence; a manual re-score requires a recorded reason. Full evidence:
+`docs/JUDGED_POPULATION_DECISION_2026-10-31.md`. Do not change gate thresholds
+or judge weights from one event. Revisit on the triggers in that decision.
 
 ### R-3 — Artifact audit against output contracts (P1, structural + semantic-lite landed 2026-10-31; true semantic sample open)
 
