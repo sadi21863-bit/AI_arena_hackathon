@@ -579,7 +579,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // joins. Registered before the /events/:id match below on purpose:
     // "/events/summary" would otherwise parse as eventId="summary".
     if (url.pathname === "/events/summary" && request.method === "GET") {
-      const [events, calibrations, judgeScores, qualityRows, ideas, judgedIdeas, interactions, critiques, scoreCounts, teams, turns, turnConclusions, chronicle, queue, tribunal, teamNames, ideaTitles] = await env.DB.batch([
+      const [events, calibrations, judgeScores, qualityRows, ideas, judgedIdeas, anchoredIdeas, interactions, critiques, scoreCounts, teams, turns, turnConclusions, chronicle, queue, tribunal, teamNames, ideaTitles] = await env.DB.batch([
         env.DB.prepare(
           `SELECT * FROM archive_events ORDER BY created_at DESC LIMIT 40`
         ),
@@ -588,6 +588,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         env.DB.prepare(`SELECT event_id, audit_failures, audit_warnings, audited_at FROM event_quality`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas GROUP BY event_id`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas WHERE status = 'judged' GROUP BY event_id`),
+        env.DB.prepare(
+          `SELECT event_id, COUNT(*) n FROM archive_ideas
+           WHERE research_anchor IS NOT NULL AND trim(research_anchor) != '' GROUP BY event_id`
+        ),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_interactions GROUP BY event_id`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_interactions WHERE type = 'critique' GROUP BY event_id`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM judge_scores GROUP BY event_id`),
@@ -648,6 +652,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
           counts: {
             ideas: sum(ideas.results, event.id),
             judgedIdeas: sum(judgedIdeas.results, event.id),
+            ideasAnchored: sum(anchoredIdeas.results, event.id),
             interactions: sum(interactions.results, event.id),
             critiques: sum(critiques.results, event.id),
             judgeScores: sum(scoreCounts.results, event.id),

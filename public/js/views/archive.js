@@ -113,7 +113,7 @@ function meta(arena, extra = "") {
 
 function ideathonStats(c) {
   return html`
-    ${stat("ideas", c.ideas ?? 0)}
+    ${stat("ideas", c.ideas ?? 0, `${c.ideasAnchored ?? 0} with a research anchor`)}
     ${stat("critiques", c.critiques ?? 0)}
     ${stat("judge scores", c.judgeScores ?? 0, "Individual judge criterion scores")}
     ${stat("chronicle", c.chronicle ?? 0, "Chronicler narratives written")}
