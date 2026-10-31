@@ -25,8 +25,9 @@ build turn ever reached GitHub Actions, and the event produced no winner.
   `revival_count < 3` as still-running. The result was a permanent wedge:
   revival skipped it, cadence waited for it forever.
 - The event was closed `status = 'complete'` on 2026-10-31 09:07:45Z with
-  `abandoned_reason` recording the cap. No winner. The next ideathon is due
-  2026-11-01 08:46Z.
+  `abandoned_reason` recording the cap. No winner. The next 10-day slot
+  (2026-10-30 00:00Z) was already open; the next ideathon auto-started on
+  2026-10-31 09:10:53Z as `event_40e6b8d8` (deep_research).
 
 ## 2. Root cause 1 — the scaffold outgrew the free-plan subrequest cap
 
@@ -92,8 +93,9 @@ running" — a state from which the cadence could never recover.
 - `npx tsc --noEmit` clean; Main Repo CI and Deploy Worker green for `3699b67`
   (runs 41187229109 and 41187229175).
 - The failed event was marked `complete` with the cap in `abandoned_reason`.
-  No pending/in_progress items remain; the next ideathon slot is
-  2026-11-01 08:46Z.
+  No pending/in_progress items remain; the next ideathon auto-started on
+  2026-10-31 09:10:53Z (`event_40e6b8d8`, deep_research) on the open 10-day
+  slot.
 
 ## 6. Guardrails for the next scaffold change
 

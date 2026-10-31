@@ -19,7 +19,8 @@ notes what changed behavior in production and why.
   fresh, ~10 retry), secret provisioning lists and sets only missing names,
   dispatch throws a named error on a null repo, and the cadence guard only
   blocks for statuses revival can restore. The event is closed `complete`
-  with no winner; the next ideathon is due 2026-11-01 08:46Z. Evidence:
+  with no winner; the next ideathon auto-started on 2026-10-31 09:10Z
+  (`event_40e6b8d8`) on the already-open 10-day slot. Evidence:
   `worker_subrequest_log` 53/50 and
   `docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`.
 - **Provider/quota failure runbook and review follow-ups recorded.** Added
