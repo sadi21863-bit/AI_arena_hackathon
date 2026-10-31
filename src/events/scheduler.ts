@@ -9,11 +9,12 @@
  * Ideathon phase boundaries are day-offsets from archive_events.start_date:
  *   Day 0-1 (elapsed): Deep Research
  *   Day 2:             Ideation + Critique
- *   Day 3-4:            Architecture (top 6 ideas by interaction signal)
- *   Day 5+:             ready_for_judging -> judged (Week 5, Â§13)
+ *   Day 3:             Collaboration
+ *   Day 4-5:           Architecture (top 6 ideas by interaction signal)
+ *   Day 6+:            ready_for_judging -> judged (Week 5, Â§13)
  *
- * Hackathon phase boundaries (spec §3.2's 3-day event, extended 2026-10-15 to
- * a 5-day build window by the free-tier request budget — see
+ * Hackathon phase boundaries (spec §3.2's 5-day event; the build window moved
+ * to days 1-4 on 2026-10-15 for the free-tier request budget — see
  * hackathonPhaseForDay and MAX_BUILD_TURNS_PER_DAY):
  *   Day 0:   team_formation — create both team repos, dispatch each team's
  *            first build turn same day ("First build turns begin same day")
@@ -119,12 +120,12 @@ export type HackathonPhase = "team_formation" | "building" | "ready_for_judging"
 // every phase shared one inference pool. They are not worth moving: budget
 // pools are per-UTC-day while phases are multi-day, so serialization was
 // never the binding constraint, and the cadence is narrative pacing per
-// spec §3 (6-day ideathon + 3-day hackathon). ONE exception, 2026-10-15:
-// the hackathon's build window moved from days 1-2 to days 1-4 — not for
-// pacing, but because the build provider's free tier caps at ~50 model
-// requests per day per account, so real work now arrives in one daily
-// session per team instead of continuous turns (see
-// MAX_BUILD_TURNS_PER_DAY). If this ever changes again, phaseForDay,
+// spec §3 (6-day ideathon + 5-day hackathon). The 2026-10-15 change moved
+// the hackathon's build window from days 1-2 to days 1-4 — not for pacing,
+// but because the build provider's free tier caps at ~50 model requests per
+// day per account, so real work now arrives in one daily session per team
+// instead of continuous turns (see MAX_BUILD_TURNS_PER_DAY). If this ever
+// changes again, phaseForDay,
 // hackathonPhaseForDay, and DAY_GATED_PHASE_STARTS_AT_DAY must move
 // together — they encode the same schedule twice.
 export function phaseForDay(daysElapsed: number): Exclude<Phase, "judged"> {
@@ -1373,10 +1374,11 @@ export async function createEvent(env: Env, type: "ideathon" | "hackathon", pare
 // 21st of calendar month" labels, which drift on 28/29/31-day months. Rolling
 // fixed-interval slots from a single anchor stay exactly 10 days apart
 // forever with no month-boundary edge cases. Each cycle's own day-gated
-// phases (6-day ideathon + 3-day hackathon = 9 days) plus judging/Tribunal
-// processing time eat nearly all of that 10-day slot -- there's very little
-// real slack, so expect occasional compression toward zero break rather
-// than a guaranteed rest period, if a cycle retries or backs off.
+// phases (6-day ideathon + 5-day hackathon) plus judging/Tribunal processing
+// time can run past that 10-day slot -- the next ideathon waits for the
+// cycle to finish, then starts at the next slot, so there is very little
+// real slack and occasional compression toward zero break rather than a
+// guaranteed rest period.
 // ARENA_CADENCE_FIRST_START is deliberately in the past relative to any
 // ideathon that starts before it -- computeNextArenaStart clamps up to it,
 // it's a floor, not a delay.
