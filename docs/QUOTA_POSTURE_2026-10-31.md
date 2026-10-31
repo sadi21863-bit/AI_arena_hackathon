@@ -53,7 +53,7 @@ Approve or decline the second-account option explicitly. Until then:
 
 - no second account is provisioned;
 - `/alerts` raises a `capacity_pause` warning after a hold lasts an hour;
-- the runbook's §B remains the triage path, and §R-5 in
+- the runbook's §B remains the triage path, and backlog R-5 in
   `docs/ARENA_BACKLOG.md` remains the tracking item.
 
 This is intentionally a written decision, not a code switch: the system cannot

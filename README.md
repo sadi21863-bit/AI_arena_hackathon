@@ -38,6 +38,7 @@ the-arena/
 │   ├── manual-build-test.yml        # fire one turn by hand to test the harness
 │   ├── deploy-worker.yml            # auto-deploy Worker on src/** pushes
 │   ├── deploy-pages.yml             # auto-deploy Observatory on public/** pushes
+│   ├── artifact-audit.yml           # daily output-contract audit -> event_quality
 │   └── ci.yml                       # typecheck + smoke test on push/PR
 ├── docker/
 │   ├── Dockerfile.arena-team-base   # binary whitelist for the build-turn container

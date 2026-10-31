@@ -4,9 +4,10 @@ Purpose: check the artifacts themselves, not whether a queue row exists. This
 is the R-3 follow-up to the current-state review: the pipeline can "complete"
 while an idea, critique or team repo is empty or structurally unusable.
 
-Tool: `scripts/artifact_audit.mjs` (read-only; D1 via the Cloudflare HTTP API,
-public GitHub repos via the GitHub API). Defaults to all rows for the selected
-event — current events are small; `--n=N` samples when needed.
+Tool: `scripts/artifact_audit.mjs` (read-only by default; D1 via the Cloudflare
+HTTP API, public GitHub repos via the GitHub API; `--persist` writes the compact
+result to `event_quality`). Defaults to all rows for the selected event —
+current events are small; `--n=N` samples when needed.
 
 ## Contracts
 
