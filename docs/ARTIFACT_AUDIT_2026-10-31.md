@@ -83,8 +83,9 @@ The baseline above is recorded for `event_dc3df601` and `event_693bc79b`.
 `.github/workflows/artifact-audit.yml` runs daily (06:17 UTC) with
 `--persist --strict`, so the audit is no longer a manual point-in-time check.
 A missing contract turns the workflow red; a healthy audit leaves a green run
-and a job summary. The workflow reads the same Cloudflare and GitHub secrets as
-the deploy workflows.
+and a job summary. The first manual dispatch (run 41206759158, 2026-10-31)
+succeeded and refreshed both baseline rows. The workflow reads the same
+Cloudflare and GitHub secrets as the deploy workflows.
 
 ## Reproduce
 
