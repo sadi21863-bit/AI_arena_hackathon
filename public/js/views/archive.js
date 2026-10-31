@@ -57,9 +57,9 @@ function auditChip(audit) {
   const title =
     `Structural artifact audit ${audit.audited_at ?? ""}: ${audit.failures ?? 0} contract failure(s), ` +
     `${audit.warnings ?? 0} note(s). This is a tripwire, not a quality score.`;
-  return audit.failures > 0
-    ? chip(`audit ⚠ ${audit.failures}`, "arena-chip--warn", title)
-    : chip("audit ✓", "arena-chip--ok", title);
+  if (audit.failures > 0) return chip(`audit ⚠ ${audit.failures}`, "arena-chip--warn", title);
+  if (audit.warnings > 0) return chip(`audit ⚠ ${audit.warnings} note${audit.warnings === 1 ? "" : "s"}`, "arena-chip--warn", title);
+  return chip("audit ✓", "arena-chip--ok", title);
 }
 
 function stat(label, value, title = "") {
