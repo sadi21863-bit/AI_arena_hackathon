@@ -26,6 +26,10 @@ notes what changed behavior in production and why.
   **0/34 ideas with a `research_anchor`** and assessed 0 clear pass / 6 weak /
   4 fail, with build-scope over-reach as the recurring problem. The ideation
   prompt now requests a research anchor; the audit flags unanchored finalists.
+  The architecture prompt now requires one repo, one run command, at most one
+  mocked external integration, no Kubernetes/blockchain/custom training/
+  multi-cloud, and an explicit out-of-scope list; the revision prompt no longer
+  lets build_scope expand.
 - **Durable ops alerts and a public ranking-confidence label.** The scheduled
   tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50`, an
   event paused on capacity for over an hour, 3+ `team_formation` failures in

@@ -60,6 +60,11 @@ Totals: **0 clear pass, 6 weak, 4 fail** on the overall column.
    coherent but would need a month or a team; that is the same over-scoping
    pattern the architecture stage is supposed to catch and the build turn then
    discovers by running out of quota.
+4. **The architecture prompt now constrains the plan**, not just the word count:
+   one repository, one run command, at most one external integration mocked
+   with local fixtures, no Kubernetes/blockchain/custom training/multi-cloud in
+   the MVP, and an explicit out-of-scope list. The revision prompt also tells
+   the author not to expand build_scope. The next ideathon is the test.
 
 ## Reproduce
 

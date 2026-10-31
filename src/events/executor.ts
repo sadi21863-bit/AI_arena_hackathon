@@ -335,7 +335,7 @@ async function handleReviseIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
     `Current idea:\nTitle: ${idea.title}\nOne-liner: ${idea.one_liner}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\nTarget user: ${idea.target_user}\n\n` +
     `Critiques received:\n${critiqueLines || "(none)"}\n\n` +
     `Respond with ONLY a JSON object: {"one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
-    `Keep the same core idea — this is a revision, not a new submission.`
+    `Keep the same core idea — this is a revision, not a new submission. Keep build_scope to a 4-5 day MVP in one repository; do not expand the platform scope.`
   );
 
   const revised = extractJson<RevisedIdeaJson>(text);
@@ -433,7 +433,13 @@ async function handleArchitecture(env: Env, item: QueueItem, agent: AgentRow): P
 
   const text = await callAgent(env, agent, "architecture",
     `${groundingText}` +
-    `Produce a build plan for this idea (spec §3.1 — Day 4-5 Architecture: tech stack, 3 components, top 2 risks, fallback scope), under 200 words:\n` +
+    `Produce a build plan for this idea (spec §3.1 — Day 4-5 Architecture: tech stack, 3 components, top 2 risks, fallback scope), under 200 words.\n` +
+    `Constraints — the plan must be honest about the event, not a production platform:\n` +
+    `- Buildable by a 2-agent team in the 5-day hackathon, at most 2 build turns per day. Design the smallest vertical slice that demonstrates the core problem.\n` +
+    `- One repository, one command to run. Prefer a static frontend plus a small Node or Python service with SQLite/JSON storage.\n` +
+    `- At most ONE external API or integration, and assume the build sandbox has no arbitrary network access — mock it with local fixtures and say so.\n` +
+    `- No Kubernetes, blockchain/ledger, custom model training, multi-cloud, or multi-region compliance in the MVP. Put those under "out of scope".\n` +
+    `- Name what is explicitly out of scope.\n` +
     `Title: ${idea.title}\nProblem: ${idea.problem}\nSolution: ${idea.solution}\nBuild scope so far: ${idea.build_scope}`
   );
 
