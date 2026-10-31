@@ -12,6 +12,7 @@
     "dev:pages": "wrangler pages dev",
     "dev:worker": "wrangler dev",
     "typecheck": "tsc --noEmit",
+    "test:confidence": "node --experimental-strip-types --no-warnings scripts/test_confidence.mjs",
     "audit:artifacts": "node scripts/artifact_audit.mjs",
     "audit:artifacts:persist": "node scripts/artifact_audit.mjs --persist",
     "audit:calibration": "node scripts/calibration_retrospective.mjs --all",

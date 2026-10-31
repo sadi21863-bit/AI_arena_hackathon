@@ -18,13 +18,14 @@
  * without a row every 5 minutes.
  */
 import type { Env } from "../env";
+import { QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
 
 export const SUBREQUEST_WARN_THRESHOLD = 45;
 
 export interface OpsAlert {
   id: string;
   created_at: string;
-  kind: "subrequest_headroom" | "capacity_pause" | "formation_failures" | "dispatch_no_run";
+  kind: "subrequest_headroom" | "capacity_pause" | "formation_failures" | "dispatch_no_run" | "quota_hold";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -240,6 +241,27 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
   }
 
   return { raised, pushed };
+}
+
+/**
+ * Called by the scheduler when the OpenRouter probe refuses a dispatch. This is
+ * the "remaining <= floor" signal in the runbook, made durable: without it a
+ * held dispatch is only visible as an unchanged event. Deduped per event/24h.
+ */
+export async function recordQuotaHold(env: Env, eventId: string, teamName: string): Promise<boolean> {
+  if (await recentAlertExists(env, "quota_hold", eventId, null)) return false;
+  const result = await raiseAlert(env, {
+    kind: "quota_hold",
+    severity: "warning",
+    event_id: eventId,
+    task_type: null,
+    message:
+      `build dispatch held for ${eventId} (${teamName}): the OpenRouter free-tier probe reports ` +
+      `fewer than ${QUOTA_DISPATCH_FLOOR} requests remaining. This is a budget wait until the UTC reset — ` +
+      "do not rotate keys or add a provider.",
+    details: JSON.stringify({ team_name: teamName, remaining_floor: QUOTA_DISPATCH_FLOOR }),
+  });
+  return result.pushed;
 }
 
 export async function recentAlerts(env: Env, limit = 10): Promise<OpsAlert[]> {

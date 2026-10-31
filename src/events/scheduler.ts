@@ -41,6 +41,7 @@ import { pairwiseSimilarities } from "../agents/memory";
 import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
 import { buildDispatchBudgetAllows, openRouterKeyForTeam } from "./build-quota";
+import { recordQuotaHold } from "../observability/alerts";
 import { finalizeWithPartialScores } from "../judges/scoring";
 import { recordEventQuality } from "../judges/quality-snapshot";
 import { DAILY_CAPS, TASK_MODELS, unitsUsedToday } from "../router";
@@ -738,9 +739,15 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       // probe is only ever spent on a candidate that would otherwise
       // dispatch right now. This is what keeps a spent free-tier pool from
       // re-dispatching into a guaranteed 429 wall all day.
-      if (!(await buildDispatchBudgetAllows(
-        openRouterKeyForTeam(team.team_name, env.OPEN_ROUTER_API_KEY, env.OPEN_ROUTER_API_KEY_2)
-      ))) {
+      const dispatchKey = openRouterKeyForTeam(team.team_name, env.OPEN_ROUTER_API_KEY, env.OPEN_ROUTER_API_KEY_2);
+      if (!(await buildDispatchBudgetAllows(dispatchKey))) {
+        // Probe refused: make the hold durable instead of leaving the event
+        // looking merely quiet. Deduped per event/24h inside the helper.
+        try {
+          await recordQuotaHold(env, event.id, team.team_name);
+        } catch (err) {
+          console.log(`quota-hold alert failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
         continue;
       }
 

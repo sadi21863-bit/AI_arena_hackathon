@@ -25,9 +25,10 @@ notes what changed behavior in production and why.
 - **Durable ops alerts and a public ranking-confidence label.** The scheduled
   tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50`, an
   event paused on capacity for over an hour, 3+ `team_formation` failures in
-  the current incarnation, and a build turn with no `run_id` 30 minutes after
-  dispatch; `GET /headroom` and `GET /alerts` surface them, and
-  `ALERT_WEBHOOK_URL` optionally pushes (`text`/`content` + counts only).
+  the current incarnation, a build turn with no `run_id` 30 minutes after
+  dispatch, and an OpenRouter probe hold (`quota_hold`). `GET /headroom` and
+  `GET /alerts` surface them, and `ALERT_WEBHOOK_URL` optionally pushes
+  (`text`/`content` + counts only).
   `/headroom.cron.stale` computes the 15-minute heartbeat check. Without the
   secret, alerts are still durable and visible rather than silent. `GET
   /events`, `/events/summary` and `/events/:id` now carry a `quality` object

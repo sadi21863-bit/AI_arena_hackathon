@@ -37,6 +37,10 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Typecheck
         run: npx tsc --noEmit -p .
+      - name: Confidence rule tests
+        # The public `quality` label is a product surface; pin its bands.
+        # Node 22+ strips the TypeScript module directly, no build step.
+        run: npm run test:confidence
       - name: Install Chromium for smoke test
         # tiny_test.js drives a real headless browser via Playwright;
         # the npm package alone is not enough without the browser binary.

@@ -577,10 +577,11 @@ even without a push destination; `GET /alerts` is pollable by an external
 monitor.
 
 Still open: no webhook destination is configured, so delivery to a human is
-still pull-based. OpenRouter remaining ≤5 is not separately alerted; the probe
-holds dispatches and a long hold becomes a `capacity_pause`. Acceptance: a
-test failure produces one alert and a healthy tick produces none; external
-delivery needs an `ALERT_WEBHOOK_URL` value and a one-time delivery test.
+still pull-based. OpenRouter remaining is alerted when the probe refuses a
+dispatch (`quota_hold`), which fires at the dispatch floor rather than at the
+literal ≤5 threshold. Acceptance: a test failure produces one alert and a
+healthy tick produces none; external delivery needs an `ALERT_WEBHOOK_URL`
+value and a one-time delivery test.
 
 ### R-2 — Post-event calibration over the judged population (P1, done 2026-10-31)
 

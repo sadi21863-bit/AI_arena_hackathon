@@ -117,7 +117,9 @@ written to `ops_alerts`:
 - an event in `paused_capacity` for more than an hour (`capacity_pause`);
 - 3+ `team_formation` failures in the current incarnation (`formation_failures`);
 - a build turn still without a `run_id` 30 minutes after dispatch
-  (`dispatch_no_run`).
+  (`dispatch_no_run`);
+- the OpenRouter probe refusing a dispatch because the free-tier floor is
+  reached (`quota_hold`).
 
 Read them at `GET /alerts` or in the `/headroom` panel. Dedupe is one alert per
 `(kind, event, task)` per 24h, not per tick. If `ALERT_WEBHOOK_URL` is set, the
@@ -142,7 +144,7 @@ The remaining thresholds are still manual:
 | `worker_subrequest_log.total` | ≥ 45 / 50 | **automated** (`subrequest_headroom`) |
 | `build_turns.run_id IS NULL` after dispatch | 30 min | **automated** (`dispatch_no_run`) |
 | `cron.last_success_at` | > 15 min | **surfaced** on `/headroom.cron.stale`; a dead cron cannot push |
-| OpenRouter remaining | ≤ 5 requests | manual; the probe holds dispatches and `capacity_pause` covers the long hold |
+| OpenRouter remaining | ≤ floor (10) | **automated** (`quota_hold` when the probe refuses a dispatch) |
 | `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; `dispatch_no_run`/`formation_failures` catch the aftermath |
 | event `paused_capacity` | > 1h | **automated** (`capacity_pause`) |
 
