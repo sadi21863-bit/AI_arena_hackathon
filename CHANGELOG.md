@@ -34,6 +34,17 @@ notes what changed behavior in production and why.
   measured 0.918; 6-target events are noisy. Full table and caveats:
   `docs/CALIBRATION_RETROSPECTIVE_2026-10-31.md`. No threshold or judge-weight
   change was made from this pass.
+- **Artifact audit added (read-only).** `scripts/artifact_audit.mjs` checks
+  ideas (fields/lengths/placeholders and finalist `build_scope`), critiques
+  (JSON strength/weakness/suggestion), and build repos (real turns, product
+  files, a test, and a `VERIFICATION_REPORT.md` Verdict). Baseline on
+  `event_dc3df601`: 34/34 ideas pass (1 note: a blocked idea has no
+  `build_scope`), 21/21 critiques pass, and 2/2 builds pass — alpha's report
+  is honestly NOT READY, beta's is READY. The selected ideathon's hackathon
+  child produced no repos, so the build sample falls back to `event_693bc79b`;
+  `--hackathon=event_382ab43e --strict` correctly fails both teams and names
+  every missing contract. Full report:
+  `docs/ARTIFACT_AUDIT_2026-10-31.md`. Persistence/automation remains R-3.
 - **Provider/quota failure runbook and review follow-ups recorded.** Added
   `docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` (triage queries, dead-model
   playbook, abandoned-event recovery, alert thresholds) and scoped the

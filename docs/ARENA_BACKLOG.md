@@ -590,14 +590,21 @@ documented drift threshold, and a visible retrospective that either passes or
 explains a drift. Do not change gate thresholds or judge weights from one
 event.
 
-### R-3 — Sampled artifact audit against output contracts (P1, not implemented)
+### R-3 — Artifact audit against output contracts (P1, partial — read-only landed 2026-10-31)
 
-Row existence is not output. After each hackathon, sample ≥10 ideas, critiques
-and build repos and check the contract: idea has a specific
-problem/solution/build_scope; critique has strength/weakness/suggestion; build
-repo has a real commit, a test or `VERIFICATION_REPORT`, and a non-empty diff.
-Record pass/fail per sample. Acceptance: a report per event and a failure that
-names the missing contract, not just "queue completed".
+`scripts/artifact_audit.mjs` audits ideas (required fields/lengths/placeholders
+and finalist `build_scope`), critiques (JSON strength/weakness/suggestion) and
+build repos (real turns, product files, a test, `VERIFICATION_REPORT.md` with a
+Verdict). Baseline: `event_dc3df601` has 34/34 ideas passing (1 note: a blocked
+idea has no `build_scope`), 21/21 critiques passing; `event_693bc79b` builds
+2/2 pass (alpha NOT READY, beta READY). The selected ideathon's hackathon child
+produced no repos, so the build sample is the previous complete cycle;
+`--hackathon=event_382ab43e --strict` correctly fails both teams. Full report:
+`docs/ARTIFACT_AUDIT_2026-10-31.md`.
+
+Still open: persist the audit per event, run it automatically after judging,
+and add a semantic sample on top of the structural checks. Acceptance: a
+stored report per event and a missing contract named in the output.
 
 ### R-4 — Provider death runbook (done 2026-10-31)
 
