@@ -17,6 +17,7 @@
     "audit:artifacts:persist": "node scripts/artifact_audit.mjs --persist",
     "audit:calibration": "node scripts/calibration_retrospective.mjs --all",
     "quality:snapshot": "node scripts/snapshot_event_quality.mjs",
+    "sample:semantic": "node scripts/semantic_sample.mjs",
     "d1:apply": "wrangler d1 execute arena-db --file=db/schema.sql",
     "office:generate-pixel": "node scripts/generate_office_pixel.js",
     "test:tiny": "node scripts/tiny_test.js"

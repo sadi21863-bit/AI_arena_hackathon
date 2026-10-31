@@ -256,6 +256,14 @@ function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
     .filter((idea) => genericRe.test(`${text(idea.title)} ${text(idea.one_liner)}`))
     .map((idea) => ({ id: idea.id, title: text(idea.title) }));
 
+  // Deep Research is meant to feed ideation. A judged idea with no anchor means
+  // the link is not visible in the stored artifact, even if the agent used
+  // context internally. Historical events are all NULL (the prompt never asked
+  // for the field until 2026-10-31), so this is a warning, not a failure.
+  const unanchoredIdeas = rawIdeas
+    .filter((idea) => idea.status === "judged" && !text(idea.research_anchor))
+    .map((idea) => ({ id: idea.id, title: text(idea.title) }));
+
   const thinBuilds = builds
     .filter((build) => build.code?.thin)
     .map((build) => ({
@@ -273,10 +281,16 @@ function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
     near_duplicate_pairs: nearDuplicates,
     orphan_critiques: orphanCritiques,
     generic_ideas: genericIdeas,
+    unanchored_ideas: unanchoredIdeas,
     thin_builds: thinBuilds,
     unasserted_tests: unassertedTests,
     warnings:
-      nearDuplicates.length + orphanCritiques.length + genericIdeas.length + thinBuilds.length + unassertedTests.length,
+      nearDuplicates.length +
+      orphanCritiques.length +
+      genericIdeas.length +
+      unanchoredIdeas.length +
+      thinBuilds.length +
+      unassertedTests.length,
   };
 }
 
@@ -458,6 +472,7 @@ function compactResult(result) {
       near_duplicate_pairs: result.semantic.near_duplicate_pairs.slice(0, 10),
       orphan_critiques: result.semantic.orphan_critiques.slice(0, 10),
       generic_ideas: result.semantic.generic_ideas.slice(0, 10),
+      unanchored_ideas: result.semantic.unanchored_ideas.slice(0, 10),
       thin_builds: result.semantic.thin_builds,
       unasserted_tests: result.semantic.unasserted_tests,
     },
@@ -566,7 +581,7 @@ async function main() {
   );
 
   const ideaSql =
-    `SELECT id, status, title, one_liner, problem, solution, build_scope FROM archive_ideas WHERE event_id = ? ` +
+    `SELECT id, status, title, one_liner, problem, solution, build_scope, research_anchor FROM archive_ideas WHERE event_id = ? ` +
     (sampleN > 0 ? `ORDER BY RANDOM() LIMIT ?` : `ORDER BY id`);
   const rawIdeas = await d1(ideaSql, sampleN > 0 ? [event.id, sampleN] : [event.id]);
   const ideas = rawIdeas.map(auditIdea);
@@ -618,6 +633,7 @@ async function main() {
       near_duplicate_pairs: semantic.near_duplicate_pairs.length,
       orphan_critiques: semantic.orphan_critiques.length,
       generic_ideas: semantic.generic_ideas.length,
+      unanchored_ideas: semantic.unanchored_ideas.length,
       thin_builds: semantic.thin_builds.length,
       unasserted_tests: semantic.unasserted_tests.length,
       warnings: semantic.warnings,
@@ -694,6 +710,7 @@ async function main() {
       `\nSemantic (warnings only): ${semantic.near_duplicate_pairs.length} near-duplicate idea pair(s), ` +
         `${semantic.orphan_critiques.length} orphan critique(s), ` +
         `${semantic.generic_ideas.length} generic-phrase idea(s), ` +
+        `${semantic.unanchored_ideas.length} unanchored finalist(s), ` +
         `${semantic.thin_builds.length} thin build(s), ` +
         `${semantic.unasserted_tests.length} test set(s) without assertions`,
     );
@@ -708,6 +725,9 @@ async function main() {
     }
     for (const idea of semantic.generic_ideas.slice(0, 5)) {
       console.log(`  GENERIC ${idea.id} "${idea.title}"`);
+    }
+    for (const idea of semantic.unanchored_ideas.slice(0, 5)) {
+      console.log(`  UNANCHORED ${idea.id} "${idea.title}" (no research_anchor)`);
     }
     for (const build of semantic.thin_builds.slice(0, 5)) {
       console.log(

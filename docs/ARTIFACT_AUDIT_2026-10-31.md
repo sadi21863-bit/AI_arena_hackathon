@@ -43,6 +43,9 @@ now also runs deterministic semantic-lite checks and records them as **warnings*
   event.
 - **Generic-phrase ideas** — titles/one-liners containing
   `revolutionary`, `seamless`, `all-in-one`, `one app`, `everything app`, etc.
+- **Unanchored finalists** — a `judged` idea with no `research_anchor`. The
+  2026-10-31 sample found **0/34** anchored in `event_dc3df601` and **0 across
+  every archived event**; the ideation prompt now requests the field.
 - **Thin builds** — fewer than 30 nonblank lines across up to 6 sampled product
   files.
 - **Tests without assertions** — test files exist but contain no
@@ -50,9 +53,10 @@ now also runs deterministic semantic-lite checks and records them as **warnings*
 
 These are heuristics, not a quality score. They are deliberately free: an LLM
 quality judge would spend the event's inference budget and would need its own
-calibration before anyone trusted it. The current baseline is 0 semantic
-warnings; the historical duplicate event is the proof that the check fires when
-the shape is really there.
+calibration before anyone trusted it. The historical duplicate event is the
+proof that the check fires when the shape is really there; the current baseline
+also surfaces 7 unanchored finalists, which is a real gap rather than noise
+(see below).
 
 ## Baseline — 2026-10-31
 
@@ -62,13 +66,14 @@ child, `event_382ab43e`, produced no repos.
 
 | artifact set | result |
 |---|---|
-| Ideas | **34/34 pass**, 1 note — `idea_5563dccb` (blocked) has no `build_scope`; expected for a non-finalist. 27 blocked + 7 judged in the population. |
+| Ideas | **34/34 structural pass**, 1 note + **7 unanchored finalists** (semantic warning) — `idea_5563dccb` (blocked) has no `build_scope`; expected for a non-finalist. 27 blocked + 7 judged in the population. |
 | Critiques | **21/21 pass** — all JSON with substantive strength/weakness/suggestion. |
 | Builds | **2/2 pass** — alpha: 9 turns, 9 product files, 3 test files, verdict **NOT READY** (honest security note); beta: 7 turns, 4 product files, 1 test file, verdict **READY**. |
-| Total | **57 artifacts, 0 contract failures, 1 note.** |
+| Total | **57 artifacts, 0 contract failures, 8 notes/warnings.** |
 
-The prior cycle, `event_485dd577`, audits cleanly too: 34/34 ideas, 23/23
-critiques, 2/2 builds — the same two repos, same verdicts.
+The prior cycle, `event_485dd577`, is structurally clean too: 34/34 ideas,
+23/23 critiques, 2/2 builds — but its finalists are also unanchored, because
+the field was never requested before 2026-10-31.
 
 ### The failure shape the audit is meant to catch
 
@@ -125,11 +130,15 @@ Cloudflare and GitHub secrets as the deploy workflows.
 node scripts/artifact_audit.mjs
 node scripts/artifact_audit.mjs --json
 node scripts/artifact_audit.mjs --persist
+node scripts/semantic_sample.mjs --n=10 --out=docs/SEMANTIC_SAMPLE_2026-10-31.md
 node scripts/artifact_audit.mjs --event=event_485dd577-dc3b-46eb-8b75-96eb79679044
 node scripts/artifact_audit.mjs --hackathon=event_382ab43e-adc1-42de-bfb1-0ccc4a930969 --strict
 ```
 
-The deterministic semantic layer is in place. Still open (backlog R-3): a true
-semantic quality sample (LLM or human) on top of it. The heuristics do not judge
-whether a well-written idea is good, and a new scaffold file must be added to
-both allowlists or it counts as product work.
+The first single-reviewer semantic sample is
+[`SEMANTIC_SAMPLE_REVIEW_2026-10-31.md`](SEMANTIC_SAMPLE_REVIEW_2026-10-31.md)
+(raw sheet: [`SEMANTIC_SAMPLE_2026-10-31.md`](SEMANTIC_SAMPLE_2026-10-31.md)):
+0 clear pass, 6 weak, 4 fail; build-scope over-reach is the recurring problem.
+`scripts/semantic_sample.mjs` generates the sheet for any event. The sample is
+not automatically scheduled and is not calibrated — schedule it manually after
+a judging pass when someone can read it.

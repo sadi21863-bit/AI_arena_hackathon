@@ -21,7 +21,11 @@ notes what changed behavior in production and why.
   nonblank lines across sampled product files) and tests without assertions.
   These are warnings, never `--strict` failures; `event_2eaf0bb2` flags the
   historical duplicate shape (`Facilify` ×2, `ForensicsHub` ×3, `ESIGN
-  Compliance Toolkit` ×2) while the current baseline stays at 0.
+  Compliance Toolkit` ×2) while the current baseline stays at 0. The first
+  single-reviewer sample (`docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md`) found
+  **0/34 ideas with a `research_anchor`** and assessed 0 clear pass / 6 weak /
+  4 fail, with build-scope over-reach as the recurring problem. The ideation
+  prompt now requests a research anchor; the audit flags unanchored finalists.
 - **Durable ops alerts and a public ranking-confidence label.** The scheduled
   tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50`, an
   event paused on capacity for over an hour, 3+ `team_formation` failures in

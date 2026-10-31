@@ -120,6 +120,7 @@ async function handleResearch(env: Env, item: QueueItem, agent: AgentRow): Promi
 
 interface IdeaJson {
   title: string; one_liner: string; problem: string; solution: string; target_user: string; build_scope: string;
+  research_anchor?: string;
 }
 
 async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Promise<void> {
@@ -179,7 +180,8 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const text = await callAgent(env, agent, "design",
     `${compressedContext}\n\n` +
     `Submit ONE product idea grounded in that research — a new idea, or a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
-    `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string}. ` +
+    `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string, "research_anchor": string}. ` +
+    `research_anchor must be a short quote or source from the research context above (max 240 characters) that this idea is grounded in — do not leave it empty or invent a source. ` +
     `build_scope should be a short buildable-in-days scope, not a vague vision.`
   );
 
@@ -189,6 +191,7 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const ideaId = await postIdea(env, {
     agentId: agent.id, eventId: item.event_id, title: idea.title, oneLiner: idea.one_liner,
     problem: idea.problem, solution: idea.solution, targetUser: idea.target_user, buildScope: idea.build_scope,
+    researchAnchor: idea.research_anchor,
     // Idempotency anchor: if this queue item was already partially processed
     // (Worker died between postIdea and markCompleted, then resetStuckItems
     // re-claimed it 10 minutes later), postIdea sees the queue_item_id and
