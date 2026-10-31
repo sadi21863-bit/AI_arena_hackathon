@@ -95,7 +95,8 @@ running" — a state from which the cadence could never recover.
 - The failed event was marked `complete` with the cap in `abandoned_reason`.
   No pending/in_progress items remain; the next ideathon auto-started on
   2026-10-31 09:10:53Z (`event_40e6b8d8`, deep_research) on the open 10-day
-  slot.
+  slot. It queued 12 research items; the first completed and another was
+  in progress on the next tick, so the cycle is live.
 
 ## 6. Guardrails for the next scaffold change
 
