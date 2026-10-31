@@ -15,7 +15,21 @@ export interface DispatchBuildTurnInput {
 }
 
 export async function dispatchBuildTurn(env: Env, input: DispatchBuildTurnInput): Promise<void> {
+  // Fail with the actual cause, not `Cannot read properties of null (reading
+  // 'split')` from a team row whose formation never finished. Found live on
+  // event_382ab43e (2026-10-31): 12 dispatch attempts died on that TypeError
+  // after team_formation had left repo_url NULL, hiding the real failure.
+  if (!input.repoFullName) {
+    throw new Error(
+      `dispatchBuildTurn: ${input.team} turn ${input.turnId} has no repo_url; team formation did not finish`,
+    );
+  }
   const [owner, repo] = input.repoFullName.split("/");
+  if (!owner || !repo) {
+    throw new Error(
+      `dispatchBuildTurn: invalid repo "${input.repoFullName}" for ${input.team} turn ${input.turnId}`,
+    );
+  }
   // "main", not "master": team repos are created without auto_init
   // (github/repos.ts) so GitHub picks the account/org's configured default
   // branch name for the first commit, which is "main" here — distinct from
