@@ -99,7 +99,7 @@ async function setRepoSecret(env: Env, owner: string, repo: string, secretName: 
   // The repo's public key is stable for the life of the invocation, so a
   // caller setting several secrets fetches it once and passes it in. Each
   // unshared fetch is a subrequest, and team_formation is already close to the
-  // Worker subrequest cap (see setTeamRepoSecrets).
+  // Worker subrequest cap (see createTeamRepo).
   const pk = publicKey ?? await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`);
   const { key, key_id } = pk as { key: string; key_id: string };
   const encrypted_value = sealSecret(key, value);
@@ -107,28 +107,10 @@ async function setRepoSecret(env: Env, owner: string, repo: string, secretName: 
 }
 
 /**
- * Sets every secret a team repo needs, fetching the public key exactly once.
- *
- * Split out of createTeamRepo (2026-10-03): one `team_formation` item
- * provisions BOTH teams in a single Worker invocation (executor.ts loops
- * `top2`), and 4 of 5 items on event_7308f1fe died with "Too many subrequests
- * by single Worker invocation". Measured cost per team was ~78 subrequests
- * (14 main-repo fetches, 30 for harness putFile GET+PUT pairs, 12 for
- * scaffold, 14 for the harness sync) — ~156 for the item against the free-plan
- * cap of 50.
- *
- * The four secrets were each fetching the same public key independently: 4
- * GETs where 1 suffices. Sharing it drops a team to ~75 and is free of
- * behavioural risk — the key does not change mid-invocation. That alone does
- * not fit the item under 50; the remaining reduction has to come from splitting
- * the item per team, which is the honest fix and is NOT taken here because it
- * changes queue semantics.
- */
-/**
  * Canonical list of every secret a team repo needs: the name, whether a build
  * turn can run without it, and which Worker env value it is sealed from.
  *
- * Single source of truth since 2026-10-15. Provisioning (setTeamRepoSecrets)
+ * Single source of truth since 2026-10-15. Provisioning (ensureTeamRepoSecrets)
  * and reporting (REQUIRED/OPTIONAL_BUILD_SECRETS, read by checkTeamCredentials
  * and checkHarnessDrift) are both derived from this list, so they cannot
  * disagree — they did once: the three `_2` failover keys were provisioned but
@@ -159,21 +141,11 @@ const BUILD_SECRET_SPEC: ReadonlyArray<{ name: string; required: boolean; value:
   { name: "OPENCODE_API_KEY_2", required: false, value: (env) => env.OPENCODE_API_KEY_2 },
 ];
 
-async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promise<void> {
-  const present = BUILD_SECRET_SPEC
-    .map((s) => [s.name, s.value(env)] as [string, string | undefined])
-    .filter((pair): pair is [string, string] => !!pair[1]);
-  if (present.length === 0) return;
-
-  const publicKey = await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`) as { key: string; key_id: string };
-  await Promise.all(present.map(([name, value]) => setRepoSecret(env, owner, repo, name, value, publicKey)));
-}
-
 /**
  * Pre-dispatch repair: seals and sets only the secrets a team repo is
  * MISSING, leaving every present value untouched.
  *
- * Why this exists: setTeamRepoSecrets ran only at createTeamRepo, so a repo
+ * Why this exists: provisioning used to run only at createTeamRepo, so a repo
  * created before a provider switch never gained the new key — the live shape
  * on 2026-10-13, when every existing team repo lacked OPEN_ROUTER_API_KEY
  * until a human set it by hand. Drift became self-detecting on 2026-09-28
@@ -187,7 +159,7 @@ async function setTeamRepoSecrets(env: Env, owner: string, repo: string): Promis
  * a provider switch produces, and that is what this catches.
  *
  * Cost: one listing call in the steady state (dispatch already sits near the
- * free-plan subrequest cap of 50 — see setTeamRepoSecrets). A public-key GET
+ * free-plan subrequest cap of 50 — see createTeamRepo). A public-key GET
  * plus one PUT per missing name, only when repairing. Uses the same env
  * filter as provisioning, so a name whose Worker value is unset is never
  * "missing" — nothing could be set for it, and every dispatch would retry.
@@ -215,46 +187,6 @@ export async function ensureTeamRepoSecrets(env: Env, repoFullName: string): Pro
   const publicKey = await githubRequest(env, "GET", `/repos/${owner}/${repo}/actions/secrets/public-key`) as { key: string; key_id: string };
   await Promise.all(missing.map((s) => setRepoSecret(env, owner, repo, s.name, s.value(env) as string, publicKey)));
   return missing.map((s) => s.name);
-}
-
-/**
- * Idempotent: a retried team_formation attempt (spec §17 hardening,
- * 2026-07-22 — see the retry-safety gap noted at Week 4 gate-pass) may
- * re-run this against a repo a prior attempt partially scaffolded. Content
- * per path is fully deterministic (same idea, same template files), so if
- * the file already exists there's nothing to reconcile — skip it rather
- * than fetch its sha to update, which GitHub's Contents API would
- * otherwise require.
- *
- * `knownAbsent` skips the existence GET, for a repo this call just created:
- * nothing can be in it yet, so all 21 GETs are provably wasted. That GET is
- * the single largest subrequest cost in team_formation, which provisions both
- * teams in one Worker invocation and was dying on the free-plan cap of 50 (4 of
- * 5 items failed on event_7308f1fe). The GET also explains why one item
- * *succeeded*: on a retry, earlier files already existed so their GET hit and
- * skipped the PUT, halving the cost — the idempotency check was doing double
- * duty as accidental load-shedding.
- *
- * Only ever passed by the caller that observed the repo's creation succeed. A
- * retry takes the 422 "already exists" branch, sets it false, and keeps every
- * GET, so idempotency is preserved exactly where it is actually needed.
- */
-async function putFile(
-  env: Env, owner: string, repo: string, path: string, content: string, message: string,
-  knownAbsent = false,
-): Promise<void> {
-  if (!knownAbsent) {
-    try {
-      await githubRequest(env, "GET", `/repos/${owner}/${repo}/contents/${path}`);
-      return; // already scaffolded by a prior attempt
-    } catch (err) {
-      if (!(err instanceof GitHubApiError) || err.status !== 404) throw err;
-    }
-  }
-  await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/${path}`, {
-    message,
-    content: utf8ToBase64(content),
-  });
 }
 
 /**
@@ -643,28 +575,139 @@ export interface CreateTeamRepoResult {
   fullName: string; // "org/repo" — the html URL is trivially derivable from this whenever display needs it, no need to carry both
 }
 
+/** The scaffold for a new team repo, as content rather than per-file API calls. */
+interface ScaffoldFile {
+  path: string;
+  content: string;
+}
+
 /**
- * Creates the team's repo, scaffolds it, and sets its secrets. Idempotent —
- * safe to call again for the same (teamName, eventId) if a prior attempt
- * got partway through: repo creation tolerates "already exists" by fetching
- * the existing repo instead, and every step below (scaffold files, secrets)
- * is independently idempotent too. handleTeamFormation (executor.ts) is
- * what actually drives retries — this function just needs to not blow up
- * when called on top of earlier partial progress.
+ * One seed file, then one tree, one commit, one ref. The Contents API writes
+ * a commit per file, so the 20-file scaffold cost 20 PUTs; with the 19
+ * template fetches and 9 secret calls, a single team_formation item measured
+ * **53 subrequests against the free-plan cap of 50** on event_382ab43e
+ * (2026-10-31) and retried until the watchdog abandoned the hackathon.
+ *
+ * A truly empty repo cannot take a tree (GitHub 409s "Git Repository is
+ * empty"), so the first file seeds the branch through the Contents API. Its
+ * response carries the new commit and tree SHAs, and the other 19 files land
+ * in one tree commit: 4 calls instead of 20, ~38 subrequests total. A retry
+ * diffs the existing tree instead of writing files that are already there.
+ */
+function scaffoldTree(files: ScaffoldFile[]): Array<{ path: string; mode: "100644"; type: "blob"; content: string }> {
+  return files.map((f) => ({ path: f.path, mode: "100644", type: "blob", content: f.content }));
+}
+
+async function createRootScaffoldCommit(
+  env: Env, owner: string, repo: string, files: ScaffoldFile[],
+): Promise<void> {
+  const [seed, ...rest] = files;
+  if (!seed) return;
+  const first = await githubRequest(env, "PUT", `/repos/${owner}/${repo}/contents/${seed.path}`, {
+    message: "Scaffold: team repo",
+    content: utf8ToBase64(seed.content),
+  }) as { commit?: { sha?: string; tree?: { sha?: string } } };
+  const headSha = first.commit?.sha;
+  const baseTree = first.commit?.tree?.sha;
+  if (!headSha || !baseTree) throw new Error(`No scaffold seed commit for ${owner}/${repo}`);
+  if (rest.length === 0) return;
+
+  const tree = await githubRequest(env, "POST", `/repos/${owner}/${repo}/git/trees`, {
+    base_tree: baseTree,
+    tree: scaffoldTree(rest),
+  }) as { sha: string };
+  const commit = await githubRequest(env, "POST", `/repos/${owner}/${repo}/git/commits`, {
+    message: "Scaffold: team repo",
+    tree: tree.sha,
+    parents: [headSha],
+  }) as { sha: string };
+  await githubRequest(env, "PATCH", `/repos/${owner}/${repo}/git/refs/heads/main`, {
+    sha: commit.sha,
+    force: false,
+  });
+}
+
+async function commitScaffold(
+  env: Env, owner: string, repo: string, files: ScaffoldFile[], repoIsFresh: boolean,
+): Promise<void> {
+  if (files.length === 0) return;
+  if (repoIsFresh) {
+    await createRootScaffoldCommit(env, owner, repo, files);
+    return;
+  }
+
+  // A 422 on create means an earlier attempt made the repo. Diff its tree so
+  // a retry adds only what is missing and never rewrites an agent's edits.
+  const info = await githubRequest(env, "GET", `/repos/${owner}/${repo}`) as { default_branch?: string };
+  const branch = info.default_branch || "main";
+  let headSha = "";
+  try {
+    const ref = await githubRequest(env, "GET", `/repos/${owner}/${repo}/git/ref/heads/${branch}`) as {
+      object?: { sha?: string };
+    };
+    headSha = ref.object?.sha ?? "";
+  } catch (err) {
+    // Repo exists but has no commits yet (the previous attempt died before
+    // the scaffold commit): seed it exactly like a fresh repo.
+    if (err instanceof GitHubApiError && err.status === 404) {
+      await createRootScaffoldCommit(env, owner, repo, files);
+      return;
+    }
+    throw err;
+  }
+  if (!headSha) {
+    await createRootScaffoldCommit(env, owner, repo, files);
+    return;
+  }
+
+  const head = await githubRequest(env, "GET", `/repos/${owner}/${repo}/git/commits/${headSha}`) as {
+    tree?: { sha?: string };
+  };
+  const headTree = head.tree?.sha;
+  if (!headTree) throw new Error(`No tree on head commit for ${owner}/${repo}`);
+  const tree = await githubRequest(env, "GET", `/repos/${owner}/${repo}/git/trees/${headTree}?recursive=1`) as {
+    tree?: Array<{ path?: string }>;
+    truncated?: boolean;
+  };
+  if (tree.truncated) throw new Error(`Tree too large to diff for ${owner}/${repo}`);
+  const existing = new Set((tree.tree ?? []).map((e) => e.path).filter((p): p is string => !!p));
+  const missing = files.filter((f) => !existing.has(f.path));
+  if (missing.length === 0) return;
+
+  const newTree = await githubRequest(env, "POST", `/repos/${owner}/${repo}/git/trees`, {
+    base_tree: headTree,
+    tree: scaffoldTree(missing),
+  }) as { sha: string };
+  const newCommit = await githubRequest(env, "POST", `/repos/${owner}/${repo}/git/commits`, {
+    message: "Scaffold: missing team files",
+    tree: newTree.sha,
+    parents: [headSha],
+  }) as { sha: string };
+  await githubRequest(env, "PATCH", `/repos/${owner}/${repo}/git/refs/heads/${branch}`, {
+    sha: newCommit.sha,
+    force: false,
+  });
+}
+
+/**
+ * Creates the team's repo, scaffolds it in one tree commit (after a one-file
+ * seed), and sets its secrets. Idempotent — safe to call again for the same
+ * (teamName, eventId) if a prior attempt got partway through: repo creation
+ * tolerates "already exists" by fetching the existing repo instead, and the
+ * scaffold diffs the current tree so only missing paths are added.
+ * handleTeamFormation (executor.ts) is what actually drives retries — this
+ * function just needs to not blow up when called on top of earlier partial
+ * progress.
  */
 export async function createTeamRepo(env: Env, teamName: string, eventId: string, idea: TeamRepoIdea): Promise<CreateTeamRepoResult> {
   const repoName = `arena-team-${teamName}-${eventId.slice(-8)}`;
   const owner = env.GITHUB_ORG;
 
-  // auto_init deliberately omitted: GitHub's Contents API can create the
-  // first commit itself on a fully empty repo (no branches yet). Using
-  // auto_init:true instead creates a default README.md immediately, and
-  // the putFile() PUTs below don't fetch/pass its sha — GitHub's Contents
-  // API requires sha to update an existing file, so every scaffold PUT
-  // targeting a path auto_init already created 422s with "sha wasn't
-  // supplied" (found live, 2026-07-21, team_formation's first real run:
-  // README.md collided, workflow/Dockerfile/opencode.json didn't since
-  // those paths don't exist in a bare auto_init README-only repo).
+  // auto_init deliberately omitted: the Git Data API below creates the root
+  // commit and `main` ref itself, so the repo must arrive empty. auto_init
+  // would create a README and a branch first, and the root-commit path would
+  // then try to seed a second history on top of it (the same collision the
+  // old Contents API path hit on team_formation's first real run, 2026-07-21).
   let repoIsFresh = false;
   try {
     await githubRequest(env, "POST", `/orgs/${owner}/repos`, {
@@ -673,8 +716,8 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
       description: `The Arena — Team ${teamName} building "${idea.title}" (event ${eventId})`,
     });
     // Creation succeeded, so the repo is empty (auto_init is deliberately off,
-    // see below) and every path below is provably absent. This is what lets
-    // putFile skip its existence GETs on the first, most expensive attempt.
+    // see below) and every path is provably absent. This is what lets
+    // commitScaffold create the root commit without diffing.
     repoIsFresh = true;
   } catch (err) {
     // A retried team_formation attempt after this repo already got created
@@ -686,8 +729,8 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
       throw err;
     }
     // Falls through with repoIsFresh === false: this repo may already hold
-    // files from a partially-completed earlier attempt, so every existence
-    // GET below is doing real idempotency work and must still run.
+    // files from a partially-completed earlier attempt, so the tree diff below
+    // is doing real idempotency work and must still run.
   }
 
   // Driven off HARNESS_FILES rather than a second hand-written list, so
@@ -698,33 +741,28 @@ export async function createTeamRepo(env: Env, teamName: string, eventId: string
 
   const readme = `# ${idea.title}\n\nTeam ${teamName} — spec §3.2 hackathon build.\n\n**One-liner:** ${idea.oneLiner}\n\n**Problem:** ${idea.problem}\n\n**Solution:** ${idea.solution}\n\n**Build scope:** ${idea.buildScope}\n\nBuilt entirely by an AI coding agent across discrete GitHub Actions build turns (spec §8) — no human-written code.\n`;
 
-  // Sequential, not Promise.all: the repo has zero commits at this point,
-  // so the first successful PUT is what creates the initial commit/default
-  // branch ref. Firing all of them in parallel races them against that same
-  // ref-creation and GitHub 409s ("reference already exists") on whichever
-  // loses (found live, 2026-07-21, second team_formation run after the
-  // auto_init fix above). Once the first PUT lands the branch exists, so
-  // the rest are ordinary sequential commits — no race left to have.
-  await putFile(env, owner, repoName, "README.md", readme, "Scaffold: idea brief", repoIsFresh);
-  for (let i = 0; i < HARNESS_FILES.length; i++) {
-    await putFile(env, owner, repoName, HARNESS_FILES[i], harness[i], `Scaffold: ${HARNESS_FILES[i]}`, repoIsFresh);
+  // Load the one-time product scaffold over HTTP like the harness files
+  // (fetchMainRepoFile), not from disk: this runs inside a Cloudflare Worker,
+  // which has no local filesystem or node:fs at runtime, and live-fetching
+  // from this repo's master branch is the one loading path this file already
+  // uses — so the templates and the code that seeds them can't drift.
+  const scaffold: ScaffoldFile[] = [
+    { path: "README.md", content: readme },
+    ...HARNESS_FILES.map((path, i) => ({ path, content: harness[i] })),
+  ];
+  for (const path of SCAFFOLD_FILES) {
+    scaffold.push({ path, content: await fetchMainRepoFile(`repo-scaffold/${path}`) });
   }
 
-  // One-time product scaffold, seeded after the harness so agents build
-  // into a real structure from turn 1 (see SCAFFOLD_FILES). Loaded over
-  // HTTP like the harness files (fetchMainRepoFile), not read from disk:
-  // this runs inside a Cloudflare Worker, which has no local filesystem and
-  // no node:fs at runtime, and live-fetching from this repo's master branch
-  // is the one loading path this file already uses — so the templates and
-  // the code that seeds them can't drift. putFile() skips paths that
-  // already exist, so a retried team_formation attempt stays idempotent
-  // without touching agent edits.
-  for (let i = 0; i < SCAFFOLD_FILES.length; i++) {
-    const path = SCAFFOLD_FILES[i];
-    await putFile(env, owner, repoName, path, await fetchMainRepoFile(`repo-scaffold/${path}`), `Scaffold: ${path}`, repoIsFresh);
-  }
+  // Two commits for all 20 files: the first seeds the empty repo's branch,
+  // the other 19 land in one tree commit. Per-file Contents PUTs measured 53
+  // subrequests against the free-plan cap of 50 on event_382ab43e
+  // (2026-10-31) and wedged team formation for two days.
+  await commitScaffold(env, owner, repoName, scaffold, repoIsFresh);
 
-  await setTeamRepoSecrets(env, owner, repoName);
+  // List first and set only missing names: a retry is one GET, not eight
+  // blind PUTs. On a fresh repo this still sets every value.
+  await ensureTeamRepoSecrets(env, `${owner}/${repoName}`);
 
   return { fullName: `${owner}/${repoName}` };
 }

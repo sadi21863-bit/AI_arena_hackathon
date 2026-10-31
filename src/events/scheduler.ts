@@ -1454,14 +1454,23 @@ export async function ensureArenaCadence(env: Env): Promise<void> {
   // resurrected arena 5, leaving multiple cycles alive at once. An
   // abandoned event that reconcileAbandonedEvents may still revive is not
   // finished; do not replace it.
+  // An abandoned event only blocks cadence if reconcileAbandonedEvents can
+  // still revive it. That function deliberately skips continuous phases
+  // (`building`, `ready_for_judging`): their abandonment means the work itself
+  // is stuck, not that a day-gate false-positive fired. Counting those as
+  // revivable wedged the arena forever on 2026-10-31: event_382ab43e was
+  // abandoned in `building` with 0 pending items, so revival skipped it while
+  // this guard kept seeing "still running" and refused to start the next
+  // ideathon. The status list comes from the same map revival uses.
+  const revivableStatuses = Object.keys(DAY_GATED_PHASE_STARTS_AT_DAY);
   const stillRunning = await env.DB.prepare(
     `SELECT 1 FROM archive_events WHERE (
         (type = 'ideathon' AND status != 'judged' AND abandoned_at IS NULL)
      OR (type = 'hackathon' AND status != 'complete' AND abandoned_at IS NULL)
-     OR (type = 'ideathon' AND abandoned_at IS NOT NULL AND revival_count < ${MAX_EVENT_REVIVALS})
-     OR (type = 'hackathon' AND abandoned_at IS NOT NULL AND revival_count < ${MAX_EVENT_REVIVALS})
+     OR (abandoned_at IS NOT NULL AND revival_count < ${MAX_EVENT_REVIVALS}
+         AND status IN (${revivableStatuses.map(() => "?").join(",")}))
      ) LIMIT 1`
-  ).first();
+  ).bind(...revivableStatuses).first();
   if (stillRunning) return;
 
   if (Date.now() >= computeNextArenaStart(latest.start_date).getTime()) {
