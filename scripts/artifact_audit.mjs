@@ -227,7 +227,7 @@ function jaccard(a, b) {
   return intersection / (a.size + b.size - intersection);
 }
 
-function semanticAudit(rawIdeas, rawCritiques, builds) {
+function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
   const nearDuplicates = [];
   for (let i = 0; i < rawIdeas.length; i += 1) {
     const a = rawIdeas[i];
@@ -246,7 +246,7 @@ function semanticAudit(rawIdeas, rawCritiques, builds) {
     }
   }
 
-  const ideaIds = new Set(rawIdeas.map((idea) => idea.id));
+  const ideaIds = allIdeaIds ?? new Set(rawIdeas.map((idea) => idea.id));
   const orphanCritiques = rawCritiques
     .filter((critique) => !ideaIds.has(critique.target_id))
     .map((critique) => ({ id: critique.id, target: critique.target_id }));
@@ -556,6 +556,10 @@ async function main() {
   const ideaPopulation = Number(
     (await d1(`SELECT COUNT(*) AS n FROM archive_ideas WHERE event_id = ?`, [event.id]))[0]?.n ?? 0,
   );
+  // Full id set for orphan-critique checks even when `--n` samples ideas.
+  const allIdeaIds = new Set(
+    (await d1(`SELECT id FROM archive_ideas WHERE event_id = ?`, [event.id])).map((row) => row.id),
+  );
   const critiquePopulation = Number(
     (await d1(`SELECT COUNT(*) AS n FROM archive_interactions WHERE event_id = ? AND type = 'critique'`, [event.id]))[0]
       ?.n ?? 0,
@@ -587,7 +591,7 @@ async function main() {
     builds = await Promise.all(teams.map(auditBuild));
   }
 
-  const semantic = semanticAudit(rawIdeas, rawCritiques, builds);
+  const semantic = semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds);
 
   const summary = {
     ideas: {
