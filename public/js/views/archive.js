@@ -13,7 +13,7 @@
 
 import { fetchJson } from "../core/api.js";
 import { html, render, wireReload } from "../core/html.js";
-import { utcDate, relativeTime } from "../core/fmt.js";
+import { utcDate, relativeTime, confidenceVerdict } from "../core/fmt.js";
 
 const POLL_MS = 120_000;
 
@@ -34,8 +34,32 @@ const STATUS_LABEL = {
 
 const terminal = ["judged", "complete", "failed", "abandoned"];
 
-function chip(text, cls = "") {
-  return html`<span class="arena-chip ${cls}">${text}</span>`;
+function chip(text, cls = "", title = "") {
+  return html`<span class="arena-chip ${cls}" ${title ? `title="${title}"` : ""}>${text}</span>`;
+}
+
+/**
+ * Ranking-confidence chip. Low is not a failure — it is the honest label for a
+ * small judged population or a gate that did not predict post-event agreement.
+ * The full reason travels in the tooltip; the Archive remains scannable.
+ */
+function confidenceChip(quality) {
+  if (!quality || quality.level === "unrated") return "";
+  const cls =
+    quality.level === "high" ? "arena-chip--ok" : quality.level === "low" ? "arena-chip--warn" : "";
+  const mark = quality.level === "low" ? " ⚠" : "";
+  return chip(`${quality.label}${mark}`, cls, confidenceVerdict(quality));
+}
+
+/** Artifact-audit chip: failures are contract failures, not style notes. */
+function auditChip(audit) {
+  if (!audit) return "";
+  const title =
+    `Artifact audit ${audit.audited_at ?? ""}: ${audit.failures ?? 0} contract failure(s), ` +
+    `${audit.warnings ?? 0} note(s)`;
+  return audit.failures > 0
+    ? chip(`audit ⚠ ${audit.failures}`, "arena-chip--warn", title)
+    : chip("audit ✓", "arena-chip--ok", title);
 }
 
 function stat(label, value, title = "") {
@@ -129,6 +153,8 @@ function hackathonBlock(h) {
         <h3>Hackathon <span class="v-archive__id">${id8(h.id)}</span></h3>
         <div class="v-archive__chips">
           ${chip(STATUS_LABEL[h.status] ?? h.status, STATUS_CLASS[h.status] ?? "")}
+          ${confidenceChip(h.quality)}
+          ${auditChip(h.quality?.audit)}
           ${failureWarn(c)}
         </div>
       </header>
@@ -159,6 +185,8 @@ function arenaCard(g, index) {
       ${root.type === "ideathon" && root.calibration
         ? chip(`calibration ${(root.calibration.correlation * 100).toFixed(0)}%${root.calibration.passed ? "" : " ⚠"}`, root.calibration.passed ? "" : "arena-chip--warn")
         : ""}
+      ${confidenceChip(root.quality)}
+      ${auditChip(root.quality?.audit)}
       ${failureWarn(c)}
     </div>`;
 

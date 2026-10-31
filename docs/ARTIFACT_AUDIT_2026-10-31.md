@@ -71,14 +71,31 @@ is the correct report for an event where team formation never produced a repo
   current ideathon's child has none, the report names the fallback — do not
   read it as a build result for the failed child.
 
+## Persistence and schedule
+
+`--persist` writes a compact result to `event_quality` (one row per event):
+summary counts, failure names, note count and `audited_at`. `GET /events/:id`
+returns it under `quality.audit.details`; `/events` and `/events/summary` carry
+the failure/warning counts, and the Observatory Archive renders an audit chip.
+The baseline above is recorded for `event_dc3df601` and `event_693bc79b`.
+
+`.github/workflows/artifact-audit.yml` runs daily (06:17 UTC) with
+`--persist --strict`, so the audit is no longer a manual point-in-time check.
+A missing contract turns the workflow red; a healthy audit leaves a green run
+and a job summary. The workflow reads the same Cloudflare and GitHub secrets as
+the deploy workflows.
+
 ## Reproduce
 
 ```bash
 node scripts/artifact_audit.mjs
 node scripts/artifact_audit.mjs --json
+node scripts/artifact_audit.mjs --persist
 node scripts/artifact_audit.mjs --event=event_485dd577-dc3b-46eb-8b75-96eb79679044
 node scripts/artifact_audit.mjs --hackathon=event_382ab43e-adc1-42de-bfb1-0ccc4a930969 --strict
 ```
 
-Still open (backlog R-3): persist the audit per event, run it automatically
-after judging, and add a semantic sample on top of these structural checks.
+Still open (backlog R-3): a semantic sample on top of these structural checks.
+The thresholds catch empty/placeholder artifacts, not a plausible-but-bad idea,
+and a new scaffold file must be added to both allowlists or it counts as
+product work.

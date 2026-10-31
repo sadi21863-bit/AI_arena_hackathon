@@ -61,13 +61,33 @@ pre-event result alongside). Run `node scripts/calibration_retrospective.mjs
 - Pearson assumes a linear relationship; a monotonic rank measure (Spearman)
   would be a useful companion before changing weights.
 
+## From retrospective to public label
+
+The retrospective is no longer only a script. `src/judges/confidence.ts` and
+`src/judges/quality.ts` compute the same leave-one-out metric in the Worker
+and expose a `quality` object on `GET /events`, `/events/summary` and
+`/events/:id`:
+
+- fewer than 10 judged targets → **low** (the 6-target range above is the
+  evidence);
+- ≥20 targets with post-event agreement inside 0.60–0.95 → **high**;
+- gate passed but the population is small or agreement is unmeasured →
+  **medium**;
+- failed gate or agreement outside the band → **low**.
+
+A hackathon inherits its parent ideathon's gate and is **low** at the usual
+two-team final. The Archive and Live views show the label and the reason; a
+low-confidence ranking is marked provisional. This does not gate judging,
+change scores, or change weights — it makes the limit visible in the product.
+
 ## Recommendation
 
 - Keep the 3-anchor gate for speed. Treat its **failures** as real warnings
   and its **pass** as permission to proceed, not as evidence of ranking
   quality.
-- Run the retrospective after each event. Persist it per event and surface it
-  in `/headroom` (backlog R-2) so drift is visible without a manual command.
+- Run the retrospective after each event. The Worker now computes it live and
+  labels the event; persisting the computed values per event remains backlog
+  R-2.
 - For small events, consider expanding the judged set or a sampled re-score.
   For all events, track per-judge correlation across several events before
   changing weights or removing a judge.

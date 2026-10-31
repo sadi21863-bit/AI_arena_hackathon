@@ -8,13 +8,15 @@
  *   - build repos: a real run+commit, product files outside the scaffold,
  *     a test, VERIFICATION_REPORT.md, and a parseable Verdict line
  *
- * Read-only: D1 via the Cloudflare HTTP API + public GitHub repos. It never
- * writes. Defaults to all rows for the selected event (current events are
- * small); `--n=N` samples when needed.
+ * Read-only by default: D1 via the Cloudflare HTTP API + public GitHub repos.
+ * `--persist` writes a compact result to `event_quality` (the only write), so
+ * the per-event audit is recorded and visible on GET /events/:id. Defaults to
+ * all rows for the selected event (current events are small); `--n=N` samples
+ * when needed.
  *
  * Usage:
  *   node scripts/artifact_audit.mjs [--event=event_...] [--hackathon=event_...]
- *                                   [--n=10] [--json] [--strict]
+ *                                   [--n=10] [--json] [--strict] [--persist]
  *
  * Credentials: CF_ACCOUNT_ID + CF_API_TOKEN (or CLOUDFLARE_*) and
  * GITHUB_TOKEN, from the shell environment or the repo .env. The D1 database
@@ -32,6 +34,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
 const jsonOut = args.includes("--json");
 const strict = args.includes("--strict");
+const persist = args.includes("--persist");
 const option = (name, fallback) => {
   const hit = args.find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : fallback;
@@ -42,7 +45,7 @@ const sampleN = Math.max(0, Number(option("n", "0")) || 0);
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(
-    "Usage: node scripts/artifact_audit.mjs [--event=event_...] [--hackathon=event_...] [--n=10] [--json] [--strict]",
+    "Usage: node scripts/artifact_audit.mjs [--event=event_...] [--hackathon=event_...] [--n=10] [--json] [--strict] [--persist]",
   );
   process.exit(0);
 }
@@ -292,6 +295,69 @@ async function auditBuild(team) {
   };
 }
 
+/**
+ * Compact, durable form of the audit. Full idea/critique text belongs in D1's
+ * own tables; this keeps only the contract result so the row stays small and
+ * `/events/:id` can show what failed without a second audit run.
+ */
+function compactResult(result) {
+  const failures = {
+    ideas: result.ideas
+      .filter((i) => !i.pass)
+      .map((i) => ({ id: i.id, status: i.status, failed: i.failed, notes: i.notes })),
+    critiques: result.critiques
+      .filter((c) => !c.pass)
+      .map((c) => ({ id: c.id, actor: c.actor, target: c.target, failed: c.failed })),
+    builds: result.builds
+      .filter((b) => !b.pass)
+      .map((b) => ({ team: b.team, repo: b.repo, failed: b.failed, notes: b.notes })),
+  };
+  return {
+    generated_at: result.generated_at,
+    ideathon: result.ideathon.id,
+    hackathon: result.hackathon ? { id: result.hackathon.id, fallback: result.hackathon.fallback } : null,
+    summary: result.summary,
+    failures,
+  };
+}
+
+async function persistRow(eventId, payload, failures, warnings) {
+  await d1(
+    `INSERT INTO event_quality (event_id, audit_json, audit_failures, audit_warnings, audited_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(event_id) DO UPDATE SET
+       audit_json = excluded.audit_json,
+       audit_failures = excluded.audit_failures,
+       audit_warnings = excluded.audit_warnings,
+       audited_at = excluded.audited_at`,
+    [eventId, JSON.stringify(payload), failures, warnings],
+  );
+}
+
+async function persistAudit(result) {
+  const compact = compactResult(result);
+  await persistRow(result.ideathon.id, compact, result.summary.failures, result.summary.warnings);
+
+  if (result.hackathon) {
+    const buildFailures = result.builds.filter((b) => !b.pass).length;
+    const buildWarnings = result.builds.filter((b) =>
+      b.notes.some((n) => !n.includes("not a contract failure")),
+    ).length;
+    await persistRow(
+      result.hackathon.id,
+      {
+        generated_at: result.generated_at,
+        ideathon: result.ideathon.id,
+        hackathon: { id: result.hackathon.id, fallback: result.hackathon.fallback },
+        summary: { builds: result.summary.builds, failures: buildFailures, warnings: buildWarnings },
+        failures: { builds: compact.failures.builds },
+      },
+      buildFailures,
+      buildWarnings,
+    );
+  }
+}
+
 async function main() {
   let event;
   if (eventArg) {
@@ -412,6 +478,10 @@ async function main() {
     builds,
   };
 
+  if (persist) {
+    await persistAudit(result);
+  }
+
   if (jsonOut) {
     console.log(JSON.stringify(result, null, 2));
   } else {
@@ -458,6 +528,21 @@ async function main() {
     console.log(
       `\nSummary: ${summary.failures} contract failure(s), ${summary.warnings} note(s)` +
         ` across ${ideas.length + critiques.length + builds.length} audited artifacts.`,
+    );
+    if (persist) {
+      console.log(
+        `Persisted audit to event_quality for ${result.ideathon.id}` +
+          (result.hackathon ? ` and ${result.hackathon.id}` : "") +
+          ".",
+      );
+    }
+  }
+
+  if (persist && jsonOut) {
+    console.error(
+      `Persisted audit to event_quality for ${result.ideathon.id}` +
+        (result.hackathon ? ` and ${result.hackathon.id}` : "") +
+        ".",
     );
   }
 

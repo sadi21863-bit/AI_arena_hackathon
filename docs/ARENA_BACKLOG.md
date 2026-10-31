@@ -564,16 +564,26 @@ The 2026-10-31 incident (`docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`) fixed
 the immediate outage. These are the remaining hardening items, scoped so they
 are not mistaken for done.
 
-### R-1 — Alert on quota/subrequest failures (P1, not implemented)
+### R-1 — Alert on quota/subrequest failures (P1, partial — durable alerts landed 2026-10-31)
 
-`docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` lists the thresholds; none has a
-push destination. Add an optional `ALERT_WEBHOOK_URL` secret and emit on: 3
-consecutive `team_formation` failures, subrequest total ≥45/50, a dispatch with
-no `run_id`, cron heartbeat older than 15 minutes, and OpenRouter remaining ≤5.
-Acceptance: a test failure produces one alert and a healthy tick produces none.
-Until then the checks are manual (`/headroom` + runbook §0).
+The scheduled tick now writes `ops_alerts` for the two highest-frequency
+branches: `worker_subrequest_log.total >= 45/50` and an event paused for
+capacity for more than an hour. They are surfaced on `GET /headroom` and
+`GET /alerts`, and POSTed to `ALERT_WEBHOOK_URL` when that secret exists.
+`GET /headroom` also shows the latest measured subrequest cost against the
+threshold. This closes the "silent wedge" shape even without a push
+destination; `GET /alerts` is pollable by an external monitor.
 
-### R-2 — Post-event calibration over the judged population (P1, partial — read-only landed 2026-10-31)
+Still open: no webhook destination is configured, so delivery to a human is
+still pull-based. The remaining runbook thresholds (3 consecutive
+`team_formation` failures, a dispatch with no `run_id`, cron heartbeat older
+than 15 minutes, OpenRouter remaining ≤5) are not all wired yet — the
+subrequest and capacity branches were chosen first because they caused the
+2026-10-31 outage. Acceptance: a test failure produces one alert and a healthy
+tick produces none; external delivery needs an `ALERT_WEBHOOK_URL` value and a
+one-time delivery test.
+
+### R-2 — Post-event calibration over the judged population (P1, partial — public confidence label landed 2026-10-31)
 
 `scripts/calibration_retrospective.mjs` applies the gate's Pearson metric to
 the existing `judge_scores` (leave-one-out panel means) and prints the
@@ -582,15 +592,22 @@ the gate's failures are corroborated, but passes are not — `0.933→0.427`,
 `0.751→0.435`, `0.902→0.554`; `0.483→-0.180`, `0.955→0.086`. Full table:
 `docs/CALIBRATION_RETROSPECTIVE_2026-10-31.md`.
 
-Still open: persist the retrospective per event, surface it in `/headroom`, and
-decide whether to expand the judged population for small events (the review's
-15-20 suggestion; the 36-target event measured 0.918, 6-target events are
-noisy). Acceptance for the remaining work: a stored per-event result, a
-documented drift threshold, and a visible retrospective that either passes or
-explains a drift. Do not change gate thresholds or judge weights from one
-event.
+The retrospective is now computed live in the Worker
+(`src/judges/confidence.ts` + `src/judges/quality.ts`) and exposed as a
+`quality` label on `GET /events`, `GET /events/summary` and
+`GET /events/:id`. The Archive and Live views show the label and its reasons;
+a low-confidence ranking is explicitly marked provisional. Thresholds are
+evidence-based, not statistical guarantees: fewer than 10 judged targets is
+`low` (6-target events ranged −0.180..0.469), ≥20 targets with post-event
+agreement inside 0.60–0.95 is `high`, and the rest is `medium`. A hackathon
+inherits its parent ideathon's gate and is `low` at the usual 2-team final.
 
-### R-3 — Artifact audit against output contracts (P1, partial — read-only landed 2026-10-31)
+Still open: persist the retrospective per event (it is recomputed from
+`judge_scores` today), and decide whether to expand the judged population for
+small events (the review's 15–20 suggestion; the 36-target event measured
+0.918). Do not change gate thresholds or judge weights from one event.
+
+### R-3 — Artifact audit against output contracts (P1, structural contracts done 2026-10-31; semantic sample open)
 
 `scripts/artifact_audit.mjs` audits ideas (required fields/lengths/placeholders
 and finalist `build_scope`), critiques (JSON strength/weakness/suggestion) and
@@ -602,9 +619,16 @@ produced no repos, so the build sample is the previous complete cycle;
 `--hackathon=event_382ab43e --strict` correctly fails both teams. Full report:
 `docs/ARTIFACT_AUDIT_2026-10-31.md`.
 
-Still open: persist the audit per event, run it automatically after judging,
-and add a semantic sample on top of the structural checks. Acceptance: a
-stored report per event and a missing contract named in the output.
+`--persist` now records a compact result in `event_quality`, exposed on
+`GET /events/:id` and as an audit chip in the Archive. The daily
+`.github/workflows/artifact-audit.yml` runs with `--strict --persist`, so the
+audit happens without a human and a missing contract turns the workflow red.
+The baseline is stored for `event_dc3df601` and `event_693bc79b`.
+
+Still open: a semantic sample on top of the structural checks (the current
+thresholds catch empty/placeholder artifacts, not a plausible-but-bad idea).
+A new scaffold file must be added to the audit's `NON_PRODUCT` set and the
+Worker's scaffold allowlists together, or it will count as product work.
 
 ### R-4 — Provider death runbook (done 2026-10-31)
 
@@ -612,9 +636,20 @@ stored report per event and a missing contract named in the output.
 subrequest caps and abandoned events. Keep it current when the model or harness
 changes.
 
-### R-5 — Second independent build account (deferred, owner decision)
+### R-5 — Second independent build account (decided default 2026-10-31; owner approval pending)
 
 Two keys on one OpenRouter account do not double the 50/day cap; a second
 account does, but doubles the credential surface and the pin/failover matrix.
-Not taken without an explicit owner decision. The fallback model is the cheaper
-mitigation.
+`docs/QUOTA_POSTURE_2026-10-31.md` records the operating decision: one account,
+hold dispatches, no automatic second account. The owner must approve or decline
+the second-account option; it is not taken autonomously.
+
+### R-6 — Bus factor / second maintainer (P1, blocked on owner)
+
+`MAINTAINERS.md` and `.github/CODEOWNERS` now state the ownership explicitly,
+but there is still one human in the operational loop. The repo is public and
+MIT-licensed, which lowers the legal barrier, not the operational one.
+Acceptance: a named second maintainer with repository write access, a short
+handoff covering `/headroom`, `/alerts`, migrations and the quota posture, and
+updated CODEOWNERS/MAINTAINERS. Until then, a single absence can stop the
+10-day cadence.

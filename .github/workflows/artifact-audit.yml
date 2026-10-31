@@ -1,0 +1,62 @@
+name: Artifact audit
+
+# The 2026-10-31 baseline was a point-in-time check. The failure shape it
+# catches (an event closes while its ideas/critiques/repos are empty or
+# structurally unusable) recurs every cycle, so this runs daily and records the
+# result in event_quality. It is deliberately outside the Worker: build-repo
+# checks need GitHub tree/content reads and must not consume the invocation's
+# 50-subrequest budget.
+#
+# `--strict` makes a missing contract a red workflow, not a green job with a
+# bad line in the log. `--persist` is the only write, and it targets the
+# event_quality row for the audited events.
+#
+# Requires repo secrets CF_ACCOUNT_ID and CF_API_TOKEN (already present for
+# deploy-worker/deploy-pages). Runs on the default branch, newest judged
+# ideathon; when that ideathon's child produced no repos it falls back to the
+# latest complete hackathon and says so in the output.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Audit artifacts and persist per-event result
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/artifact_audit.mjs --persist --strict | tee audit.txt
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Publish audit summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f audit.txt ]; then
+            {
+              echo "## Artifact audit"
+              echo '```'
+              cat audit.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

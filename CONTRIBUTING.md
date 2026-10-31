@@ -14,6 +14,10 @@ have access.
    pushes; anything else needs the manual deploy.
 5. Never commit secrets (`.env` is gitignored; see `.env.example`). Never
    widen build-turn network scope without a written reason (spec §7).
+6. Operational ownership and the single-maintainer bus factor are documented
+   in `MAINTAINERS.md`. Before a release or handoff, read `/headroom`,
+   `/alerts`, the latest `Artifact audit` workflow run, and the quota posture
+   decision in `docs/QUOTA_POSTURE_2026-10-31.md`.
 
 ## Use the arena skills in your own agent
 

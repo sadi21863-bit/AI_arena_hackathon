@@ -49,6 +49,48 @@ function cronLine(cron) {
   return html`<div class="arena-note"><span>✓</span><span>Cron: last tick succeeded ${cron.last_tick_at} UTC.</span></div>`;
 }
 
+/**
+ * Durable alerts written by the scheduled tick (R-1). The webhook is optional;
+ * when it is not configured the row is still the difference between a silent
+ * wedge and something a reader can see with the same page they already open.
+ */
+function alertsPanel(alerts, webhookConfigured) {
+  const list = Array.isArray(alerts) ? alerts : [];
+  const channel = webhookConfigured
+    ? "Webhook configured."
+    : "Webhook not configured — these alerts are visible here and on /alerts only.";
+  if (!list.length) {
+    return html`<div class="arena-note"><span>✓</span><span>No operational alerts recorded. ${channel}</span></div>`;
+  }
+  return html`
+    <div class="arena-notes">
+      ${list.map((a) => html`
+        <div class="arena-note ${a.severity === "critical" ? "arena-note--danger" : "arena-note--warn"}">
+          <span>${a.severity === "critical" ? "⚠" : "◆"}</span><span>
+            <b>${a.kind}</b> · ${a.created_at} UTC · ${a.message}
+            ${a.notified_at ? " · pushed" : webhookConfigured ? " · webhook not confirmed" : ""}
+          </span>
+        </div>`)}
+      <div class="arena-note"><span>◆</span><span>${channel}</span></div>
+    </div>`;
+}
+
+function subrequestLine(headroom) {
+  const latest = headroom?.latest;
+  if (!latest || latest.error || latest.total == null) {
+    return html`<div class="arena-note">Subrequest headroom: no measured <code>team_formation</code> run recorded yet.</div>`;
+  }
+  const near = latest.total >= headroom.threshold;
+  const over = latest.total >= latest.cap;
+  return html`<div class="arena-note ${over ? "arena-note--danger" : near ? "arena-note--warn" : ""}">
+    <span>${over ? "⚠" : near ? "◆" : "✓"}</span><span>
+      Subrequest headroom: latest <code>${latest.task_type}</code> measured
+      <b>${latest.total}/${latest.cap}</b> (alert at ${headroom.threshold}) for ${latest.event_id},
+      ${latest.created_at} UTC. ${near ? "Do not blind-retry; see runbook A." : ""}
+    </span>
+  </div>`;
+}
+
 export async function mount(el) {
   let timer = null;
   let disposed = false;
@@ -86,7 +128,9 @@ export async function mount(el) {
         <span>${maxPct >= 0.9 ? "⚠" : "◆"}</span><span>${verdict}</span>
       </div>
       <div class="v-headroom__grid">${(data.usage || []).map(gauge)}</div>
-      ${cronLine(data.cron)}`);
+      ${cronLine(data.cron)}
+      ${subrequestLine(data.subrequest_headroom)}
+      ${alertsPanel(data.alerts, data.alert_webhook_configured)}`);
   }
 
   await load();

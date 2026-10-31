@@ -9,6 +9,7 @@ checklist. Nothing here requires a paid plan.
 ```bash
 curl -s https://arena-api.sadi21863.workers.dev/health
 curl -s https://arena-api.sadi21863.workers.dev/headroom
+curl -s https://arena-api.sadi21863.workers.dev/alerts
 ```
 
 Then, for the active event id:
@@ -106,20 +107,55 @@ revived; their abandonment means the work itself is stuck.
    the next cycle. Verify with the `stillRunning` query / the next ideathon
    slot (`computeNextArenaStart`).
 
-## E. Alert thresholds (not yet wired to a push channel)
+## E. Alerts — durable, optionally pushed
 
-The system has no webhook destination configured. Until one exists, these are
-the manual checks; wire them to a webhook secret when a destination is chosen:
+The two highest-frequency branches are now automated on the scheduled tick and
+written to `ops_alerts`:
+
+- `worker_subrequest_log.total >= 45/50` (`subrequest_headroom`, warning at
+  45-49, critical at >=50);
+- an event in `paused_capacity` for more than an hour (`capacity_pause`).
+
+Read them at `GET /alerts` or in the `/headroom` panel. Dedupe is one alert per
+`(kind, event, task)` per 24h, not per tick. If `ALERT_WEBHOOK_URL` is set, the
+same alert is POSTed (`text` + `content`, counts only) and `notified_at` records
+delivery; without it the row is still durable and visible, but a human must
+pull. Enable push with:
+
+```bash
+npx wrangler secret put ALERT_WEBHOOK_URL
+```
+
+`GET /headroom.subrequest_headroom` also shows the latest measured
+`team_formation` cost against the 45 threshold, so the cap is visible before it
+wedges a cycle.
+
+The remaining thresholds are still manual:
 
 | signal | threshold | why |
 |---|---|---|
 | `team_formation` consecutive failures | 3 | catches a deterministic cap/config bug in 15 min, not 25h |
-| `worker_subrequest_log.total` | ≥ 45 / 50 | leaves headroom for a retry |
+| `worker_subrequest_log.total` | ≥ 45 / 50 | **automated** (above) |
 | `build_turns.run_id IS NULL` after dispatch | ≥ 1 | dispatch never reached Actions |
 | `cron.last_success_at` | > 15 min | silent Worker/cron failure |
 | OpenRouter remaining | ≤ 5 requests | the day's build budget is gone |
 | `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; dispatch cannot run |
+| event `paused_capacity` | > 1h | **automated** (above) |
 
-The larger hardening items (post-event calibration over the judged population,
-sampled artifact audits) are scoped in `docs/ARENA_BACKLOG.md`, not implemented
-here.
+## F. Ranking confidence (post-event)
+
+`GET /events`, `/events/summary` and `/events/:id` carry a `quality` object with
+`level` (`high`/`medium`/`low`/`unrated`), the judged population, the pre-event
+gate and the post-event agreement. The Archive and Live views show the label;
+low-confidence rankings are explicitly provisional. This is a description of
+how much the ranking can bear, not a gate and not a score change. See
+`src/judges/confidence.ts` for the exact thresholds and the 2026-10-31
+retrospective caveat.
+
+The artifact audit is separate: `scripts/artifact_audit.mjs --persist` records
+contract results in `event_quality`, and the daily `Artifact audit` workflow
+runs it automatically. A red run means a missing output contract, not a low
+score.
+
+The larger hardening items are scoped in `docs/ARENA_BACKLOG.md`; the quota
+posture decision is in `docs/QUOTA_POSTURE_2026-10-31.md`.

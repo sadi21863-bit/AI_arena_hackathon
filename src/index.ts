@@ -20,6 +20,9 @@ import { reconcileBuildTurns } from "./events/build-turns";
 import { rosterFor } from "./events/team-members";
 import { JUDGES } from "./judges/personas";
 import { calibrationFailureSide, CALIBRATION_MIN, CALIBRATION_MAX } from "./judges/calibration";
+import { buildEventQuality, type AuditSummary, type CalibrationRow, type QualityEventRow } from "./judges/quality";
+import type { JudgeScoreRow } from "./judges/confidence";
+import { checkOperationalAlerts, recentAlerts } from "./observability/alerts";
 import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
 
@@ -40,6 +43,32 @@ function calibrationField(correlation: unknown, passed: unknown) {
     failedSide: calibrationFailureSide(corr),
     band: { min: CALIBRATION_MIN, max: CALIBRATION_MAX },
   };
+}
+
+interface EventQualityRow {
+  event_id: string;
+  audit_failures: number | null;
+  audit_warnings: number | null;
+  audited_at: string | null;
+}
+
+function auditSummary(row: EventQualityRow | undefined): AuditSummary | null {
+  if (!row || !row.audited_at) return null;
+  return {
+    failures: row.audit_failures ?? 0,
+    warnings: row.audit_warnings ?? 0,
+    audited_at: row.audited_at,
+  };
+}
+
+function groupByEvent<T extends { event_id: string }>(rows: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const list = map.get(row.event_id) ?? [];
+    list.push(row);
+    map.set(row.event_id, list);
+  }
+  return map;
 }
 
 export type { Env };
@@ -189,6 +218,19 @@ export default {
       // just now crossed its completion threshold shouldn't be judged stale
       // in the same tick it finished.
       await checkForStalledEvents(env);
+
+      // R-1 (2026-10-31): thresholds used to live only in the runbook. This
+      // persists a durable alert for a subrequest near-miss or a capacity hold
+      // and pushes it when ALERT_WEBHOOK_URL is configured. Best-effort: the
+      // alert path must never be the reason a queue tick fails.
+      try {
+        const alerts = await checkOperationalAlerts(env);
+        if (alerts.raised > 0) {
+          console.log(`operational alerts: raised=${alerts.raised} pushed=${alerts.pushed}`);
+        }
+      } catch (err) {
+        console.log(`operational alert check failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+      }
 
       await env.DB.prepare(
         `UPDATE cron_heartbeat SET last_tick_at = datetime('now'), last_success_at = datetime('now'), last_error = NULL WHERE id = 'singleton'`
@@ -362,7 +404,42 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         harness = [{ error: err instanceof Error ? err.message : String(err) }];
       }
 
-      return Response.json({ day: today, usage: tiers, cron: heartbeat ?? null, harness });
+      // Operational alerts (R-1) and the latest measured subrequest cost. Both
+      // are best-effort so a missing table during a migration window degrades to
+      // an empty panel rather than taking down the operator dashboard.
+      let alerts: Awaited<ReturnType<typeof recentAlerts>> = [];
+      let subrequest: unknown = null;
+      try {
+        alerts = await recentAlerts(env, 8);
+        subrequest = await env.DB.prepare(
+          `SELECT event_id, task_type, total, cap, outcome, created_at
+           FROM worker_subrequest_log ORDER BY created_at DESC LIMIT 1`,
+        ).first();
+      } catch (err) {
+        alerts = [];
+        subrequest = { error: err instanceof Error ? err.message : String(err) };
+      }
+
+      return Response.json({
+        day: today,
+        usage: tiers,
+        cron: heartbeat ?? null,
+        harness,
+        alerts,
+        subrequest_headroom: { threshold: 45, latest: subrequest },
+        alert_webhook_configured: !!env.ALERT_WEBHOOK_URL,
+      });
+    }
+
+    // Durable operational alerts (R-1). Public like /headroom: counts and event
+    // ids only, never payloads or credentials. External monitors can poll this
+    // without scraping the dashboard.
+    if (url.pathname === "/alerts" && request.method === "GET") {
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      return Response.json({
+        webhook_configured: !!env.ALERT_WEBHOOK_URL,
+        alerts: await recentAlerts(env, Number.isFinite(limit) ? limit : 20),
+      });
     }
 
     if (url.pathname === "/ideas" && request.method === "GET") {
@@ -439,31 +516,41 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // level as everything else here). Optional ?type=ideathon|hackathon.
     if (url.pathname === "/events" && request.method === "GET") {
       const type = url.searchParams.get("type");
-      // LEFT JOIN calibration_runs, not a separate per-row fetch: the single-
-      // event route below already surfaces calibration.passed, but the LIST
-      // route never did, so nothing that only calls GET /events (like the
-      // Observatory Live view) could show a failed-calibration flag anywhere
-      // a reader would see it (P2-7, docs/INVESTIGATION_2026-07-28.md).
-      const events = await (type
-        ? env.DB.prepare(
-            `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
-             FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
-             WHERE e.type = ? ORDER BY e.created_at DESC LIMIT 20`
-          ).bind(type)
-        : env.DB.prepare(
-            `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
-             FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
-             ORDER BY e.created_at DESC LIMIT 20`
-          )
-      ).all<Record<string, unknown>>();
-      const withCalibration = events.results.map((row) => {
-        const { calibration_correlation, calibration_passed, ...event } = row;
+      // 2026-10-31: the list now carries the same `quality` label as the
+      // single-event route. Calibration, judge_scores and audit rows are read
+      // once each and joined in JS — a per-event retrospective query would be
+      // N+1 against a table that is still small (a few thousand rows).
+      const [events, calibrations, scores, qualityRows] = await Promise.all([
+        (type
+          ? env.DB.prepare(
+              `SELECT * FROM archive_events WHERE type = ? ORDER BY created_at DESC LIMIT 20`
+            ).bind(type)
+          : env.DB.prepare(`SELECT * FROM archive_events ORDER BY created_at DESC LIMIT 20`)
+        ).all<Record<string, unknown>>(),
+        env.DB.prepare(`SELECT event_id, correlation, passed FROM calibration_runs`)
+          .all<CalibrationRow>(),
+        env.DB.prepare(`SELECT event_id, judge_name, target_id, score FROM judge_scores`)
+          .all<JudgeScoreRow & { event_id: string }>(),
+        env.DB.prepare(`SELECT event_id, audit_failures, audit_warnings, audited_at FROM event_quality`)
+          .all<EventQualityRow>(),
+      ]);
+      const calibrationByEvent = new Map(calibrations.results.map((row) => [row.event_id, row]));
+      const scoresByEvent = groupByEvent(scores.results);
+      const qualityByEvent = new Map(qualityRows.results.map((row) => [row.event_id, row]));
+      const withQuality = events.results.map((event) => {
+        const calibration = calibrationByEvent.get(String(event.id));
         return {
           ...event,
-          calibration: calibrationField(calibration_correlation, calibration_passed),
+          calibration: calibrationField(calibration?.correlation, calibration?.passed),
+          quality: buildEventQuality(
+            event as unknown as QualityEventRow,
+            scoresByEvent.get(String(event.id)) ?? [],
+            calibrationByEvent,
+            auditSummary(qualityByEvent.get(String(event.id))),
+          ),
         };
       });
-      return Response.json(withCalibration);
+      return Response.json(withQuality);
     }
 
     // Arena Archive (Observatory): one aggregated payload for every event so
@@ -474,12 +561,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // joins. Registered before the /events/:id match below on purpose:
     // "/events/summary" would otherwise parse as eventId="summary".
     if (url.pathname === "/events/summary" && request.method === "GET") {
-      const [events, ideas, judgedIdeas, interactions, critiques, scores, teams, turns, turnConclusions, chronicle, queue, tribunal, teamNames, ideaTitles] = await env.DB.batch([
+      const [events, calibrations, judgeScores, qualityRows, ideas, judgedIdeas, interactions, critiques, scoreCounts, teams, turns, turnConclusions, chronicle, queue, tribunal, teamNames, ideaTitles] = await env.DB.batch([
         env.DB.prepare(
-          `SELECT e.*, cr.correlation as calibration_correlation, cr.passed as calibration_passed
-           FROM archive_events e LEFT JOIN calibration_runs cr ON cr.event_id = e.id
-           ORDER BY e.created_at DESC LIMIT 40`
+          `SELECT * FROM archive_events ORDER BY created_at DESC LIMIT 40`
         ),
+        env.DB.prepare(`SELECT event_id, correlation, passed FROM calibration_runs`),
+        env.DB.prepare(`SELECT event_id, judge_name, target_id, score FROM judge_scores`),
+        env.DB.prepare(`SELECT event_id, audit_failures, audit_warnings, audited_at FROM event_quality`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas GROUP BY event_id`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_ideas WHERE status = 'judged' GROUP BY event_id`),
         env.DB.prepare(`SELECT event_id, COUNT(*) n FROM archive_interactions GROUP BY event_id`),
@@ -505,6 +593,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
       const teamNameOf = new Map(teamNames.results.map((r: any) => [r.id, r.team_name]));
       const ideaTitleOf = new Map(ideaTitles.results.map((r: any) => [r.id, r.title]));
+      const calibrationRows = calibrations.results as unknown as CalibrationRow[];
+      const judgeScoreRows = judgeScores.results as unknown as (JudgeScoreRow & { event_id: string })[];
+      const qualityResultRows = qualityRows.results as unknown as EventQualityRow[];
+      const calibrationByEvent = new Map(calibrationRows.map((row) => [row.event_id, row]));
+      const scoresByEvent = groupByEvent(judgeScoreRows);
+      const qualityByEvent = new Map(qualityResultRows.map((row) => [row.event_id, row]));
       // Top 3 scored ideas per judged ideathon — the page's "what won" line
       // for a phase that has no winner_team_id by design.
       const topByEvent = new Map<string, { title: string; score: number }[]>();
@@ -515,16 +609,30 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       }
 
       const summary = events.results.map((row: any) => {
-        const { calibration_correlation, calibration_passed, ...event } = row;
+        const event = row as {
+          id: string;
+          type: "ideathon" | "hackathon";
+          status: string;
+          parent_event_id: string | null;
+          winner_team_id: string | null;
+          winning_idea_id: string | null;
+        };
+        const calibration = calibrationByEvent.get(event.id);
         return {
           ...event,
-          calibration: calibrationField(calibration_correlation, calibration_passed),
+          calibration: calibrationField(calibration?.correlation, calibration?.passed),
+          quality: buildEventQuality(
+            event,
+            scoresByEvent.get(event.id) ?? [],
+            calibrationByEvent,
+            auditSummary(qualityByEvent.get(event.id)),
+          ),
           counts: {
             ideas: sum(ideas.results, event.id),
             judgedIdeas: sum(judgedIdeas.results, event.id),
             interactions: sum(interactions.results, event.id),
             critiques: sum(critiques.results, event.id),
-            judgeScores: sum(scores.results, event.id),
+            judgeScores: sum(scoreCounts.results, event.id),
             teams: sum(teams.results, event.id),
             buildTurns: sum(turns.results, event.id),
             buildSuccesses: sum(turnConclusions.results.filter((r: any) => r.conclusion === "success"), event.id),
@@ -551,15 +659,48 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
     const eventMatch = url.pathname.match(/^\/events\/([^/]+)$/);
     if (eventMatch && request.method === "GET") {
-      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first<{ type: string }>();
+      const event = await env.DB.prepare(`SELECT * FROM archive_events WHERE id = ?`).bind(eventMatch[1]).first<{
+        id: string;
+        type: "ideathon" | "hackathon";
+        status: string;
+        parent_event_id: string | null;
+      }>();
       if (!event) return Response.json({ error: "not_found" }, { status: 404 });
       // Surfaces calibration's pass/fail (spec §13/§16) — found live
       // (2026-07-22 code review) that this was computed and stored but
       // never exposed anywhere, defeating the point of the check.
-      const calibration = event.type === "ideathon"
-        ? await env.DB.prepare(`SELECT correlation, passed FROM calibration_runs WHERE event_id = ?`).bind(eventMatch[1]).first<{ correlation: number; passed: number }>()
-        : null;
-      return Response.json({ ...event, calibration: calibrationField(calibration?.correlation, calibration?.passed) });
+      // 2026-10-31: also includes the ranking-confidence label and the stored
+      // artifact audit. Calibration is read for the whole archive because a
+      // hackathon's confidence inherits its parent ideathon's gate.
+      const [calibrations, scores, quality] = await Promise.all([
+        env.DB.prepare(`SELECT event_id, correlation, passed FROM calibration_runs`).all<CalibrationRow>(),
+        env.DB.prepare(`SELECT judge_name, target_id, score FROM judge_scores WHERE event_id = ?`)
+          .bind(event.id).all<JudgeScoreRow>(),
+        env.DB.prepare(
+          `SELECT event_id, audit_json, audit_failures, audit_warnings, audited_at
+           FROM event_quality WHERE event_id = ?`,
+        ).bind(event.id).first<EventQualityRow & { audit_json: string | null }>(),
+      ]);
+      const calibrationByEvent = new Map(calibrations.results.map((row) => [row.event_id, row]));
+      const ownCalibration = calibrationByEvent.get(event.id);
+      const audit = auditSummary(quality ?? undefined);
+      let auditDetails: unknown = null;
+      if (quality?.audit_json) {
+        try {
+          auditDetails = JSON.parse(quality.audit_json);
+        } catch {
+          auditDetails = null;
+        }
+      }
+      const qualityPayload = buildEventQuality(event, scores.results, calibrationByEvent, audit);
+      return Response.json({
+        ...event,
+        calibration: calibrationField(ownCalibration?.correlation, ownCalibration?.passed),
+        quality: {
+          ...qualityPayload,
+          audit: audit ? { ...audit, details: auditDetails } : null,
+        },
+      });
     }
 
     // Observatory Live view (spec §11): aggregate queue-item counts by status

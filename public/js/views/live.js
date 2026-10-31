@@ -17,7 +17,7 @@ import { html, render, wireReload } from "../core/html.js";
 import { href } from "../core/router.js";
 import * as store from "../core/store.js";
 import { toCycles, findCycle, phasesFor, phaseLabel, isLive, isTerminal, typeLabel } from "../core/model.js";
-import { dateRange, utcDate, shortId, score, calibrationVerdict } from "../core/fmt.js";
+import { dateRange, utcDate, shortId, score, calibrationVerdict, confidenceVerdict } from "../core/fmt.js";
 import { renderStrip } from "../core/arena-strip.js";
 import { taskLabel, mountTickClock, utcTime } from "../core/player.js";
 
@@ -273,6 +273,8 @@ export async function mount(el, params) {
 
     const calFailed = i.calibration && i.calibration.passed === false;
     const activeSummary = (summary || []).find((s) => s.id === cycle.activeEvent.id);
+    const quality = activeSummary?.quality;
+    const lowConfidence = quality && quality.level === "low";
 
     render(el, html`
       <header class="v-live__masthead">
@@ -295,6 +297,13 @@ export async function mount(el, params) {
               ? "the judges agreed far too closely, which points at the calibration anchors being too easy to tell apart rather than at the ranking itself; treat the order below as untested and check the anchors before trusting it."
               : "every score below is lower-confidence."
           }
+        </span></div>` : ""}
+
+      ${lowConfidence ? html`
+        <div class="arena-note arena-note--warn"><span>⚠</span><span>
+          <b>Ranking confidence is low for this Arena.</b> ${confidenceVerdict(quality)}.
+          Treat the order below as provisional — a small judged population, a failed gate, or poor
+          post-event agreement is a limit on the ranking, not a verdict on the work.
         </span></div>` : ""}
 
       ${spine(cycle)}

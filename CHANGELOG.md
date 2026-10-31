@@ -5,6 +5,26 @@ notes what changed behavior in production and why.
 
 ## 2026-10-31
 
+- **Durable ops alerts and a public ranking-confidence label.** The scheduled
+  tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50` and
+  for an event paused on capacity for over an hour; `GET /headroom` and
+  `GET /alerts` surface them, and `ALERT_WEBHOOK_URL` optionally pushes
+  (`text`/`content` + counts only). Without the secret, alerts are still
+  durable and visible rather than silent. `GET /events`, `/events/summary` and
+  `/events/:id` now carry a `quality` object computed live from the pre-event
+  gate and the post-event leave-one-out agreement; the Archive/Live views label
+  low-confidence rankings as provisional (fewer than 10 judged targets, a
+  failed gate, or agreement outside 0.60–0.95). No gate threshold or judge
+  weight changed. Recorded in
+  `docs/QUOTA_POSTURE_2026-10-31.md` that one OpenRouter account is the
+  operating default and a second account needs explicit owner approval.
+- **Artifact audit now runs daily and persists per event.** `--persist` writes
+  a compact result to `event_quality`; `GET /events/:id` returns the failures
+  and the Archive shows an audit chip. `.github/workflows/artifact-audit.yml`
+  runs daily with `--strict --persist`, so a missing contract turns the
+  workflow red instead of leaving a dated baseline as the only check.
+  `MAINTAINERS.md` + `.github/CODEOWNERS` make the single-maintainer bus factor
+  explicit; adding a second maintainer is backlog R-6.
 - **Hackathon `event_382ab43e` failed before any build turn — 53 subrequests
   against a cap of 50, then a cadence wedge.** `team_formation` failed 288
   times from Oct 28 09:41Z to Oct 29 09:36Z; both team rows stayed `forming`

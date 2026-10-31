@@ -70,6 +70,18 @@ export function calibrationVerdict(cal) {
   return `correlation ${score(cal.correlation)}, outside the ${band.min}–${band.max} band`;
 }
 
+/**
+ * One-line explanation of the ranking-confidence label. The label is computed
+ * by the Worker from the pre-event gate plus post-event judge agreement; the
+ * reasons travel with it so the UI never has to invent a threshold.
+ */
+export function confidenceVerdict(quality) {
+  if (!quality || quality.level === "unrated") return "not yet rated";
+  const reasons = Array.isArray(quality.reasons) ? quality.reasons : [];
+  return reasons.length ? `${quality.label}: ${reasons.join(" ")}` : quality.label;
+}
+
+
 export function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many || one + "s"}`;
 }
