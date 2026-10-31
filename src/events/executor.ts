@@ -187,11 +187,15 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
 
   const idea = extractJson<IdeaJson>(text);
   if (!idea?.title || !idea.problem || !idea.solution) throw new Error(`Malformed idea JSON from ${agent.id}: ${text.slice(0, 200)}`);
+  const researchAnchor =
+    typeof idea.research_anchor === "string" && idea.research_anchor.trim()
+      ? idea.research_anchor.trim().slice(0, 500)
+      : undefined;
 
   const ideaId = await postIdea(env, {
     agentId: agent.id, eventId: item.event_id, title: idea.title, oneLiner: idea.one_liner,
     problem: idea.problem, solution: idea.solution, targetUser: idea.target_user, buildScope: idea.build_scope,
-    researchAnchor: idea.research_anchor,
+    researchAnchor,
     // Idempotency anchor: if this queue item was already partially processed
     // (Worker died between postIdea and markCompleted, then resetStuckItems
     // re-claimed it 10 minutes later), postIdea sees the queue_item_id and
