@@ -23,6 +23,17 @@ notes what changed behavior in production and why.
   (`event_40e6b8d8`) on the already-open 10-day slot. Evidence:
   `worker_subrequest_log` 53/50 and
   `docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`.
+- **Calibration retrospective added; the 3-anchor gate is a warning, not a
+  certificate.** `scripts/calibration_retrospective.mjs` applies the gate's
+  judge-level Pearson metric to the existing `judge_scores` (leave-one-out
+  panel means) and prints the pre-event result beside it. Across 10 judged
+  ideathons, every low-side and high-side gate failure was corroborated by
+  low real-population agreement (`0.483→-0.180`, `0.955→0.086`), but three
+  passes were not: `0.933→0.427`, `0.751→0.435`, `0.902→0.554`. Only
+  `0.937→0.717` and `0.994→0.918` landed inside the band. The 36-target event
+  measured 0.918; 6-target events are noisy. Full table and caveats:
+  `docs/CALIBRATION_RETROSPECTIVE_2026-10-31.md`. No threshold or judge-weight
+  change was made from this pass.
 - **Provider/quota failure runbook and review follow-ups recorded.** Added
   `docs/RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` (triage queries, dead-model
   playbook, abandoned-event recovery, alert thresholds) and scoped the

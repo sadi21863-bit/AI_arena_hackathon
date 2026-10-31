@@ -573,15 +573,22 @@ no `run_id`, cron heartbeat older than 15 minutes, and OpenRouter remaining ≤5
 Acceptance: a test failure produces one alert and a healthy tick produces none.
 Until then the checks are manual (`/headroom` + runbook §0).
 
-### R-2 — Post-event calibration over the judged population (P1, not implemented)
+### R-2 — Post-event calibration over the judged population (P1, partial — read-only landed 2026-10-31)
 
-The pre-event gate is Pearson on 3 anchors — a sanity check, not a stable
-estimate. After judging, re-score the actual 15-20 judged ideas with the same
-panel (or derive the retrospective from the existing `judge_scores`) and
-measure correlation/drift against the event's ranks. Store it per event and
-surface it in `/headroom`. Acceptance: n ≥15 per event, a documented drift
-threshold, and one retrospective that either passes or explains a drift. Keep
-the 3-anchor gate for speed; this is the statistical check, not a replacement.
+`scripts/calibration_retrospective.mjs` applies the gate's Pearson metric to
+the existing `judge_scores` (leave-one-out panel means) and prints the
+pre-event result beside it; `--all` covers every judged ideathon. First result:
+the gate's failures are corroborated, but passes are not — `0.933→0.427`,
+`0.751→0.435`, `0.902→0.554`; `0.483→-0.180`, `0.955→0.086`. Full table:
+`docs/CALIBRATION_RETROSPECTIVE_2026-10-31.md`.
+
+Still open: persist the retrospective per event, surface it in `/headroom`, and
+decide whether to expand the judged population for small events (the review's
+15-20 suggestion; the 36-target event measured 0.918, 6-target events are
+noisy). Acceptance for the remaining work: a stored per-event result, a
+documented drift threshold, and a visible retrospective that either passes or
+explains a drift. Do not change gate thresholds or judge weights from one
+event.
 
 ### R-3 — Sampled artifact audit against output contracts (P1, not implemented)
 
