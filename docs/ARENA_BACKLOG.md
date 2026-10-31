@@ -604,8 +604,9 @@ inherits its parent ideathon's gate and is `low` at the usual 2-team final.
 `recordEventQuality` writes `event_quality_snapshots` at terminal judging, and
 `scripts/snapshot_event_quality.mjs` backfills/refreshes every terminal event
 from the live API. `/headroom.ranking_quality` shows the recent snapshots
-(event, level, population, retrospective r/band). The live API remains the
-source of truth; the snapshot is history, not a second gate.
+(event, level, population, retrospective r/band); `computed_at` is the last
+refresh. The live API remains the source of truth; the snapshot is history, not
+a second gate.
 
 Still open: decide whether to expand the judged population for small events
 (the review's 15–20 suggestion; the 36-target event measured 0.918). Do not

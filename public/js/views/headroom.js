@@ -113,8 +113,9 @@ function qualityPanel(rows) {
     <div class="arena-card">
       <div class="arena-section-label">Ranking quality snapshots</div>
       <p class="v-headroom__quality-note">
-        Recorded when an event reaches terminal judging. The live <code>quality</code> label is
-        recomputed from <code>judge_scores</code> on every event request.
+        Recorded at terminal judging and refreshed by the daily audit; <code>computed_at</code> is
+        the last refresh. The live <code>quality</code> label is recomputed from
+        <code>judge_scores</code> on every event request.
       </p>
       ${list.map((row) => html`
         <div class="arena-note ${row.confidence_level === "low" ? "arena-note--warn" : ""}">
