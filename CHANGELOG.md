@@ -17,16 +17,18 @@ notes what changed behavior in production and why.
   historical duplicate shape (`Facilify` ×2, `ForensicsHub` ×3, `ESIGN
   Compliance Toolkit` ×2) while the current baseline stays at 0.
 - **Durable ops alerts and a public ranking-confidence label.** The scheduled
-  tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50` and
-  for an event paused on capacity for over an hour; `GET /headroom` and
-  `GET /alerts` surface them, and `ALERT_WEBHOOK_URL` optionally pushes
-  (`text`/`content` + counts only). Without the secret, alerts are still
-  durable and visible rather than silent. `GET /events`, `/events/summary` and
-  `/events/:id` now carry a `quality` object computed live from the pre-event
-  gate and the post-event leave-one-out agreement; the Archive/Live views label
-  low-confidence rankings as provisional (fewer than 10 judged targets, a
-  failed gate, or agreement outside 0.60–0.95). No gate threshold or judge
-  weight changed. Recorded in
+  tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50`, an
+  event paused on capacity for over an hour, 3+ `team_formation` failures in
+  the current incarnation, and a build turn with no `run_id` 30 minutes after
+  dispatch; `GET /headroom` and `GET /alerts` surface them, and
+  `ALERT_WEBHOOK_URL` optionally pushes (`text`/`content` + counts only).
+  `/headroom.cron.stale` computes the 15-minute heartbeat check. Without the
+  secret, alerts are still durable and visible rather than silent. `GET
+  /events`, `/events/summary` and `/events/:id` now carry a `quality` object
+  computed live from the pre-event gate and the post-event leave-one-out
+  agreement; the Archive/Live views label low-confidence rankings as
+  provisional (fewer than 10 judged targets, a failed gate, or agreement
+  outside 0.60–0.95). No gate threshold or judge weight changed. Recorded in
   `docs/QUOTA_POSTURE_2026-10-31.md` that one OpenRouter account is the
   operating default and a second account needs explicit owner approval.
 - **Artifact audit now runs daily and persists per event.** `--persist` writes

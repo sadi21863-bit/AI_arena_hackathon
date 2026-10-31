@@ -564,24 +564,23 @@ The 2026-10-31 incident (`docs/INCIDENT_2026-10-31_SUBREQUEST_STALL.md`) fixed
 the immediate outage. These are the remaining hardening items, scoped so they
 are not mistaken for done.
 
-### R-1 — Alert on quota/subrequest failures (P1, partial — durable alerts landed 2026-10-31)
+### R-1 — Alert on quota/subrequest failures (P1, partial — automated thresholds landed 2026-10-31)
 
-The scheduled tick now writes `ops_alerts` for the two highest-frequency
-branches: `worker_subrequest_log.total >= 45/50` and an event paused for
-capacity for more than an hour. They are surfaced on `GET /headroom` and
-`GET /alerts`, and POSTed to `ALERT_WEBHOOK_URL` when that secret exists.
-`GET /headroom` also shows the latest measured subrequest cost against the
-threshold. This closes the "silent wedge" shape even without a push
-destination; `GET /alerts` is pollable by an external monitor.
+The scheduled tick now writes `ops_alerts` for the highest-frequency branches:
+`worker_subrequest_log.total >= 45/50`, an event paused for capacity for more
+than an hour, 3+ `team_formation` failures in the current incarnation, and a
+build turn with no `run_id` 30 minutes after dispatch. They are surfaced on
+`GET /headroom` and `GET /alerts`, and POSTed to `ALERT_WEBHOOK_URL` when that
+secret exists. `/headroom.cron.stale` computes the 15-minute heartbeat check
+(a dead cron cannot push its own alert). This closes the "silent wedge" shape
+even without a push destination; `GET /alerts` is pollable by an external
+monitor.
 
 Still open: no webhook destination is configured, so delivery to a human is
-still pull-based. The remaining runbook thresholds (3 consecutive
-`team_formation` failures, a dispatch with no `run_id`, cron heartbeat older
-than 15 minutes, OpenRouter remaining ≤5) are not all wired yet — the
-subrequest and capacity branches were chosen first because they caused the
-2026-10-31 outage. Acceptance: a test failure produces one alert and a healthy
-tick produces none; external delivery needs an `ALERT_WEBHOOK_URL` value and a
-one-time delivery test.
+still pull-based. OpenRouter remaining ≤5 is not separately alerted; the probe
+holds dispatches and a long hold becomes a `capacity_pause`. Acceptance: a
+test failure produces one alert and a healthy tick produces none; external
+delivery needs an `ALERT_WEBHOOK_URL` value and a one-time delivery test.
 
 ### R-2 — Post-event calibration over the judged population (P1, partial — public confidence label landed 2026-10-31)
 

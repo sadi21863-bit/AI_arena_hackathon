@@ -24,7 +24,7 @@ export const SUBREQUEST_WARN_THRESHOLD = 45;
 export interface OpsAlert {
   id: string;
   created_at: string;
-  kind: "subrequest_headroom" | "capacity_pause";
+  kind: "subrequest_headroom" | "capacity_pause" | "formation_failures" | "dispatch_no_run";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -169,6 +169,71 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
         `${paused.pause_reason ?? "no reason recorded"}. The probe is holding dispatches; ` +
         "this is a budget wait, not a code failure — do not rotate keys.",
       details: JSON.stringify({ paused_at: paused.paused_at, pause_reason: paused.pause_reason }),
+    });
+    raised += 1;
+    if (result.pushed) pushed += 1;
+  }
+
+  const formation = await env.DB.prepare(
+    `SELECT q.event_id, COUNT(*) AS failures, MAX(q.completed_at) AS last_at
+     FROM event_queue q JOIN archive_events e ON e.id = q.event_id
+     WHERE q.task_type = 'team_formation' AND q.status = 'failed'
+       AND q.completed_at >= datetime('now', '-24 hours')
+       AND q.completed_at >= e.start_date
+       AND e.abandoned_at IS NULL
+       AND e.status NOT IN ('complete', 'judged', 'failed')
+     GROUP BY q.event_id HAVING COUNT(*) >= 3
+     ORDER BY last_at DESC LIMIT 1`,
+  ).first<{ event_id: string; failures: number; last_at: string | null }>();
+
+  if (formation && !(await recentAlertExists(env, "formation_failures", formation.event_id, null))) {
+    const result = await raiseAlert(env, {
+      kind: "formation_failures",
+      severity: "warning",
+      event_id: formation.event_id,
+      task_type: null,
+      message:
+        `team_formation has failed ${formation.failures} time(s) for ${formation.event_id} ` +
+        `(last at ${formation.last_at ?? "an unrecorded time"}). Do not blind-retry — check the ` +
+        "subrequest cap, repo_url and scaffold before re-arming.",
+      details: JSON.stringify({ failures: formation.failures, last_at: formation.last_at }),
+    });
+    raised += 1;
+    if (result.pushed) pushed += 1;
+  }
+
+  const dispatch = await env.DB.prepare(
+    `SELECT b.turn_id, b.event_id, b.team_id, b.turn_number, b.dispatched_at
+     FROM build_turns b JOIN archive_events e ON e.id = b.event_id
+     WHERE b.run_id IS NULL AND b.status = 'dispatched'
+       AND b.dispatched_at <= datetime('now', '-30 minutes')
+       AND e.abandoned_at IS NULL
+       AND e.status NOT IN ('complete', 'judged', 'failed')
+     ORDER BY b.dispatched_at ASC LIMIT 1`,
+  ).first<{
+    turn_id: string;
+    event_id: string;
+    team_id: string;
+    turn_number: number;
+    dispatched_at: string | null;
+  }>();
+
+  if (dispatch && !(await recentAlertExists(env, "dispatch_no_run", dispatch.event_id, dispatch.turn_id))) {
+    const result = await raiseAlert(env, {
+      kind: "dispatch_no_run",
+      severity: "warning",
+      event_id: dispatch.event_id,
+      task_type: dispatch.turn_id,
+      message:
+        `build turn ${dispatch.turn_id} (${dispatch.event_id}, team ${dispatch.team_id}, turn ${dispatch.turn_number}) ` +
+        `was dispatched at ${dispatch.dispatched_at ?? "an unrecorded time"} but still has no run_id after 30 minutes. ` +
+        "The dispatch likely never reached GitHub Actions.",
+      details: JSON.stringify({
+        turn_id: dispatch.turn_id,
+        team_id: dispatch.team_id,
+        turn_number: dispatch.turn_number,
+        dispatched_at: dispatch.dispatched_at,
+      }),
     });
     raised += 1;
     if (result.pushed) pushed += 1;

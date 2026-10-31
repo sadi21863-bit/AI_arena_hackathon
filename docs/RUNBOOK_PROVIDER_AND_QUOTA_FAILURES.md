@@ -114,7 +114,10 @@ written to `ops_alerts`:
 
 - `worker_subrequest_log.total >= 45/50` (`subrequest_headroom`, warning at
   45-49, critical at >=50);
-- an event in `paused_capacity` for more than an hour (`capacity_pause`).
+- an event in `paused_capacity` for more than an hour (`capacity_pause`);
+- 3+ `team_formation` failures in the current incarnation (`formation_failures`);
+- a build turn still without a `run_id` 30 minutes after dispatch
+  (`dispatch_no_run`).
 
 Read them at `GET /alerts` or in the `/headroom` panel. Dedupe is one alert per
 `(kind, event, task)` per 24h, not per tick. If `ALERT_WEBHOOK_URL` is set, the
@@ -128,19 +131,20 @@ npx wrangler secret put ALERT_WEBHOOK_URL
 
 `GET /headroom.subrequest_headroom` also shows the latest measured
 `team_formation` cost against the 45 threshold, so the cap is visible before it
-wedges a cycle.
+wedges a cycle. `GET /headroom.cron.stale` is computed against a 15-minute
+threshold; a dead cron cannot push its own alert, so this is a pull check.
 
 The remaining thresholds are still manual:
 
 | signal | threshold | why |
 |---|---|---|
-| `team_formation` consecutive failures | 3 | catches a deterministic cap/config bug in 15 min, not 25h |
-| `worker_subrequest_log.total` | ≥ 45 / 50 | **automated** (above) |
-| `build_turns.run_id IS NULL` after dispatch | ≥ 1 | dispatch never reached Actions |
-| `cron.last_success_at` | > 15 min | silent Worker/cron failure |
-| OpenRouter remaining | ≤ 5 requests | the day's build budget is gone |
-| `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; dispatch cannot run |
-| event `paused_capacity` | > 1h | **automated** (above) |
+| `team_formation` consecutive failures | 3 | **automated** (`formation_failures`) |
+| `worker_subrequest_log.total` | ≥ 45 / 50 | **automated** (`subrequest_headroom`) |
+| `build_turns.run_id IS NULL` after dispatch | 30 min | **automated** (`dispatch_no_run`) |
+| `cron.last_success_at` | > 15 min | **surfaced** on `/headroom.cron.stale`; a dead cron cannot push |
+| OpenRouter remaining | ≤ 5 requests | manual; the probe holds dispatches and `capacity_pause` covers the long hold |
+| `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; `dispatch_no_run`/`formation_failures` catch the aftermath |
+| event `paused_capacity` | > 1h | **automated** (`capacity_pause`) |
 
 ## F. Ranking confidence (post-event)
 

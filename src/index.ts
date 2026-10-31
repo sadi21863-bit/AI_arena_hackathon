@@ -390,6 +390,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       const heartbeat = await env.DB.prepare(
         `SELECT last_tick_at, last_success_at, last_error FROM cron_heartbeat WHERE id = 'singleton'`
       ).first<{ last_tick_at: string | null; last_success_at: string | null; last_error: string | null }>();
+      const lastSuccessMs = heartbeat?.last_success_at
+        ? Date.parse(heartbeat.last_success_at.replace(" ", "T") + "Z")
+        : NaN;
+      const cronStale = !Number.isFinite(lastSuccessMs) || Date.now() - lastSuccessMs > 15 * 60 * 1000;
 
       // Harness drift: syncTeamHarness runs at dispatch time only, so a team
       // repo that is not currently building silently keeps an OLD harness
@@ -436,7 +440,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       return Response.json({
         day: today,
         usage: tiers,
-        cron: heartbeat ?? null,
+        cron: heartbeat ? { ...heartbeat, stale: cronStale, stale_after_minutes: 15 } : null,
         harness,
         alerts,
         subrequest_headroom: { threshold: 45, latest: subrequest },

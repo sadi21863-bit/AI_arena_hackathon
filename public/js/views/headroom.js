@@ -47,6 +47,13 @@ function cronLine(cron) {
       ${cron.last_success_at ? `Last success ${cron.last_success_at} UTC.` : "No successful tick recorded yet."}
     </span></div>`;
   }
+  if (cron.stale) {
+    return html`<div class="arena-note arena-note--danger"><span>⚠</span><span>
+      <b>Cron heartbeat is stale.</b> Last success ${cron.last_success_at ?? "never"} UTC;
+      the threshold is ${cron.stale_after_minutes ?? 15} minutes. A dead cron cannot push its own alert —
+      check the Worker schedule and the Cloudflare dashboard.
+    </span></div>`;
+  }
   return html`<div class="arena-note"><span>✓</span><span>Cron: last tick succeeded ${cron.last_tick_at} UTC.</span></div>`;
 }
 
