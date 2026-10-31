@@ -48,6 +48,17 @@ jobs:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
 
+      - name: Snapshot ranking quality
+        # Safety net for events judged before the Worker's snapshot hook
+        # existed. The hook writes at transition; this refreshes every terminal
+        # event from the live API and makes Headroom's history current.
+        if: always()
+        run: node scripts/snapshot_event_quality.mjs
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          ARENA_API_BASE: https://arena-api.sadi21863.workers.dev
+
       - name: Publish audit summary
         if: always()
         shell: bash

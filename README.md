@@ -60,8 +60,8 @@ the-arena/
 ## Docs map
 
 - `INCIDENT_2026-10-31_SUBREQUEST_STALL.md` — latest: 53/50 subrequest cap wedged a hackathon, then an abandoned `building` event wedged cadence; both fixed. `RUNBOOK_PROVIDER_AND_QUOTA_FAILURES.md` — forward-looking triage for dead models, quota walls, subrequest caps, abandoned events and the automated alert panel.
-- `CALIBRATION_RETROSPECTIVE_2026-10-31.md` — post-event judge-agreement analysis; gate failures are corroborated, passes are not certificates. The same metric now drives the public `quality` confidence label.
-- `ARTIFACT_AUDIT_2026-10-31.md` — output-contract audit baseline; ideas/critiques/build repos, including the failed-hackathon failure shape. Runs daily with `--persist`; the Archive shows the per-event result.
+- `CALIBRATION_RETROSPECTIVE_2026-10-31.md` — post-event judge-agreement analysis; gate failures are corroborated, passes are not certificates. The same metric drives the public `quality` label and durable `/headroom.ranking_quality` snapshots.
+- `ARTIFACT_AUDIT_2026-10-31.md` — structural + semantic-lite output-contract audit (ideas/critiques/build repos, duplicate ideas, thin code); runs daily with `--persist`; the Archive shows the per-event result.
 - `QUOTA_POSTURE_2026-10-31.md` — the single-account operating decision, revisit triggers, and the second-account owner decision. `MAINTAINERS.md` — ownership, responsibilities and the single-maintainer bus factor.
 - `INCIDENT_2026-09-23_HARNESS.md` — prompt-injection kills, Zen key pinning/failover, harness bugs caught by test turns.
 - `ARENA_BACKLOG.md` — the 2026-07-27 external review (Part 1 landed, Part 2 decided in `PART2_DECISIONS_2026-07-31.md`); history + open proposals.

@@ -69,6 +69,7 @@ const MIGRATIONS = [
   { file: "schema_week10_capacity_pause.sql", sentinel: { type: "column", table: "archive_events", name: "paused_from" } },
   { file: "schema_week10_event_quality.sql", sentinel: { type: "table", name: "event_quality" } },
   { file: "schema_week10_ops_alerts.sql", sentinel: { type: "table", name: "ops_alerts" } },
+  { file: "schema_week10b_quality_snapshots.sql", sentinel: { type: "table", name: "event_quality_snapshots" } },
 ];
 
 /**

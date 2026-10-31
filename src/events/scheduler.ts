@@ -42,6 +42,7 @@ import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
 import { buildDispatchBudgetAllows, openRouterKeyForTeam } from "./build-quota";
 import { finalizeWithPartialScores } from "../judges/scoring";
+import { recordEventQuality } from "../judges/quality-snapshot";
 import { DAILY_CAPS, TASK_MODELS, unitsUsedToday } from "../router";
 
 /**
@@ -511,6 +512,11 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
       return "ready_for_judging";
     }
     await env.DB.prepare(`UPDATE archive_events SET status = 'judged' WHERE id = ?`).bind(eventId).run();
+    try {
+      await recordEventQuality(env, eventId);
+    } catch (err) {
+      console.log(`quality snapshot failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+    }
     return "judged";
   }
 
@@ -886,6 +892,11 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
     await env.DB.prepare(
       `UPDATE archive_events SET status = 'judged', winner_team_id = ?, winning_idea_id = ? WHERE id = ?`
     ).bind(winner?.id ?? null, winner?.idea_id ?? null, eventId).run();
+    try {
+      await recordEventQuality(env, eventId);
+    } catch (err) {
+      console.log(`quality snapshot failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+    }
 
     // N-5: rate the agents now that both sides have final scores. Guarded
     // against replay by its own marker (agents/ratings.ts), which matters

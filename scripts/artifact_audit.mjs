@@ -192,6 +192,126 @@ const TEST_DIR_RE = /(^|\/)(test|tests|__tests__|spec)\//i;
 const TEST_NAME_RE = /\.(test|spec)\.[jt]sx?$/i;
 const PY_TEST_RE = /(^|\/)(test_.*\.py|.*_test\.py)$/i;
 
+/**
+ * Deterministic semantic-lite checks (R-3, 2026-10-31). These are not an LLM
+ * quality score and they do not fail `--strict`; they surface the failure shapes
+ * the structural checks cannot see: duplicate ideas, thin/empty code, tests with
+ * no assertions, and critiques pointing at nothing.
+ *
+ * Deliberately free: an LLM judge would spend the same inference budget the
+ * event needs, and a single event's sample is too small to calibrate a new
+ * quality score. These checks are a tripwire, not a verdict.
+ */
+const SEMANTIC_STOPWORDS = new Set([
+  "the", "and", "for", "with", "that", "this", "from", "into", "over", "under", "about",
+  "your", "their", "they", "them", "will", "can", "could", "should", "would", "have",
+  "has", "are", "was", "were", "its", "it's", "our", "you", "not", "but", "all", "any",
+  "new", "using", "use", "via", "per", "one", "two", "more", "most", "less", "than",
+  "then", "when", "where", "which", "who", "what", "how", "why", "while", "also",
+]);
+
+function semanticTokens(value) {
+  return new Set(
+    text(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 && !SEMANTIC_STOPWORDS.has(w)),
+  );
+}
+
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection += 1;
+  return intersection / (a.size + b.size - intersection);
+}
+
+function semanticAudit(rawIdeas, rawCritiques, builds) {
+  const nearDuplicates = [];
+  for (let i = 0; i < rawIdeas.length; i += 1) {
+    const a = rawIdeas[i];
+    const aTokens = semanticTokens(`${text(a.title)} ${text(a.one_liner)}`);
+    for (let j = i + 1; j < rawIdeas.length; j += 1) {
+      const b = rawIdeas[j];
+      const similarity = jaccard(aTokens, semanticTokens(`${text(b.title)} ${text(b.one_liner)}`));
+      if (similarity >= 0.82) {
+        nearDuplicates.push({
+          a: a.id,
+          b: b.id,
+          titles: [text(a.title), text(b.title)],
+          similarity: Math.round(similarity * 1000) / 1000,
+        });
+      }
+    }
+  }
+
+  const ideaIds = new Set(rawIdeas.map((idea) => idea.id));
+  const orphanCritiques = rawCritiques
+    .filter((critique) => !ideaIds.has(critique.target_id))
+    .map((critique) => ({ id: critique.id, target: critique.target_id }));
+
+  const genericRe = /\b(revolutionary|seamless|game-changing|all-in-one|everything app|one app|world-class|cutting-edge)\b/i;
+  const genericIdeas = rawIdeas
+    .filter((idea) => genericRe.test(`${text(idea.title)} ${text(idea.one_liner)}`))
+    .map((idea) => ({ id: idea.id, title: text(idea.title) }));
+
+  const thinBuilds = builds
+    .filter((build) => build.code?.thin)
+    .map((build) => ({
+      team: build.team,
+      repo: build.repo,
+      nonblank_lines: build.code.nonblank_lines,
+      files_sampled: build.code.sampled,
+    }));
+
+  const unassertedTests = builds
+    .filter((build) => build.test_files.length > 0 && (build.code?.assertion_hits ?? 0) === 0)
+    .map((build) => ({ team: build.team, repo: build.repo, test_files: build.test_files.slice(0, 3) }));
+
+  return {
+    near_duplicate_pairs: nearDuplicates,
+    orphan_critiques: orphanCritiques,
+    generic_ideas: genericIdeas,
+    thin_builds: thinBuilds,
+    unasserted_tests: unassertedTests,
+    warnings:
+      nearDuplicates.length + orphanCritiques.length + genericIdeas.length + thinBuilds.length + unassertedTests.length,
+  };
+}
+
+async function fetchTextFile(repo, filePath) {
+  const encoded = filePath.split("/").map(encodeURIComponent).join("/");
+  const res = await gh(`/repos/${repo}/contents/${encoded}`);
+  if (res.status !== 200 || !res.json?.content) return null;
+  return Buffer.from(res.json.content, "base64").toString("utf8");
+}
+
+async function fetchCodeStats(repo, productFiles, testFiles) {
+  const code = {
+    sampled: 0,
+    nonblank_lines: 0,
+    max_file_lines: 0,
+    assertion_hits: 0,
+    thin: false,
+  };
+  for (const filePath of productFiles.slice(0, 6)) {
+    const content = await fetchTextFile(repo, filePath);
+    if (!content) continue;
+    const lines = content.split(/\r?\n/).filter((line) => line.trim()).length;
+    code.sampled += 1;
+    code.nonblank_lines += lines;
+    code.max_file_lines = Math.max(code.max_file_lines, lines);
+  }
+  for (const filePath of testFiles.slice(0, 3)) {
+    const content = await fetchTextFile(repo, filePath);
+    if (!content) continue;
+    code.assertion_hits += (content.match(/\b(assert|expect|should|test\s*\(|it\s*\(|describe\s*\()/g) ?? []).length;
+  }
+  code.thin = code.sampled > 0 && code.nonblank_lines < 30;
+  return code;
+}
+
 async function auditBuild(team) {
   const checks = {
     repo_present: false,
@@ -205,6 +325,8 @@ async function auditBuild(team) {
   let productFiles = [];
   let testFiles = [];
   let verdict = null;
+  const emptyCode = () => ({ sampled: 0, nonblank_lines: 0, max_file_lines: 0, assertion_hits: 0, thin: false });
+  let code = emptyCode();
   const failList = () => Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
 
   if (!team.repo_url) {
@@ -218,6 +340,7 @@ async function auditBuild(team) {
       notes,
       product_files: [],
       test_files: [],
+      code,
       verdict,
     };
   }
@@ -234,6 +357,7 @@ async function auditBuild(team) {
       notes,
       product_files: [],
       test_files: [],
+      code,
       verdict,
     };
   }
@@ -251,6 +375,7 @@ async function auditBuild(team) {
       notes,
       product_files: [],
       test_files: [],
+      code,
       verdict,
     };
   }
@@ -261,6 +386,16 @@ async function auditBuild(team) {
   testFiles = blobs.filter((p) => TEST_DIR_RE.test(p) || TEST_NAME_RE.test(p) || PY_TEST_RE.test(p));
   checks.product_work = productFiles.length > 0;
   checks.has_test = testFiles.length > 0;
+
+  code = await fetchCodeStats(team.repo_url, productFiles, testFiles);
+  if (code.thin) {
+    notes.push(
+      `product code is thin: ${code.nonblank_lines} nonblank lines across ${code.sampled} sampled file(s)`,
+    );
+  }
+  if (testFiles.length > 0 && code.assertion_hits === 0) {
+    notes.push("test files contain no assertion-like calls");
+  }
 
   if (blobs.includes("VERIFICATION_REPORT.md")) {
     checks.has_verification_report = true;
@@ -291,6 +426,7 @@ async function auditBuild(team) {
     notes,
     product_files: productFiles,
     test_files: testFiles,
+    code,
     verdict,
   };
 }
@@ -318,6 +454,13 @@ function compactResult(result) {
     hackathon: result.hackathon ? { id: result.hackathon.id, fallback: result.hackathon.fallback } : null,
     summary: result.summary,
     failures,
+    semantic: {
+      near_duplicate_pairs: result.semantic.near_duplicate_pairs.slice(0, 10),
+      orphan_critiques: result.semantic.orphan_critiques.slice(0, 10),
+      generic_ideas: result.semantic.generic_ideas.slice(0, 10),
+      thin_builds: result.semantic.thin_builds,
+      unasserted_tests: result.semantic.unasserted_tests,
+    },
   };
 }
 
@@ -351,6 +494,10 @@ async function persistAudit(result) {
         hackathon: { id: result.hackathon.id, fallback: result.hackathon.fallback },
         summary: { builds: result.summary.builds, failures: buildFailures, warnings: buildWarnings },
         failures: { builds: compact.failures.builds },
+        semantic: {
+          thin_builds: result.semantic.thin_builds,
+          unasserted_tests: result.semantic.unasserted_tests,
+        },
       },
       buildFailures,
       buildWarnings,
@@ -440,6 +587,8 @@ async function main() {
     builds = await Promise.all(teams.map(auditBuild));
   }
 
+  const semantic = semanticAudit(rawIdeas, rawCritiques, builds);
+
   const summary = {
     ideas: {
       population: ideaPopulation,
@@ -461,12 +610,22 @@ async function main() {
       passed: builds.filter((b) => b.pass).length,
       failed: builds.filter((b) => !b.pass).length,
     },
+    semantic: {
+      near_duplicate_pairs: semantic.near_duplicate_pairs.length,
+      orphan_critiques: semantic.orphan_critiques.length,
+      generic_ideas: semantic.generic_ideas.length,
+      thin_builds: semantic.thin_builds.length,
+      unasserted_tests: semantic.unasserted_tests.length,
+      warnings: semantic.warnings,
+    },
     failures: 0,
     warnings: 0,
   };
   summary.failures = summary.ideas.failed + summary.critiques.failed + summary.builds.failed;
   summary.warnings =
-    summary.ideas.notes + builds.filter((b) => b.notes.some((n) => !n.includes("not a contract failure"))).length;
+    summary.ideas.notes +
+    builds.filter((b) => b.notes.some((n) => !n.includes("not a contract failure"))).length +
+    semantic.warnings;
 
   const result = {
     generated_at: new Date().toISOString(),
@@ -476,6 +635,7 @@ async function main() {
     ideas,
     critiques,
     builds,
+    semantic,
   };
 
   if (persist) {
@@ -518,7 +678,8 @@ async function main() {
     for (const build of builds) {
       console.log(
         `  ${build.pass ? "PASS" : "FAIL"} ${build.team} (${build.repo ?? "no repo"}) — ` +
-          `${build.product_files.length} product files, ${build.test_files.length} test files` +
+          `${build.product_files.length} product files, ${build.test_files.length} test files, ` +
+          `${build.code?.nonblank_lines ?? 0} nonblank lines` +
           (build.verdict ? `, verdict ${build.verdict}` : "") +
           (build.failed.length ? `; failed: ${build.failed.join(", ")}` : "") +
           (build.notes.length ? `; ${build.notes.join("; ")}` : ""),
@@ -526,7 +687,36 @@ async function main() {
     }
 
     console.log(
-      `\nSummary: ${summary.failures} contract failure(s), ${summary.warnings} note(s)` +
+      `\nSemantic (warnings only): ${semantic.near_duplicate_pairs.length} near-duplicate idea pair(s), ` +
+        `${semantic.orphan_critiques.length} orphan critique(s), ` +
+        `${semantic.generic_ideas.length} generic-phrase idea(s), ` +
+        `${semantic.thin_builds.length} thin build(s), ` +
+        `${semantic.unasserted_tests.length} test set(s) without assertions`,
+    );
+    for (const pair of semantic.near_duplicate_pairs.slice(0, 5)) {
+      console.log(
+        `  NEAR-DUPLICATE ${pair.a} ~ ${pair.b} (${(pair.similarity * 100).toFixed(0)}%) ` +
+          `"${pair.titles[0]}" / "${pair.titles[1]}"`,
+      );
+    }
+    for (const critique of semantic.orphan_critiques.slice(0, 5)) {
+      console.log(`  ORPHAN CRITIQUE ${critique.id} -> ${critique.target} (no matching idea in this event)`);
+    }
+    for (const idea of semantic.generic_ideas.slice(0, 5)) {
+      console.log(`  GENERIC ${idea.id} "${idea.title}"`);
+    }
+    for (const build of semantic.thin_builds.slice(0, 5)) {
+      console.log(
+        `  THIN BUILD ${build.team} (${build.repo}): ${build.nonblank_lines} nonblank lines ` +
+          `across ${build.files_sampled} sampled file(s)`,
+      );
+    }
+    for (const build of semantic.unasserted_tests.slice(0, 5)) {
+      console.log(`  NO ASSERTIONS ${build.team} (${build.repo}): ${build.test_files.join(", ")}`);
+    }
+
+    console.log(
+      `\nSummary: ${summary.failures} contract failure(s), ${summary.warnings} note(s)/semantic warning(s)` +
         ` across ${ideas.length + critiques.length + builds.length} audited artifacts.`,
     );
     if (persist) {

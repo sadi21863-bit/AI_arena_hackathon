@@ -85,9 +85,10 @@ change scores, or change weights — it makes the limit visible in the product.
 - Keep the 3-anchor gate for speed. Treat its **failures** as real warnings
   and its **pass** as permission to proceed, not as evidence of ranking
   quality.
-- Run the retrospective after each event. The Worker now computes it live and
-  labels the event; persisting the computed values per event remains backlog
-  R-2.
+- Run the retrospective after each event. The Worker computes it live and
+  `recordEventQuality`/`snapshot_event_quality.mjs` store a durable snapshot in
+  `event_quality_snapshots`, surfaced at `/headroom.ranking_quality`. The live
+  API remains the source of truth.
 - For small events, consider expanding the judged set or a sampled re-score.
   For all events, track per-judge correlation across several events before
   changing weights or removing a judge.

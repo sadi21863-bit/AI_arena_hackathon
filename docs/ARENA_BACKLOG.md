@@ -602,12 +602,17 @@ evidence-based, not statistical guarantees: fewer than 10 judged targets is
 agreement inside 0.60–0.95 is `high`, and the rest is `medium`. A hackathon
 inherits its parent ideathon's gate and is `low` at the usual 2-team final.
 
-Still open: persist the retrospective per event (it is recomputed from
-`judge_scores` today), and decide whether to expand the judged population for
-small events (the review's 15–20 suggestion; the 36-target event measured
-0.918). Do not change gate thresholds or judge weights from one event.
+`recordEventQuality` writes `event_quality_snapshots` at terminal judging, and
+`scripts/snapshot_event_quality.mjs` backfills/refreshes every terminal event
+from the live API. `/headroom.ranking_quality` shows the recent snapshots
+(event, level, population, retrospective r/band). The live API remains the
+source of truth; the snapshot is history, not a second gate.
 
-### R-3 — Artifact audit against output contracts (P1, structural contracts done 2026-10-31; semantic sample open)
+Still open: decide whether to expand the judged population for small events
+(the review's 15–20 suggestion; the 36-target event measured 0.918). Do not
+change gate thresholds or judge weights from one event.
+
+### R-3 — Artifact audit against output contracts (P1, structural + semantic-lite landed 2026-10-31; true semantic sample open)
 
 `scripts/artifact_audit.mjs` audits ideas (required fields/lengths/placeholders
 and finalist `build_scope`), critiques (JSON strength/weakness/suggestion) and
@@ -625,9 +630,16 @@ produced no repos, so the build sample is the previous complete cycle;
 audit happens without a human and a missing contract turns the workflow red.
 The baseline is stored for `event_dc3df601` and `event_693bc79b`.
 
-Still open: a semantic sample on top of the structural checks (the current
-thresholds catch empty/placeholder artifacts, not a plausible-but-bad idea).
-A new scaffold file must be added to the audit's `NON_PRODUCT` set and the
+The semantic-lite layer (warnings only, never `--strict` failures) adds
+near-duplicate idea pairs, orphan critiques, generic-phrase ideas, thin builds
+(<30 nonblank lines across sampled product files) and tests without assertions.
+It catches the historical duplicate shape: `event_2eaf0bb2` flags `Facilify`
+×2, `ForensicsHub Compliance Module` ×3 and `ESIGN Compliance Toolkit` ×2 at
+100%, plus `Memorix`/`Memorix Pro` at 86%.
+
+Still open: a true semantic quality sample (LLM or human) on top of these
+heuristics. The current checks do not judge whether a well-written idea is good,
+and a new scaffold file must be added to the audit's `NON_PRODUCT` set and the
 Worker's scaffold allowlists together, or it will count as product work.
 
 ### R-4 — Provider death runbook (done 2026-10-31)

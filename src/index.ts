@@ -409,15 +409,24 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       // an empty panel rather than taking down the operator dashboard.
       let alerts: Awaited<ReturnType<typeof recentAlerts>> = [];
       let subrequest: unknown = null;
+      let rankingQuality: unknown = [];
       try {
         alerts = await recentAlerts(env, 8);
         subrequest = await env.DB.prepare(
           `SELECT event_id, task_type, total, cap, outcome, created_at
            FROM worker_subrequest_log ORDER BY created_at DESC LIMIT 1`,
         ).first();
+        rankingQuality = (
+          await env.DB.prepare(
+            `SELECT event_id, confidence_level, judged_population, retrospective_correlation,
+                    retrospective_band, computed_at
+             FROM event_quality_snapshots ORDER BY computed_at DESC LIMIT 8`,
+          ).all()
+        ).results;
       } catch (err) {
         alerts = [];
         subrequest = { error: err instanceof Error ? err.message : String(err) };
+        rankingQuality = [];
       }
 
       return Response.json({
@@ -427,6 +436,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         harness,
         alerts,
         subrequest_headroom: { threshold: 45, latest: subrequest },
+        ranking_quality: rankingQuality,
         alert_webhook_configured: !!env.ALERT_WEBHOOK_URL,
       });
     }

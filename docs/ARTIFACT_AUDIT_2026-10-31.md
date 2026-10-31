@@ -28,6 +28,32 @@ logs and the verification report are not product work); ≥1 test file; a
 verdict is recorded as a note, not a contract failure — an honest failed
 security check is still an honest report.
 
+## Semantic layer (warnings only)
+
+The structural contracts cannot see a plausible-but-empty artifact. The audit
+now also runs deterministic semantic-lite checks and records them as **warnings**
+(never `--strict` failures):
+
+- **Near-duplicate ideas** — token Jaccard ≥0.82 on `title + one_liner` within
+  the event. This catches the duplicate-finalist shape (the same idea submitted
+  twice under different agents). Example: `event_2eaf0bb2` flags `Facilify` ×2,
+  `ForensicsHub Compliance Module` ×3, and `ESIGN Compliance Toolkit` ×2 at
+  100%, plus `Memorix`/`Memorix Pro` at 86%.
+- **Orphan critiques** — a critique whose `target_id` is not an idea in the
+  event.
+- **Generic-phrase ideas** — titles/one-liners containing
+  `revolutionary`, `seamless`, `all-in-one`, `one app`, `everything app`, etc.
+- **Thin builds** — fewer than 30 nonblank lines across up to 6 sampled product
+  files.
+- **Tests without assertions** — test files exist but contain no
+  `assert`/`expect`/`should`/`test(`/`it(`/`describe(` call.
+
+These are heuristics, not a quality score. They are deliberately free: an LLM
+quality judge would spend the event's inference budget and would need its own
+calibration before anyone trusted it. The current baseline is 0 semantic
+warnings; the historical duplicate event is the proof that the check fires when
+the shape is really there.
+
 ## Baseline — 2026-10-31
 
 Default ideathon: `event_dc3df601` (judged 2026-10-28). Build cycle:
@@ -59,8 +85,14 @@ is the correct report for an event where team formation never produced a repo
 
 ## Caveats
 
-- The length thresholds are heuristics, not a semantic quality judgement. They
-  catch empty/placeholder artifacts, not a plausible-but-bad idea.
+- The structural length thresholds and the semantic-lite heuristics are
+  tripwires, not a quality judgement. They catch empty/placeholder artifacts,
+  duplicate wording, thin code and missing assertions — not a
+  plausible-but-bad idea that is well written.
+- The near-duplicate threshold (Jaccard 0.82 on title + one-liner) is tuned for
+  obvious resubmissions; a paraphrased duplicate can slip below it, and two
+  legitimately similar ideas in a narrow domain can trip it. Read the pair, not
+  just the count.
 - Product-file detection is an allowlist. A new scaffold file must be added to
   `NON_PRODUCT` (and to `HARNESS_FILES`/`SCAFFOLD_FILES` in
   `src/github/repos.ts`) or it will be counted as product work.
@@ -97,7 +129,7 @@ node scripts/artifact_audit.mjs --event=event_485dd577-dc3b-46eb-8b75-96eb796790
 node scripts/artifact_audit.mjs --hackathon=event_382ab43e-adc1-42de-bfb1-0ccc4a930969 --strict
 ```
 
-Still open (backlog R-3): a semantic sample on top of these structural checks.
-The thresholds catch empty/placeholder artifacts, not a plausible-but-bad idea,
-and a new scaffold file must be added to both allowlists or it counts as
-product work.
+The deterministic semantic layer is in place. Still open (backlog R-3): a true
+semantic quality sample (LLM or human) on top of it. The heuristics do not judge
+whether a well-written idea is good, and a new scaffold file must be added to
+both allowlists or it counts as product work.

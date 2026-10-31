@@ -8,6 +8,7 @@
 
 import { fetchJson } from "../core/api.js";
 import { html, render, wireReload } from "../core/html.js";
+import { shortId } from "../core/fmt.js";
 
 const R = 74;
 const C = 2 * Math.PI * R;
@@ -91,6 +92,35 @@ function subrequestLine(headroom) {
   </div>`;
 }
 
+/**
+ * Durable quality snapshots written at terminal judging (R-2). The live event
+ * API recomputes the label on every request; this panel is the recorded history
+ * so drift is visible without opening the retrospective script.
+ */
+function qualityPanel(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    return html`<div class="arena-note">Ranking quality: no snapshots recorded yet. Terminal judging writes one, and the daily audit refreshes them.</div>`;
+  }
+  return html`
+    <div class="arena-card">
+      <div class="arena-section-label">Ranking quality snapshots</div>
+      <p class="v-headroom__quality-note">
+        Recorded when an event reaches terminal judging. The live <code>quality</code> label is
+        recomputed from <code>judge_scores</code> on every event request.
+      </p>
+      ${list.map((row) => html`
+        <div class="arena-note ${row.confidence_level === "low" ? "arena-note--warn" : ""}">
+          <span>${row.confidence_level === "low" ? "⚠" : row.confidence_level === "high" ? "✓" : "◆"}</span><span>
+            <b>${row.confidence_level.toUpperCase()}</b> · ${shortId(row.event_id, 18)} ·
+            n=${row.judged_population} ·
+            r=${row.retrospective_correlation ?? "n/a"} (${row.retrospective_band}) ·
+            ${row.computed_at} UTC
+          </span>
+        </div>`)}
+    </div>`;
+}
+
 export async function mount(el) {
   let timer = null;
   let disposed = false;
@@ -130,7 +160,8 @@ export async function mount(el) {
       <div class="v-headroom__grid">${(data.usage || []).map(gauge)}</div>
       ${cronLine(data.cron)}
       ${subrequestLine(data.subrequest_headroom)}
-      ${alertsPanel(data.alerts, data.alert_webhook_configured)}`);
+      ${alertsPanel(data.alerts, data.alert_webhook_configured)}
+      ${qualityPanel(data.ranking_quality)}`);
   }
 
   await load();

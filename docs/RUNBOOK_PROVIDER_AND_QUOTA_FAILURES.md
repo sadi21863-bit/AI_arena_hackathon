@@ -147,15 +147,19 @@ The remaining thresholds are still manual:
 `GET /events`, `/events/summary` and `/events/:id` carry a `quality` object with
 `level` (`high`/`medium`/`low`/`unrated`), the judged population, the pre-event
 gate and the post-event agreement. The Archive and Live views show the label;
-low-confidence rankings are explicitly provisional. This is a description of
-how much the ranking can bear, not a gate and not a score change. See
-`src/judges/confidence.ts` for the exact thresholds and the 2026-10-31
-retrospective caveat.
+low-confidence rankings are explicitly provisional. Snapshots are written at
+terminal judging into `event_quality_snapshots` and shown under
+`/headroom.ranking_quality` (event, level, n, retrospective r/band). This is a
+description of how much the ranking can bear, not a gate and not a score
+change. See `src/judges/confidence.ts` for the exact thresholds and the
+2026-10-31 retrospective caveat.
 
 The artifact audit is separate: `scripts/artifact_audit.mjs --persist` records
 contract results in `event_quality`, and the daily `Artifact audit` workflow
-runs it automatically. A red run means a missing output contract, not a low
-score.
+runs it automatically, then refreshes `event_quality_snapshots`. A red run
+means a missing output contract, not a low score. The semantic-lite checks
+(near-duplicate ideas, orphan critiques, generic phrases, thin builds, tests
+without assertions) are warnings only and never fail `--strict`.
 
 The larger hardening items are scoped in `docs/ARENA_BACKLOG.md`; the quota
 posture decision is in `docs/QUOTA_POSTURE_2026-10-31.md`.

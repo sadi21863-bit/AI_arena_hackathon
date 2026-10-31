@@ -5,6 +5,17 @@ notes what changed behavior in production and why.
 
 ## 2026-10-31
 
+- **Quality snapshots and a semantic-lite audit layer.** `recordEventQuality`
+  writes `event_quality_snapshots` when an event reaches terminal judging, and
+  `scripts/snapshot_event_quality.mjs` backfills/refreshes every terminal event
+  from the live API. `/headroom.ranking_quality` shows the recent labels
+  (event, level, population, retrospective r/band). The artifact audit now also
+  checks semantic-lite shapes — near-duplicate ideas (Jaccard ≥0.82 on
+  title+one-liner), orphan critiques, generic phrases, thin builds (<30
+  nonblank lines across sampled product files) and tests without assertions.
+  These are warnings, never `--strict` failures; `event_2eaf0bb2` flags the
+  historical duplicate shape (`Facilify` ×2, `ForensicsHub` ×3, `ESIGN
+  Compliance Toolkit` ×2) while the current baseline stays at 0.
 - **Durable ops alerts and a public ranking-confidence label.** The scheduled
   tick now writes `ops_alerts` for `worker_subrequest_log.total >= 45/50` and
   for an event paused on capacity for over an hour; `GET /headroom` and

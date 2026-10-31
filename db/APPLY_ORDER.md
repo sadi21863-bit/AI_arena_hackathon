@@ -30,6 +30,7 @@ node scripts/apply_schema.js --remote --status
 | 16 | `schema_week10_capacity_pause.sql` | #2 (ALTERs `archive_events`: `paused_from`/`paused_at`/`pause_reason`) |
 | 17 | `schema_week10_event_quality.sql` | #2 (references `archive_events.id` by value; creates `event_quality`) |
 | 18 | `schema_week10_ops_alerts.sql` | — (creates `ops_alerts`) |
+| 19 | `schema_week10b_quality_snapshots.sql` | #2 (references `archive_events.id` by value; creates `event_quality_snapshots`) |
 
 `seed_agents.sql` is **not** in the list. It is data, not schema — re-running it
 against a live archive would be a data change rather than a no-op. Apply it by
@@ -37,7 +38,7 @@ hand exactly once when bootstrapping a new database.
 
 ## Which files are safe to re-run
 
-Files 1, 10, 11, 12, 13, 17 and 18 use `IF NOT EXISTS` throughout and are idempotent.
+Files 1, 10, 11, 12, 13, 17, 18 and 19 use `IF NOT EXISTS` throughout and are idempotent.
 **Files 2-9, 14 and 15 are not** — they use bare `CREATE TABLE` and `ALTER TABLE ADD
 COLUMN`, both of which error on a second run. That's exactly why the tracking
 table exists: "apply everything and let the duplicates fail harmlessly" was
