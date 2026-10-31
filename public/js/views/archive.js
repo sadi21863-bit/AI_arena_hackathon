@@ -55,8 +55,8 @@ function confidenceChip(quality) {
 function auditChip(audit) {
   if (!audit) return "";
   const title =
-    `Artifact audit ${audit.audited_at ?? ""}: ${audit.failures ?? 0} contract failure(s), ` +
-    `${audit.warnings ?? 0} note(s)`;
+    `Structural artifact audit ${audit.audited_at ?? ""}: ${audit.failures ?? 0} contract failure(s), ` +
+    `${audit.warnings ?? 0} note(s). This is a tripwire, not a quality score.`;
   return audit.failures > 0
     ? chip(`audit ⚠ ${audit.failures}`, "arena-chip--warn", title)
     : chip("audit ✓", "arena-chip--ok", title);
