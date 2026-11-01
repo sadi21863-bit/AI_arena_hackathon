@@ -294,7 +294,7 @@ export async function recordQuotaHold(env: Env, eventId: string, teamName: strin
   // accounts, so suppressing the second team's hold would hide the arena-wide
   // signal the posture review needs. See openRouterAccountForTeam.
   if (await recentAlertExists(env, "quota_hold", eventId, teamName)) return false;
-  const account = openRouterAccountForTeam(teamName);
+  const account = openRouterAccountForTeam(teamName, env.OPEN_ROUTER_API_KEY_2);
   const result = await raiseAlert(env, {
     kind: "quota_hold",
     severity: "warning",

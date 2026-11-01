@@ -101,6 +101,9 @@ is due. The scheduled tick raises one `quota_posture_review` alert (deduped for
 
 `recordQuotaHold` is deduped per **team**, so alpha's hold cannot suppress
 beta's; the account is recorded in `details.account` for the posture query.
+The account reflects the key actually selected: beta is account 2 only when
+`OPEN_ROUTER_API_KEY_2` is configured; otherwise beta falls back to account 1,
+and its hold is attributed there.
 
 This is deliberately a proxy, not proof of trigger #1. A hold means one
 account's probe refused a dispatch; it does not prove a scheduled turn was

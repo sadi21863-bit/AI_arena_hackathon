@@ -73,9 +73,16 @@ export type OpenRouterAccount = 1 | 2;
 /**
  * Which independent account a team's key belongs to. One source of truth for
  * the scheduler, hold attribution, and the workflow's TEAM_KEY_PIN.
+ *
+ * `key2` matters: when the second key is unset, `openRouterKeyForTeam` falls
+ * back to key 1, so beta is spending account 1. Attributing that hold to
+ * account 2 would invent an arena-wide squeeze that did not happen.
  */
-export function openRouterAccountForTeam(teamName: string): OpenRouterAccount {
-  return teamName === "beta" ? 2 : 1;
+export function openRouterAccountForTeam(
+  teamName: string,
+  key2?: string,
+): OpenRouterAccount {
+  return teamName === "beta" && key2 ? 2 : 1;
 }
 
 /**
@@ -87,7 +94,7 @@ export function openRouterKeyForTeam(
   key1: string | undefined,
   key2: string | undefined
 ): string | undefined {
-  return openRouterAccountForTeam(teamName) === 2 && key2 ? key2 : key1;
+  return openRouterAccountForTeam(teamName, key2) === 2 ? key2 : key1;
 }
 
 /** Pure decision from an /api/v1/key response body. */

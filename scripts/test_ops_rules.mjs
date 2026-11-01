@@ -12,7 +12,7 @@
  */
 import assert from "node:assert/strict";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
-import { openRouterAccountForTeam } from "../src/events/build-quota.ts";
+import { openRouterAccountForTeam, openRouterKeyForTeam } from "../src/events/build-quota.ts";
 import { accountIndependence } from "../src/observability/quota-accounts.ts";
 import {
   QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD,
@@ -54,9 +54,14 @@ assert.equal(agreementBand(0.63), "substantial");
 assert.equal(agreementBand(null), "undefined");
 
 // Two independent accounts, pinned one per team (measured 2026-11-01).
-assert.equal(openRouterAccountForTeam("beta"), 2);
-assert.equal(openRouterAccountForTeam("alpha"), 1);
-assert.equal(openRouterAccountForTeam("gamma"), 1, "only beta is pinned to account 2");
+assert.equal(openRouterAccountForTeam("beta", "key2"), 2);
+assert.equal(openRouterAccountForTeam("alpha", "key2"), 1);
+assert.equal(openRouterAccountForTeam("gamma", "key2"), 1, "only beta is pinned to account 2");
+assert.equal(openRouterAccountForTeam("beta"), 1, "missing key 2 means beta spends account 1");
+assert.equal(openRouterAccountForTeam("beta", ""), 1, "empty key 2 is not configured");
+assert.equal(openRouterKeyForTeam("beta", "k1", "k2"), "k2");
+assert.equal(openRouterKeyForTeam("beta", "k1", undefined), "k1", "unset key 2 falls back to key 1");
+assert.equal(openRouterKeyForTeam("alpha", "k1", "k2"), "k1");
 
 // Independence must never be claimed from a missing or failed probe.
 assert.equal(accountIndependence(null, "abc"), null);

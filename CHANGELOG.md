@@ -11,10 +11,12 @@ notes what changed behavior in production and why.
   0/50 on the same UTC day). The 2026-10-31 note's "one account" premise was
   wrong. Teams are pinned one per account (alpha→1, beta→2; 100 requests/day
   total). `recordQuotaHold` now dedupes per team so the second account's hold is
-  not suppressed, and `/headroom.quota_posture` reports distinct accounts and
-  same-day-both-accounts. `quota_posture_review` fires when both accounts hold
-  on the same day, or on 2+ events / 3+ days; it prompts a pinning/capacity
-  review, not a third account. Reproduce with `npm run quota:probe`.
+  not suppressed, and attributes the hold to the key actually used (beta falls
+  back to account 1 when key 2 is unset); `/headroom.quota_posture` reports
+  distinct accounts and same-day-both-accounts. `quota_posture_review` fires
+  when both accounts hold on the same day, or on 2+ events / 3+ days; it
+  prompts a pinning/capacity review, not a third account. Reproduce with
+  `npm run quota:probe`.
 - **Production account identity is checkable without a build.**
   `GET /admin/quota/accounts` (admin bearer) probes the Worker's two configured
   OpenRouter keys and returns SHA-256 account/workspace prefixes plus daily

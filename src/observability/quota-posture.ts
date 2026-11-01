@@ -126,7 +126,7 @@ export async function loadQuotaPosture(env: Env): Promise<QuotaPosture> {
     trigger,
     caveat:
       "Proxy only: a quota_hold means one team's pinned account refused a dispatch, not that the arena is provably out of budget. " +
-      "The two configured keys are independent accounts (alpha -> 1, beta -> 2), so a single hold can coexist with a healthy build on the other. " +
+      "The two configured keys are independent accounts (alpha -> 1, beta -> 2 when the second key is configured), so a single hold can coexist with a healthy build on the other. " +
       "review_due fires when both accounts hold on the same UTC day, or when holds recur across 2+ events / 3+ days. " +
       "It prompts an owner review of pinning and capacity; it never provisions keys or credit automatically.",
   };
