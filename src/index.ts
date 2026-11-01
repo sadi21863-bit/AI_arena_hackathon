@@ -24,6 +24,7 @@ import { buildEventQuality, type AuditSummary, type CalibrationRow, type Quality
 import type { JudgeScoreRow } from "./judges/confidence";
 import { checkOperationalAlerts, recentAlerts } from "./observability/alerts";
 import { loadQuotaPosture } from "./observability/quota-posture";
+import { probeOpenRouterAccounts } from "./observability/quota-accounts";
 import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
 
@@ -1269,6 +1270,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
          FROM judge_scores WHERE event_id = ?`
       ).bind(judgeScoresMatch[1]).all();
       return Response.json(scores.results);
+    }
+
+    // Admin-only, read-only: verifies that the two configured OpenRouter keys
+    // are independent accounts without disclosing either key or the raw
+    // account ids. Secret values are write-only, so this is the post-rotation
+    // check that otherwise waits for the first beta dispatch.
+    if (url.pathname === "/admin/quota/accounts" && request.method === "GET") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      return Response.json(await probeOpenRouterAccounts(env));
     }
 
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table

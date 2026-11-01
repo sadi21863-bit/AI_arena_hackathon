@@ -686,9 +686,10 @@ posture and the monitoring proxy (`/headroom.quota_posture`,
 `quota_posture_review`).
 
 Still owner-gated: a **third** account or paid credits, only if both current
-accounts prove insufficient. Acceptance for the existing pin: the next
-hackathon's beta turn probes account 2 and both teams build within their own
-daily caps.
+accounts prove insufficient. Acceptance for the existing pin:
+`GET /admin/quota/accounts` reports two independent account hashes for the
+deployed keys, and the next hackathon's beta turn probes account 2 while both
+teams build within their own daily caps.
 
 ### R-6 — Bus factor / second maintainer (P1, blocked on owner)
 

@@ -49,8 +49,11 @@ account/workspace ids, and the daily counter. It never prints the key.
 The Worker secret list contains both `OPEN_ROUTER_API_KEY` and
 `OPEN_ROUTER_API_KEY_2`, and team repos receive them through
 `ensureTeamRepoSecrets`. The measurement above used the local `.env` values.
-Secret values are write-only, so the first beta dispatch is the live check that
-the production value is the independent account.
+Secret values are write-only, so the deployed values are checked separately:
+`GET /admin/quota/accounts` (bearer token) probes the Worker's own configured
+keys and returns the same hash prefixes plus the daily counters — never the
+keys. Run it after any rotation; a `SAME account` verdict means the posture is
+50/day, not 100.
 
 ## Decision (2026-10-31, account premise corrected 2026-11-01)
 

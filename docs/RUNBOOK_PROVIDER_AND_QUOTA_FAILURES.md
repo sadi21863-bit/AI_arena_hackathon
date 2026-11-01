@@ -68,7 +68,10 @@ quota probe kills the container before a model call.
 3. The two configured keys are two independent accounts (measured 2026-11-01),
    pinned one per team; a hold on one does not mean the other is spent. A
    **third** account or paid credit is an owner decision, not an automatic fix.
-4. If dispatches are held, verify the queue has no `pending` items that will
+4. After any key rotation, `GET /admin/quota/accounts` (admin bearer) re-checks
+   that the deployed pair is still two independent accounts and reports each
+   account's daily counter. It prints hash prefixes, never the keys.
+5. If dispatches are held, verify the queue has no `pending` items that will
    burn the next day's budget on stale work.
 
 ## C. Dead build model (404 / provider error)

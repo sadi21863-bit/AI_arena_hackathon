@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
 import { openRouterAccountForTeam } from "../src/events/build-quota.ts";
+import { accountIndependence } from "../src/observability/quota-accounts.ts";
 import {
   QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD,
   QUOTA_POSTURE_DAY_THRESHOLD,
@@ -56,6 +57,12 @@ assert.equal(agreementBand(null), "undefined");
 assert.equal(openRouterAccountForTeam("beta"), 2);
 assert.equal(openRouterAccountForTeam("alpha"), 1);
 assert.equal(openRouterAccountForTeam("gamma"), 1, "only beta is pinned to account 2");
+
+// Independence must never be claimed from a missing or failed probe.
+assert.equal(accountIndependence(null, "abc"), null);
+assert.equal(accountIndependence("abc", null), null);
+assert.equal(accountIndependence("abc", "def"), true);
+assert.equal(accountIndependence("abc", "abc"), false);
 
 // Quota posture: both accounts on the same UTC day, OR two distinct events,
 // OR three distinct UTC days in the window.

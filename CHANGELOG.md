@@ -15,6 +15,12 @@ notes what changed behavior in production and why.
   same-day-both-accounts. `quota_posture_review` fires when both accounts hold
   on the same day, or on 2+ events / 3+ days; it prompts a pinning/capacity
   review, not a third account. Reproduce with `npm run quota:probe`.
+- **Production account identity is checkable without a build.**
+  `GET /admin/quota/accounts` (admin bearer) probes the Worker's two configured
+  OpenRouter keys and returns SHA-256 account/workspace prefixes plus daily
+  counters — never the keys. This removes the "wait for the first beta
+  dispatch" blind spot after a rotation; `npm run quota:probe` does the same for
+  the local `.env`.
 - **Semantic sample calibrated, and its overall verdict demoted.** A second,
   independent free model reviewed the same 10 ideas as the first pass.
   Overall exact agreement was 5/10 (κ=0.138, slight) but within-one agreement
