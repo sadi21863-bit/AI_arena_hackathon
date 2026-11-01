@@ -385,10 +385,10 @@ jobs:
           # failed attempt, not a dead team. Kept ABOVE `docker run`: comment
           # lines inside the -e chain break it (`-e: command not found`,
           # found live 2026-09-23).
-          # Caveat: separate pools only if the keys belong to SEPARATE accounts
-          # on the SAME provider — OpenRouter's free-tier daily cap is per
-          # account, so a second key on the same account adds no quota. Unset
-          # _2 behaves exactly like before.
+          # Measured 2026-11-01: the two configured keys ARE separate accounts
+          # on the same provider (independent daily counters), so the pin
+          # provides 2 x 50 requests/day. A second key on the SAME account
+          # would add no quota. Unset _2 behaves exactly like before.
           # Cadence note (2026-10-15): with the free tier, a team's day is one
           # budgeted session on its pinned pool (the scheduler holds dispatches
           # when a pool's cap is spent — src/events/build-quota.ts), so the
@@ -667,8 +667,9 @@ jobs:
             #
             # So this is a PROVIDER-ACCESS failure, not a bad key and not an
             # agent-discipline failure. It is still not retried on the failover
-            # model: auth-shaped rejections repeat identically on a second key from
-            # the same account, so attempt 2 burns an identical failure. Named
+            # model or the other pool: an auth/free-tier rejection is
+            # provider- and key-level, not model-level, so a retry on the other
+            # account burns an identical failure. Named
             # explicitly so it exits before the generic "agent emitted text" message
             # below and so no operator is told to rotate a working credential.
             if grep -qiE 'Invalid credential|401 Unauthorized|"statusCode":401|unauthorized|invalid[_ ]api[_ ]key|FreeUsageLimitError|free usage exceeded|FreeTierError' \
