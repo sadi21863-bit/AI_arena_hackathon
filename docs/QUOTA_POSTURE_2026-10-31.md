@@ -14,14 +14,15 @@ Measured with `GET https://openrouter.ai/api/v1/key` on 2026-11-01 (UTC):
 
 | signal | key 1 | key 2 |
 |---|---|---|
-| `creator_user_id` | `user_3Kic…` | `user_3Klb…` |
-| `workspace_id` | `a5d12713…` | `76c8e724…` |
+| `creator_user_id` (sha256 prefix) | `dd3e918c` | `22aca750` |
+| `workspace_id` (sha256 prefix) | `867d952c` | `0546183d` |
 | `free_model_daily_requests` (same UTC day) | 8 / 50 used | 0 / 50 used |
 | `is_free_tier` | true | true |
 
 Different creator ids and workspaces, with independent daily counters on the
-same UTC day, are two accounts — not two keys on one account. Reproduce the
-check without printing key values:
+same UTC day, are two accounts — not two keys on one account. The table shows
+the same SHA-256 prefixes `quota_probe.mjs` prints; raw account and workspace
+ids are not published. Reproduce the check without printing key values:
 
 ```bash
 npm run quota:probe        # add --json for machine output
