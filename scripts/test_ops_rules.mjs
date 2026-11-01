@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
 import { openRouterAccountForTeam, openRouterKeyForTeam } from "../src/events/build-quota.ts";
-import { accountIndependence } from "../src/observability/quota-accounts.ts";
+import { accountIndependence, probeOpenRouterAccounts } from "../src/observability/quota-accounts.ts";
 import {
   QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD,
   QUOTA_POSTURE_DAY_THRESHOLD,
@@ -68,6 +68,46 @@ assert.equal(accountIndependence(null, "abc"), null);
 assert.equal(accountIndependence("abc", null), null);
 assert.equal(accountIndependence("abc", "def"), true);
 assert.equal(accountIndependence("abc", "abc"), false);
+
+// The admin probe must never echo key material, and must not claim
+// independence when the provider returns the same (or no) account id.
+const realFetch = globalThis.fetch;
+const fetchStub = (sameAccount) => async (_url, init) => {
+  const auth = init?.headers?.Authorization ?? "";
+  const id = sameAccount ? "user_same" : auth.includes("k1") ? "user_a" : "user_b";
+  return new Response(
+    JSON.stringify({
+      data: {
+        creator_user_id: id,
+        workspace_id: `ws_${id}`,
+        is_free_tier: true,
+        free_model_daily_requests: { used: 1, limit: 50, remaining: 49 },
+      },
+    }),
+    { status: 200 },
+  );
+};
+
+globalThis.fetch = fetchStub(false);
+const twoAccounts = await probeOpenRouterAccounts({
+  OPEN_ROUTER_API_KEY: "k1-secret",
+  OPEN_ROUTER_API_KEY_2: "k2-secret",
+});
+assert.equal(twoAccounts.independent, true);
+assert.match(twoAccounts.verdict, /two independent accounts/);
+assert.equal(twoAccounts.accounts[0].daily_remaining, 49);
+assert.equal(JSON.stringify(twoAccounts).includes("k1-secret"), false, "probe must not echo key 1");
+assert.equal(JSON.stringify(twoAccounts).includes("k2-secret"), false, "probe must not echo key 2");
+
+globalThis.fetch = fetchStub(true);
+const sameAccount = await probeOpenRouterAccounts({
+  OPEN_ROUTER_API_KEY: "k1-secret",
+  OPEN_ROUTER_API_KEY_2: "k2-secret",
+});
+assert.equal(sameAccount.independent, false);
+assert.match(sameAccount.verdict, /SAME account/);
+
+globalThis.fetch = realFetch;
 
 // Quota posture: both accounts on the same UTC day, OR two distinct events,
 // OR three distinct UTC days in the window.
