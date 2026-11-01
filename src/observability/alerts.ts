@@ -18,7 +18,7 @@
  * without a row every 5 minutes.
  */
 import type { Env } from "../env";
-import { QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
+import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
 import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
 
 export const SUBREQUEST_WARN_THRESHOLD = 45;
@@ -256,9 +256,11 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
     const posture = await loadQuotaPosture(env);
     if (posture.review_due && !(await recentAlertExists(env, "quota_posture_review", null, null, 7))) {
       const basis =
-        posture.trigger === "events"
-          ? `${posture.distinct_events} distinct event(s)`
-          : `${posture.distinct_days} distinct UTC day(s)`;
+        posture.trigger === "both_accounts_same_day"
+          ? `both independent accounts on ${posture.days_with_both_accounts} UTC day(s)`
+          : posture.trigger === "events"
+            ? `${posture.distinct_events} distinct event(s)`
+            : `${posture.distinct_days} distinct UTC day(s)`;
       const result = await raiseAlert(env, {
         kind: "quota_posture_review",
         severity: "warning",
@@ -267,8 +269,8 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
         message:
           `quota_hold was recorded for ${basis} in the last ${QUOTA_POSTURE_WINDOW_DAYS} days ` +
           `(last at ${posture.last_hold_at ?? "an unrecorded time"}). This crosses the documented ` +
-          "revisit proxy in docs/QUOTA_POSTURE_2026-10-31.md: review the single-account decision. " +
-          "Do not provision a second account or add paid credit automatically.",
+          "revisit proxy in docs/QUOTA_POSTURE_2026-10-31.md: review team pinning and capacity. " +
+          "Do not rotate keys, provision a third account, or add paid credit automatically.",
         details: JSON.stringify(posture),
       });
       raised += 1;
@@ -284,20 +286,25 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
 /**
  * Called by the scheduler when the OpenRouter probe refuses a dispatch. This is
  * the "remaining <= floor" signal in the runbook, made durable: without it a
- * held dispatch is only visible as an unchanged event. Deduped per event/24h.
+ * held dispatch is only visible as an unchanged event. Deduped per team/24h,
+ * so the second account's hold is not suppressed by the first.
  */
 export async function recordQuotaHold(env: Env, eventId: string, teamName: string): Promise<boolean> {
-  if (await recentAlertExists(env, "quota_hold", eventId, null)) return false;
+  // Dedupe per team, not per event: alpha and beta are pinned to independent
+  // accounts, so suppressing the second team's hold would hide the arena-wide
+  // signal the posture review needs. See openRouterAccountForTeam.
+  if (await recentAlertExists(env, "quota_hold", eventId, teamName)) return false;
+  const account = openRouterAccountForTeam(teamName);
   const result = await raiseAlert(env, {
     kind: "quota_hold",
     severity: "warning",
     event_id: eventId,
-    task_type: null,
+    task_type: teamName,
     message:
-      `build dispatch held for ${eventId} (${teamName}): the OpenRouter free-tier probe reports ` +
-      `fewer than ${QUOTA_DISPATCH_FLOOR} requests remaining. This is a budget wait until the UTC reset — ` +
-      "do not rotate keys or add a provider.",
-    details: JSON.stringify({ team_name: teamName, remaining_floor: QUOTA_DISPATCH_FLOOR }),
+      `build dispatch held for ${eventId} (${teamName}, account ${account}): the OpenRouter free-tier probe ` +
+      `on that account reports fewer than ${QUOTA_DISPATCH_FLOOR} requests remaining. This is a budget wait ` +
+      "until the UTC reset; the other team's account is independent. Do not rotate keys or add a provider.",
+    details: JSON.stringify({ team_name: teamName, account, remaining_floor: QUOTA_DISPATCH_FLOOR }),
   });
   return result.pushed;
 }

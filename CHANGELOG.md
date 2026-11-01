@@ -5,6 +5,16 @@ notes what changed behavior in production and why.
 
 ## 2026-11-01
 
+- **Quota posture corrected: two independent accounts, not one.** Measured
+  `GET /api/v1/key` on both configured keys: distinct `creator_user_id` and
+  `workspace_id`, and independent `free_model_daily_requests` counters (8/50 vs
+  0/50 on the same UTC day). The 2026-10-31 note's "one account" premise was
+  wrong. Teams are pinned one per account (alpha→1, beta→2; 100 requests/day
+  total). `recordQuotaHold` now dedupes per team so the second account's hold is
+  not suppressed, and `/headroom.quota_posture` reports distinct accounts and
+  same-day-both-accounts. `quota_posture_review` fires when both accounts hold
+  on the same day, or on 2+ events / 3+ days; it prompts a pinning/capacity
+  review, not a third account. Reproduce with `npm run quota:probe`.
 - **Semantic sample calibrated, and its overall verdict demoted.** A second,
   independent free model reviewed the same 10 ideas as the first pass.
   Overall exact agreement was 5/10 (κ=0.138, slight) but within-one agreement
@@ -18,12 +28,12 @@ notes what changed behavior in production and why.
   `docs/SEMANTIC_CALIBRATION_2026-11-01.md`; tooling:
   `scripts/semantic_review_llm.mjs`, `scripts/semantic_agreement.mjs`.
 - **Quota-posture revisit trigger is now visible.** `/headroom.quota_posture`
-  reports `quota_hold` counts, distinct events/days and the last hold in a
-  14-day window. The scheduled tick raises one `quota_posture_review` alert
-  (7-day dedupe) when two distinct events or three distinct UTC days record a
-  hold. It is explicitly a proxy for the documented revisit trigger, not proof
-  that a turn was lost, and it does not provision a second account or change the
-  hold. See `docs/QUOTA_POSTURE_2026-10-31.md` and
+  reports `quota_hold` counts, distinct events/days/accounts and the last hold
+  in a 14-day window. The scheduled tick raises one `quota_posture_review` alert
+  (7-day dedupe) when both accounts hold on the same UTC day, or holds span two
+  distinct events or three distinct UTC days. It is explicitly a proxy for the
+  documented revisit trigger, not proof that a turn was lost, and it does not
+  provision keys or credit. See `docs/QUOTA_POSTURE_2026-10-31.md` and
   `src/observability/quota-posture.ts`.
 - **Ops-rule regression tests in CI.** `npm run test:ops` pins the kappa math
   (including the undefined-constant-category case) and the quota-posture

@@ -12,7 +12,9 @@
  */
 import assert from "node:assert/strict";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
+import { openRouterAccountForTeam } from "../src/events/build-quota.ts";
 import {
+  QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD,
   QUOTA_POSTURE_DAY_THRESHOLD,
   QUOTA_POSTURE_EVENT_THRESHOLD,
   quotaPostureReviewDue,
@@ -50,15 +52,24 @@ assert.equal(agreementBand(0.138), "slight");
 assert.equal(agreementBand(0.63), "substantial");
 assert.equal(agreementBand(null), "undefined");
 
-// Quota posture: two distinct events OR three distinct UTC days in the window.
+// Two independent accounts, pinned one per team (measured 2026-11-01).
+assert.equal(openRouterAccountForTeam("beta"), 2);
+assert.equal(openRouterAccountForTeam("alpha"), 1);
+assert.equal(openRouterAccountForTeam("gamma"), 1, "only beta is pinned to account 2");
+
+// Quota posture: both accounts on the same UTC day, OR two distinct events,
+// OR three distinct UTC days in the window.
+assert.equal(QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD, 1);
 assert.equal(QUOTA_POSTURE_EVENT_THRESHOLD, 2);
 assert.equal(QUOTA_POSTURE_DAY_THRESHOLD, 3);
-assert.equal(quotaPostureReviewDue(0, 0), false);
-assert.equal(quotaPostureReviewDue(1, 2), false);
-assert.equal(quotaPostureReviewDue(2, 0), true);
-assert.equal(quotaPostureReviewDue(0, 3), true);
-assert.equal(quotaPostureTrigger(2, 3), "events", "events wins when both thresholds are crossed");
-assert.equal(quotaPostureTrigger(1, 3), "days");
-assert.equal(quotaPostureTrigger(1, 2), null);
+assert.equal(quotaPostureReviewDue(0, 0, 0), false);
+assert.equal(quotaPostureReviewDue(0, 1, 2), false);
+assert.equal(quotaPostureReviewDue(1, 0, 0), true, "both accounts on one day is an arena-wide squeeze");
+assert.equal(quotaPostureReviewDue(0, 2, 0), true);
+assert.equal(quotaPostureReviewDue(0, 0, 3), true);
+assert.equal(quotaPostureTrigger(1, 2, 3), "both_accounts_same_day", "same-day both accounts wins");
+assert.equal(quotaPostureTrigger(0, 2, 3), "events", "events wins over days");
+assert.equal(quotaPostureTrigger(0, 1, 3), "days");
+assert.equal(quotaPostureTrigger(0, 1, 2), null);
 
 console.log("ops rule tests passed");

@@ -21,6 +21,7 @@
     "sample:semantic": "node scripts/semantic_sample.mjs",
     "sample:semantic:review": "node scripts/semantic_review_llm.mjs",
     "sample:semantic:agreement": "node scripts/semantic_agreement.mjs",
+    "quota:probe": "node scripts/quota_probe.mjs",
     "d1:apply": "wrangler d1 execute arena-db --file=db/schema.sql",
     "office:generate-pixel": "node scripts/generate_office_pixel.js",
     "test:tiny": "node scripts/tiny_test.js"

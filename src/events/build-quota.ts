@@ -36,8 +36,13 @@
  * Team pinning mirrors team-build-turn.yml's TEAM_KEY_PIN (a repo whose name
  * contains 'beta' -> OPEN_ROUTER_API_KEY_2 when present, else key 1). Keep
  * the two in step; together they decide which account a team's turns spend.
- * Two keys only double the budget when they are two SEPARATE accounts —
- * OpenRouter's free cap is per account, not per key.
+ *
+ * Measured 2026-11-01: the two keys are two SEPARATE OpenRouter accounts
+ * (distinct creator_user_id and workspace_id, independent
+ * free_model_daily_requests counters), so pinning gives each team its own
+ * 50-request/day cap - 100/day total. A hold on one account does not mean the
+ * other is spent. The workflow deliberately vetoes cross-account failover on
+ * quota death so one team's exhausted day cannot consume the other's.
  */
 
 export interface QuotaDecision {
@@ -63,6 +68,16 @@ export function nextUtcMidnightAfter(nowMs: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
 }
 
+export type OpenRouterAccount = 1 | 2;
+
+/**
+ * Which independent account a team's key belongs to. One source of truth for
+ * the scheduler, hold attribution, and the workflow's TEAM_KEY_PIN.
+ */
+export function openRouterAccountForTeam(teamName: string): OpenRouterAccount {
+  return teamName === "beta" ? 2 : 1;
+}
+
 /**
  * Which pool a team's turns spend. Mirrors the workflow's TEAM_KEY_PIN:
  * beta is pinned to key 2 when configured, everything else key 1.
@@ -72,7 +87,7 @@ export function openRouterKeyForTeam(
   key1: string | undefined,
   key2: string | undefined
 ): string | undefined {
-  return teamName === "beta" && key2 ? key2 : key1;
+  return openRouterAccountForTeam(teamName) === 2 && key2 ? key2 : key1;
 }
 
 /** Pure decision from an /api/v1/key response body. */

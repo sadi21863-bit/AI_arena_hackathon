@@ -109,14 +109,23 @@ function quotaPosturePanel(posture) {
     return html`<div class="arena-note">Quota posture: no hold history available yet.</div>`;
   }
   const due = !!posture.review_due;
+  const both = Number(posture.days_with_both_accounts ?? 0);
+  const reason =
+    posture.trigger === "both_accounts_same_day"
+      ? "both accounts held on the same UTC day"
+      : posture.trigger === "events"
+        ? "holds across 2+ events"
+        : "holds on 3+ UTC days";
   return html`<div class="arena-note ${due ? "arena-note--warn" : ""}">
     <span>${due ? "◆" : "✓"}</span><span>
       Quota posture: <b>${posture.holds ?? 0}</b> hold(s) across
       <b>${posture.distinct_events ?? 0}</b> event(s) / <b>${posture.distinct_days ?? 0}</b> UTC day(s)
-      in the last ${posture.window_days ?? 14} days.
+      on <b>${posture.distinct_accounts ?? 0}</b> independent account(s) in the last
+      ${posture.window_days ?? 14} days.
+      ${both > 0 ? ` Both accounts held on ${both} day(s).` : ""}
       ${due
-        ? `Revisit proxy crossed (${posture.trigger === "events" ? "2+ events" : "3+ UTC days"}). Review the single-account decision; this is not an automatic mitigation.`
-        : "No revisit due. A hold is a budget wait, not a code failure."}
+        ? `Revisit proxy crossed (${reason}). Review team pinning and capacity; this is not an automatic mitigation.`
+        : "No revisit due. A hold is one account's budget wait, not a code failure."}
     </span>
   </div>`;
 }

@@ -570,10 +570,10 @@ The scheduled tick now writes `ops_alerts` for the highest-frequency branches:
 `worker_subrequest_log.total >= 45/50`, an event paused for capacity for more
 than an hour, 3+ `team_formation` failures in the current incarnation, a build
 turn with no `run_id` 30 minutes after dispatch, and an OpenRouter probe hold.
-A `quota_posture_review` alert is raised when two distinct events (or three
-distinct UTC days) record a hold in 14 days; `/headroom.quota_posture` exposes
-the counts and labels the signal as a proxy for revisit trigger #1, not proof
-that a turn was lost. They are surfaced on `GET /headroom` and `GET /alerts`,
+A `quota_posture_review` alert is raised when both accounts hold on the same UTC
+day, or when holds span two distinct events (or three distinct UTC days) in 14
+days; `/headroom.quota_posture` exposes the counts and labels the signal as a
+proxy for revisit trigger #1, not proof that a turn was lost. They are surfaced on `GET /headroom` and `GET /alerts`,
 and POSTed to `ALERT_WEBHOOK_URL` when that secret exists.
 `/headroom.cron.stale` computes the 15-minute heartbeat check (a dead cron
 cannot push its own alert). This closes the "silent wedge" shape even without a
@@ -673,13 +673,22 @@ count as product work.
 subrequest caps and abandoned events. Keep it current when the model or harness
 changes.
 
-### R-5 — Second independent build account (decided default 2026-10-31; owner approval pending)
+### R-5 — Build-account capacity (second account provisioned 2026-11-01)
 
-Two keys on one OpenRouter account do not double the 50/day cap; a second
-account does, but doubles the credential surface and the pin/failover matrix.
-`docs/QUOTA_POSTURE_2026-10-31.md` records the operating decision: one account,
-hold dispatches, no automatic second account. The owner must approve or decline
-the second-account option; it is not taken autonomously.
+**Resolved for the second account.** Measurement on 2026-11-01 showed the two
+configured keys are two independent OpenRouter accounts (distinct
+`creator_user_id`/workspace, independent daily counters), not one account with
+two keys. They are pinned one per team: alpha → account 1, beta → account 2,
+giving 2 × 50 = 100 free requests/day. A hold is per account; the workflow
+vetoes cross-account failover on quota death, so one team's spent day cannot
+consume the other's. `docs/QUOTA_POSTURE_2026-10-31.md` records the corrected
+posture and the monitoring proxy (`/headroom.quota_posture`,
+`quota_posture_review`).
+
+Still owner-gated: a **third** account or paid credits, only if both current
+accounts prove insufficient. Acceptance for the existing pin: the next
+hackathon's beta turn probes account 2 and both teams build within their own
+daily caps.
 
 ### R-6 — Bus factor / second maintainer (P1, blocked on owner)
 

@@ -65,9 +65,9 @@ quota probe kills the container before a model call.
 1. Read `/headroom` for the current remaining budget and reset time.
 2. 429 upstream is weather, not a dead model. Wait for the UTC reset; the
    `build-quota.ts` probe already holds dispatches. Do not rotate keys blindly.
-3. Two keys on one OpenRouter account do **not** double the cap; a second
-   independent account does, at the cost of a second credential surface. That
-   is an owner decision, not an automatic fix.
+3. The two configured keys are two independent accounts (measured 2026-11-01),
+   pinned one per team; a hold on one does not mean the other is spent. A
+   **third** account or paid credit is an owner decision, not an automatic fix.
 4. If dispatches are held, verify the queue has no `pending` items that will
    burn the next day's budget on stale work.
 
@@ -120,10 +120,12 @@ to `ops_alerts`:
   (`dispatch_no_run`);
 - the OpenRouter probe refusing a dispatch because the free-tier floor is
   reached (`quota_hold`);
-- two distinct events (or three distinct UTC days) with a `quota_hold` in the
-  last 14 days (`quota_posture_review`). This is the documented revisit proxy,
-  not proof that a scheduled turn was lost: review the single-account decision,
-  do not provision a second account automatically.
+- both accounts holding on the same UTC day, or holds across 2+ events / 3+
+  distinct UTC days in the last 14 days (`quota_posture_review`). The two keys
+  are independent accounts pinned one per team, so a single hold is one team's
+  budget wait; the alert is the documented revisit proxy, not proof a turn was
+  lost. Review pinning/capacity; do not rotate keys or provision a third
+  account automatically.
 
 Read them at `GET /alerts` or in the `/headroom` panel. Dedupe is one alert per
 `(kind, event, task)` per 24h for the operational branches, and 7 days for
@@ -150,7 +152,7 @@ The remaining thresholds are still manual:
 | `build_turns.run_id IS NULL` after dispatch | 30 min | **automated** (`dispatch_no_run`) |
 | `cron.last_success_at` | > 15 min | **surfaced** on `/headroom.cron.stale`; a dead cron cannot push |
 | OpenRouter remaining | ≤ floor (10) | **automated** (`quota_hold` when the probe refuses a dispatch) |
-| quota holds across cycles | 2 events / 3 UTC days in 14d | **automated** (`quota_posture_review`, 7-day dedupe; proxy for revisit trigger #1) |
+| quota holds across cycles | both accounts same day / 2 events / 3 UTC days in 14d | **automated** (`quota_posture_review`, 7-day dedupe; proxy for revisit trigger #1) |
 | `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; `dispatch_no_run`/`formation_failures` catch the aftermath |
 | event `paused_capacity` | > 1h | **automated** (`capacity_pause`) |
 
