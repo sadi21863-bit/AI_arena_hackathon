@@ -19,13 +19,20 @@
  */
 import type { Env } from "../env";
 import { QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
+import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
 
 export const SUBREQUEST_WARN_THRESHOLD = 45;
 
 export interface OpsAlert {
   id: string;
   created_at: string;
-  kind: "subrequest_headroom" | "capacity_pause" | "formation_failures" | "dispatch_no_run" | "quota_hold";
+  kind:
+    | "subrequest_headroom"
+    | "capacity_pause"
+    | "formation_failures"
+    | "dispatch_no_run"
+    | "quota_hold"
+    | "quota_posture_review";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -38,16 +45,18 @@ export interface OpsAlert {
 async function recentAlertExists(
   env: Env,
   kind: OpsAlert["kind"],
-  eventId: string,
+  eventId: string | null,
   taskType: string | null,
+  days = 1,
 ): Promise<boolean> {
   const row = await env.DB.prepare(
     `SELECT id FROM ops_alerts
-     WHERE kind = ? AND event_id = ? AND COALESCE(task_type, '') = COALESCE(?, '')
-       AND created_at >= datetime('now', '-1 day')
+     WHERE kind = ? AND COALESCE(event_id, '') = COALESCE(?, '')
+       AND COALESCE(task_type, '') = COALESCE(?, '')
+       AND created_at >= datetime('now', ?)
      LIMIT 1`,
   )
-    .bind(kind, eventId, taskType)
+    .bind(kind, eventId, taskType, `-${days} days`)
     .first<{ id: string }>();
   return !!row;
 }
@@ -238,6 +247,35 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
     });
     raised += 1;
     if (result.pushed) pushed += 1;
+  }
+
+  // The quota posture's revisit trigger, made visible. This is a proxy, not a
+  // claim that a scheduled turn was lost: see quota-posture.ts. Deduped weekly
+  // because a posture decision is a human action, not a per-tick condition.
+  try {
+    const posture = await loadQuotaPosture(env);
+    if (posture.review_due && !(await recentAlertExists(env, "quota_posture_review", null, null, 7))) {
+      const basis =
+        posture.trigger === "events"
+          ? `${posture.distinct_events} distinct event(s)`
+          : `${posture.distinct_days} distinct UTC day(s)`;
+      const result = await raiseAlert(env, {
+        kind: "quota_posture_review",
+        severity: "warning",
+        event_id: null,
+        task_type: null,
+        message:
+          `quota_hold was recorded for ${basis} in the last ${QUOTA_POSTURE_WINDOW_DAYS} days ` +
+          `(last at ${posture.last_hold_at ?? "an unrecorded time"}). This crosses the documented ` +
+          "revisit proxy in docs/QUOTA_POSTURE_2026-10-31.md: review the single-account decision. " +
+          "Do not provision a second account or add paid credit automatically.",
+        details: JSON.stringify(posture),
+      });
+      raised += 1;
+      if (result.pushed) pushed += 1;
+    }
+  } catch (err) {
+    console.log(`quota-posture alert check failed (non-fatal): ${err instanceof Error ? err.message : err}`);
   }
 
   return { raised, pushed };

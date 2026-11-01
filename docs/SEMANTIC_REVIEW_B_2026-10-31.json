@@ -1,0 +1,126 @@
+{
+  "generated_at": "2026-11-01T14:51:52.577Z",
+  "event": {
+    "id": "event_dc3df601-42ca-4b2a-8dfd-33f098afc8f6",
+    "status": "judged",
+    "start_date": "2026-10-22 08:46:16"
+  },
+  "reviewer": "model:nvidia/nemotron-3-ultra-550b-a55b:free",
+  "source": "../../../AppData/Local/Temp/semantic_sample_2026-10-31.json",
+  "requested": 10,
+  "verdicts": [
+    {
+      "id": "idea_bc796ab4-676f-49c1-83e6-540c2253fc91",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Real EHR integration and custom model training exceed hackathon scope."
+    },
+    {
+      "id": "idea_c535e6c8-2be3-4ac3-804b-e21d995738cc",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Kubernetes, Hyperledger Fabric, and custom TensorFlow training are out of scope."
+    },
+    {
+      "id": "idea_8273185c-9ba8-40d3-9107-8cde06c3eb09",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Three third-party integrations and a cloud backend exceed the one-integration limit."
+    },
+    {
+      "id": "idea_d5a36045-f0b6-4b1b-b0f5-1419096517ef",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "pass",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Buildable in 5 days but missing research evidence."
+    },
+    {
+      "id": "idea_096df261-86cb-4b17-9cc7-e508eae41efd",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Custom spaCy fine-tuning and multiple ERP connectors are too heavy."
+    },
+    {
+      "id": "idea_cf3a651e-caf9-4493-ac81-2f4a54da9c55",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Multiple external APIs and on-device ML exceed hackathon capacity."
+    },
+    {
+      "id": "idea_3a243edc-298e-4028-97c6-94e3ae5a63b8",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Too many system components and third-party integrations for 5 days."
+    },
+    {
+      "id": "idea_2ff7872e-d891-4ffd-9b03-36df7999619e",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Fine-tuning a brand-tone model and integrating three APIs is out of scope."
+    },
+    {
+      "id": "idea_b0f5c1bc-3d39-4c95-8d73-c2d58b3bf422",
+      "specific_problem": "pass",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Cloud pricing APIs and order automation require more than 5 days."
+    },
+    {
+      "id": "idea_370d7ef9-4cbc-4fcf-97b7-251b0fbfe5dc",
+      "specific_problem": "weak",
+      "differentiated": "pass",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "14-day plan and multiple event APIs exceed hackathon window."
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 7021,
+    "completion_tokens": 4100,
+    "total_tokens": 11121,
+    "cost": 0,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0,
+      "upstream_inference_prompt_cost": 0,
+      "upstream_inference_completions_cost": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 3510,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

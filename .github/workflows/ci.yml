@@ -41,6 +41,10 @@ jobs:
         # The public `quality` label is a product surface; pin its bands.
         # Node 22+ strips the TypeScript module directly, no build step.
         run: npm run test:confidence
+      - name: Operational rule tests
+        # Kappa math and the quota-posture revisit proxy are easy to break
+        # silently; both are documented operating rules.
+        run: npm run test:ops
       - name: Install Chromium for smoke test
         # tiny_test.js drives a real headless browser via Playwright;
         # the npm package alone is not enough without the browser binary.

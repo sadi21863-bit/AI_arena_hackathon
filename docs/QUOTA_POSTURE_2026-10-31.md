@@ -38,6 +38,21 @@ The owner should revisit the single-account decision when any of these is true:
 4. The Arena is expected to run unattended for more than one cycle without an
    operator available to decide a hold.
 
+## How the triggers are monitored (2026-11-01)
+
+`GET /headroom.quota_posture` reports `quota_hold` alerts in the last 14 days:
+hold count, distinct events, distinct UTC days, the last hold time, and whether
+the revisit proxy is due. The scheduled tick raises one `quota_posture_review`
+alert (deduped for 7 days) when **two distinct events** or **three distinct UTC
+days** have a hold in that window.
+
+This is deliberately a proxy, not proof of trigger #1. A hold means the probe
+refused a dispatch; it does not prove a scheduled turn was lost. The alert says
+"review the single-account decision", not "the trigger fired". It does not
+provision a second account, rotate keys, add paid credit, or change the hold.
+Those remain owner decisions, and the alert is a prompt to revisit this document
+with the recorded counts in hand.
+
 ## Options if the trigger fires
 
 | option | what it buys | cost / risk |

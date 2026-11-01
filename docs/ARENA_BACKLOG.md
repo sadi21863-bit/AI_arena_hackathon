@@ -568,13 +568,16 @@ are not mistaken for done.
 
 The scheduled tick now writes `ops_alerts` for the highest-frequency branches:
 `worker_subrequest_log.total >= 45/50`, an event paused for capacity for more
-than an hour, 3+ `team_formation` failures in the current incarnation, and a
-build turn with no `run_id` 30 minutes after dispatch. They are surfaced on
-`GET /headroom` and `GET /alerts`, and POSTed to `ALERT_WEBHOOK_URL` when that
-secret exists. `/headroom.cron.stale` computes the 15-minute heartbeat check
-(a dead cron cannot push its own alert). This closes the "silent wedge" shape
-even without a push destination; `GET /alerts` is pollable by an external
-monitor.
+than an hour, 3+ `team_formation` failures in the current incarnation, a build
+turn with no `run_id` 30 minutes after dispatch, and an OpenRouter probe hold.
+A `quota_posture_review` alert is raised when two distinct events (or three
+distinct UTC days) record a hold in 14 days; `/headroom.quota_posture` exposes
+the counts and labels the signal as a proxy for revisit trigger #1, not proof
+that a turn was lost. They are surfaced on `GET /headroom` and `GET /alerts`,
+and POSTed to `ALERT_WEBHOOK_URL` when that secret exists.
+`/headroom.cron.stale` computes the 15-minute heartbeat check (a dead cron
+cannot push its own alert). This closes the "silent wedge" shape even without a
+push destination; `GET /alerts` is pollable by an external monitor.
 
 Still open: no webhook destination is configured, so delivery to a human is
 still pull-based. OpenRouter remaining is alerted when the probe refuses a
@@ -645,11 +648,19 @@ tests without assertions. It catches the historical duplicate shape:
 The first single-reviewer semantic sample is
 `docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md` (raw:
 `docs/SEMANTIC_SAMPLE_2026-10-31.md`). It found **0/34 ideas with a
-`research_anchor`** — a systemic gap, now fixed in the ideation prompt — and
+`research_anchor`** - a systemic gap, now fixed in the ideation prompt - and
 assessed 0 clear pass / 6 weak / 4 fail, with build-scope over-reach as the
 recurring failure. `scripts/semantic_sample.mjs` generates the sheet for any
-event. It is not scheduled automatically and is not calibrated; run it after a
-judging pass when someone can read it.
+event. It is not scheduled automatically.
+
+The review's "one reviewer, one pass" limitation was tested in
+`docs/SEMANTIC_CALIBRATION_2026-11-01.md`. A second free model reviewed the same
+10 ideas: 5/10 exact overall agreement (κ=0.138, slight) but 10/10 within one;
+build scope agreed substantially (κ=0.630), research evidence was unanimously
+fail (the historical anchor gap), and a sharpened rubric collapsed to 10/10
+fail. The overall verdict is therefore narrative, not a score; report
+per-criterion. A human third reviewer is the next step if the sample is ever
+used for more than triage.
 
 The only remaining caveat is operational: the heuristics do not judge whether a
 well-written idea is good, and a new scaffold file must be added to the audit's

@@ -100,6 +100,28 @@ function subrequestLine(headroom) {
 }
 
 /**
+ * Quota-posture revisit proxy (2026-11-01). The decision stays in
+ * docs/QUOTA_POSTURE_2026-10-31.md; this panel makes the documented trigger
+ * visible beside the quota gauges instead of leaving it in prose.
+ */
+function quotaPosturePanel(posture) {
+  if (!posture || posture.error) {
+    return html`<div class="arena-note">Quota posture: no hold history available yet.</div>`;
+  }
+  const due = !!posture.review_due;
+  return html`<div class="arena-note ${due ? "arena-note--warn" : ""}">
+    <span>${due ? "◆" : "✓"}</span><span>
+      Quota posture: <b>${posture.holds ?? 0}</b> hold(s) across
+      <b>${posture.distinct_events ?? 0}</b> event(s) / <b>${posture.distinct_days ?? 0}</b> UTC day(s)
+      in the last ${posture.window_days ?? 14} days.
+      ${due
+        ? `Revisit proxy crossed (${posture.trigger === "events" ? "2+ events" : "3+ UTC days"}). Review the single-account decision; this is not an automatic mitigation.`
+        : "No revisit due. A hold is a budget wait, not a code failure."}
+    </span>
+  </div>`;
+}
+
+/**
  * Durable quality snapshots written at terminal judging (R-2). The live event
  * API recomputes the label on every request; this panel is the recorded history
  * so drift is visible without opening the retrospective script.
@@ -168,6 +190,7 @@ export async function mount(el) {
       <div class="v-headroom__grid">${(data.usage || []).map(gauge)}</div>
       ${cronLine(data.cron)}
       ${subrequestLine(data.subrequest_headroom)}
+      ${quotaPosturePanel(data.quota_posture)}
       ${alertsPanel(data.alerts, data.alert_webhook_configured)}
       ${qualityPanel(data.ranking_quality)}`);
   }

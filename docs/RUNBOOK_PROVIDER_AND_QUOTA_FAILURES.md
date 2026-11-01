@@ -109,8 +109,8 @@ revived; their abandonment means the work itself is stuck.
 
 ## E. Alerts — durable, optionally pushed
 
-The two highest-frequency branches are now automated on the scheduled tick and
-written to `ops_alerts`:
+The highest-frequency branches are automated on the scheduled tick and written
+to `ops_alerts`:
 
 - `worker_subrequest_log.total >= 45/50` (`subrequest_headroom`, warning at
   45-49, critical at >=50);
@@ -119,13 +119,18 @@ written to `ops_alerts`:
 - a build turn still without a `run_id` 30 minutes after dispatch
   (`dispatch_no_run`);
 - the OpenRouter probe refusing a dispatch because the free-tier floor is
-  reached (`quota_hold`).
+  reached (`quota_hold`);
+- two distinct events (or three distinct UTC days) with a `quota_hold` in the
+  last 14 days (`quota_posture_review`). This is the documented revisit proxy,
+  not proof that a scheduled turn was lost: review the single-account decision,
+  do not provision a second account automatically.
 
 Read them at `GET /alerts` or in the `/headroom` panel. Dedupe is one alert per
-`(kind, event, task)` per 24h, not per tick. If `ALERT_WEBHOOK_URL` is set, the
-same alert is POSTed (`text` + `content`, counts only) and `notified_at` records
-delivery; without it the row is still durable and visible, but a human must
-pull. Enable push with:
+`(kind, event, task)` per 24h for the operational branches, and 7 days for
+`quota_posture_review` because it prompts a human decision rather than a tick
+condition. If `ALERT_WEBHOOK_URL` is set, the same alert is POSTed (`text` +
+`content`, counts only) and `notified_at` records delivery; without it the row is
+still durable and visible, but a human must pull. Enable push with:
 
 ```bash
 npx wrangler secret put ALERT_WEBHOOK_URL
@@ -145,6 +150,7 @@ The remaining thresholds are still manual:
 | `build_turns.run_id IS NULL` after dispatch | 30 min | **automated** (`dispatch_no_run`) |
 | `cron.last_success_at` | > 15 min | **surfaced** on `/headroom.cron.stale`; a dead cron cannot push |
 | OpenRouter remaining | ≤ floor (10) | **automated** (`quota_hold` when the probe refuses a dispatch) |
+| quota holds across cycles | 2 events / 3 UTC days in 14d | **automated** (`quota_posture_review`, 7-day dedupe; proxy for revisit trigger #1) |
 | `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; `dispatch_no_run`/`formation_failures` catch the aftermath |
 | event `paused_capacity` | > 1h | **automated** (`capacity_pause`) |
 

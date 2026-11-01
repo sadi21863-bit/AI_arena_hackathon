@@ -1,5 +1,12 @@
 # Semantic sample review — 2026-10-31
 
+> **Calibration follow-up (2026-11-01):** an independent second reviewer and a
+> sharpened-rubric re-run are recorded in
+> [`SEMANTIC_CALIBRATION_2026-11-01.md`](SEMANTIC_CALIBRATION_2026-11-01.md).
+> Overall agreement was 5/10 exact (κ=0.138) but 10/10 within one; the
+> per-idea verdicts below are the first pass and are unchanged. Treat the
+> overall column as narrative, not a score.
+
 Raw sample: [`SEMANTIC_SAMPLE_2026-10-31.md`](SEMANTIC_SAMPLE_2026-10-31.md)
 (event `event_dc3df601`, 10 ideas: 7 judged + 3 blocked).
 

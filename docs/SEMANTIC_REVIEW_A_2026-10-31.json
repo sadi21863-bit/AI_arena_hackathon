@@ -1,0 +1,103 @@
+{
+  "generated_at": "2026-10-31T18:10:12.320Z",
+  "event": {
+    "id": "event_dc3df601-42ca-4b2a-8dfd-33f098afc8f6",
+    "status": "judged",
+    "start_date": "2026-10-22 08:46:16"
+  },
+  "reviewer": "agent-review-a (first pass, 2026-10-31)",
+  "source": "docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md",
+  "requested": 10,
+  "verdicts": [
+    {
+      "id": "idea_bc796ab4-676f-49c1-83e6-540c2253fc91",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Offline app + FHIR/EHR integration + fine-tuned model + on-site training is far beyond a 4–5 day build."
+    },
+    {
+      "id": "idea_c535e6c8-2be3-4ac3-804b-e21d995738cc",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Kubernetes + Hyperledger Fabric + GPU TensorFlow + multi-jurisdiction key policy is an enterprise platform, not an event MVP."
+    },
+    {
+      "id": "idea_8273185c-9ba8-40d3-9107-8cde06c3eb09",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "weak",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Slack/Trello/Jira integrations and adaptive monitoring are plausible only as a manual, single-integration demo."
+    },
+    {
+      "id": "idea_d5a36045-f0b6-4b1b-b0f5-1419096517ef",
+      "specific_problem": "weak",
+      "differentiated": "weak",
+      "build_scope": "pass",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "The core value (\"copy deliberately\") is asserted, not evidenced; the extension itself is buildable."
+    },
+    {
+      "id": "idea_096df261-86cb-4b17-9cc7-e508eae41efd",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Climate data + regulation NLP + ERP connectors + spatial DB is too broad; the Kenya focus is the strongest part."
+    },
+    {
+      "id": "idea_cf3a651e-caf9-4493-ac81-2f4a54da9c55",
+      "specific_problem": "weak",
+      "differentiated": "fail",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Generic swapping app with on-device AI, courier API, reputation, subscriptions and carbon accounting."
+    },
+    {
+      "id": "idea_3a243edc-298e-4028-97c6-94e3ae5a63b8",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "A cross-OS Rust daemon, wearable bridge, OAuth integrations and scheduling engine cannot ship in the event window."
+    },
+    {
+      "id": "idea_2ff7872e-d891-4ffd-9b03-36df7999619e",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Whisper + GPT-4 + MT + brand-tone fine-tune + dubbing is a 30-day product; \"30 days\" is written into the scope."
+    },
+    {
+      "id": "idea_b0f5c1bc-3d39-4c95-8d73-c2d58b3bf422",
+      "specific_problem": "pass",
+      "differentiated": "weak",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "weak",
+      "note": "Multi-cloud commitment ordering is real FinOps complexity; the AWS-only MVP is still beyond a 4–5 day build."
+    },
+    {
+      "id": "idea_370d7ef9-4cbc-4fcf-97b7-251b0fbfe5dc",
+      "specific_problem": "fail",
+      "differentiated": "fail",
+      "build_scope": "fail",
+      "research_evidence": "fail",
+      "overall": "fail",
+      "note": "Identity-tagged event discovery is a generic idea; the proposed 14-day MVP is still over-scoped."
+    }
+  ]
+}

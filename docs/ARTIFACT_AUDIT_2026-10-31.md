@@ -140,5 +140,12 @@ The first single-reviewer semantic sample is
 (raw sheet: [`SEMANTIC_SAMPLE_2026-10-31.md`](SEMANTIC_SAMPLE_2026-10-31.md)):
 0 clear pass, 6 weak, 4 fail; build-scope over-reach is the recurring problem.
 `scripts/semantic_sample.mjs` generates the sheet for any event. The sample is
-not automatically scheduled and is not calibrated — schedule it manually after
-a judging pass when someone can read it.
+not automatically scheduled.
+
+A second independent reviewer and a sharpened-rubric re-run are in
+[`SEMANTIC_CALIBRATION_2026-11-01.md`](SEMANTIC_CALIBRATION_2026-11-01.md):
+5/10 exact overall agreement (κ=0.138, slight) but 10/10 within one, build
+scope κ=0.630, and a sharpened rubric that collapsed to 10/10 fail. The overall
+column is therefore narrative, not a score; read the per-criterion verdicts and
+keep the sample warning-only. A human third reviewer is the next step if it is
+ever used for more than triage.

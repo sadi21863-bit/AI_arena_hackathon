@@ -3,6 +3,32 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-11-01
+
+- **Semantic sample calibrated, and its overall verdict demoted.** A second,
+  independent free model reviewed the same 10 ideas as the first pass.
+  Overall exact agreement was 5/10 (κ=0.138, slight) but within-one agreement
+  was 10/10: the reviewers ranked ideas the same way and disagreed only on the
+  weak/fail boundary. Build scope agreed substantially (κ=0.630); research
+  evidence was unanimously fail because every historical idea has an empty
+  anchor. A sharpened rubric then failed all ten, showing that the overall
+  verdict is dominated by the universal anchor gap. Decision: report the sample
+  per-criterion, keep it warning-only and manual, and treat overall as
+  narrative, not a score. Full result:
+  `docs/SEMANTIC_CALIBRATION_2026-11-01.md`; tooling:
+  `scripts/semantic_review_llm.mjs`, `scripts/semantic_agreement.mjs`.
+- **Quota-posture revisit trigger is now visible.** `/headroom.quota_posture`
+  reports `quota_hold` counts, distinct events/days and the last hold in a
+  14-day window. The scheduled tick raises one `quota_posture_review` alert
+  (7-day dedupe) when two distinct events or three distinct UTC days record a
+  hold. It is explicitly a proxy for the documented revisit trigger, not proof
+  that a turn was lost, and it does not provision a second account or change the
+  hold. See `docs/QUOTA_POSTURE_2026-10-31.md` and
+  `src/observability/quota-posture.ts`.
+- **Ops-rule regression tests in CI.** `npm run test:ops` pins the kappa math
+  (including the undefined-constant-category case) and the quota-posture
+  thresholds, so a silent threshold or statistic change fails the build.
+
 ## 2026-10-31
 
 - **Judged-population decision recorded.** The Arena will not automatically

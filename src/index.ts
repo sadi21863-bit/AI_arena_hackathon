@@ -23,6 +23,7 @@ import { calibrationFailureSide, CALIBRATION_MIN, CALIBRATION_MAX } from "./judg
 import { buildEventQuality, type AuditSummary, type CalibrationRow, type QualityEventRow } from "./judges/quality";
 import type { JudgeScoreRow } from "./judges/confidence";
 import { checkOperationalAlerts, recentAlerts } from "./observability/alerts";
+import { loadQuotaPosture } from "./observability/quota-posture";
 import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
 import { listBuildTurnRuns } from "./github/dispatch";
 
@@ -414,8 +415,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       let alerts: Awaited<ReturnType<typeof recentAlerts>> = [];
       let subrequest: unknown = null;
       let rankingQuality: unknown = [];
+      let quotaPosture: unknown = null;
       try {
         alerts = await recentAlerts(env, 8);
+        quotaPosture = await loadQuotaPosture(env);
         subrequest = await env.DB.prepare(
           `SELECT event_id, task_type, total, cap, outcome, created_at
            FROM worker_subrequest_log ORDER BY created_at DESC LIMIT 1`,
@@ -435,6 +438,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         alerts = [];
         subrequest = { error: err instanceof Error ? err.message : String(err) };
         rankingQuality = [];
+        quotaPosture = null;
       }
 
       return Response.json({
@@ -445,6 +449,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         alerts,
         subrequest_headroom: { threshold: 45, latest: subrequest },
         ranking_quality: rankingQuality,
+        quota_posture: quotaPosture,
         alert_webhook_configured: !!env.ALERT_WEBHOOK_URL,
       });
     }
