@@ -58,6 +58,11 @@ notes what changed behavior in production and why.
   least half the agents are at/above the 3-strike suspension threshold, checking
   the ledger before an ideation pass rather than the blocked output afterwards
   (deduped 24h).
+- **First live evidence for the anchor and scope fixes.** The repaired
+  `event_40e6b8d8` audits 33/33 ideas with 33/33 research anchors, 0 contract
+  failures and 0 semantic warnings. The 2026-11-02 audit of the historical
+  `event_dc3df601` also passed and persisted: 34/34 ideas, 21/21 critiques, 2/2
+  builds, 9 warnings (the old unanchored/over-scoped plans).
 
 ## 2026-11-01
 
