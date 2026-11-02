@@ -32,6 +32,7 @@
 import type { Env } from "../env";
 import { cosineSimilarity, getVectorsByIds } from "../agents/memory";
 import { QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "./quota";
+import { PRIVILEGE_LIMIT } from "./limits";
 
 export const CONDUCT_BANDS = {
   fresh: 0.8,     // below: fresh
@@ -53,7 +54,7 @@ export const CONDUCT_PENALTIES = {
 } as const;
 
 export { MAX_DERIVED_PER_EVENT } from "./quota";
-export const PRIVILEGE_LIMIT = 3; // strikes before submission privilege is lost (R4)
+export { PRIVILEGE_LIMIT } from "./limits";
 
 export type ConductClass = "fresh" | "evolution" | "marginal" | "violation" | "hard" | "dup";
 

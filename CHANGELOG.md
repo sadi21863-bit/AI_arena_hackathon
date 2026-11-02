@@ -39,6 +39,25 @@ notes what changed behavior in production and why.
   panel is visible instead of disappearing into the archive. Live data has no
   partial panel (155/155 targets have all seven rows), so no historical score is
   rewritten.
+- **Conduct quota no longer saturates the pool.** R1's −1.0 quota penalty now
+  applies only to the second and later **derived** idea in an event, exempts
+  `dup` (R6), and no longer adds a strike — strikes are the measured ≥0.92 R4
+  ladder. The old rule counted every prior idea, applied to duplicates, and
+  added a strike per extra derived idea; with three evolution-class submissions
+  per agent per event, it added two strikes while decay removed one. The
+  ideation prompt now states the one-upgrade rule and tells an agent when the
+  slot is already used.
+- **The 2026-11-02 saturation was repaired live.** All 12 agents were at 3–9
+  strikes and 30 of 33 ideas in `event_40e6b8d8` were blocked. A genuine-only
+  replay corrected 11 ledgers, unblocked 20 non-hard ideas, and queued 60
+  critiques; four agents who were already at ≥3 before the event remain
+  suspended and recover one strike per clean event. No stored penalty or gate
+  threshold was rewritten. Details:
+  `docs/INCIDENT_2026-11-02_CONDUCT_SATURATION.md`.
+- **Conduct saturation is now an alert.** `conduct_saturation` fires when at
+  least half the agents are at/above the 3-strike suspension threshold, checking
+  the ledger before an ideation pass rather than the blocked output afterwards
+  (deduped 24h).
 
 ## 2026-11-01
 

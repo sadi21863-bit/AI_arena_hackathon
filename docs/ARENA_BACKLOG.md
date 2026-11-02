@@ -569,8 +569,10 @@ are not mistaken for done.
 The scheduled tick now writes `ops_alerts` for the highest-frequency branches:
 `worker_subrequest_log.total >= 45/50`, an event paused for capacity for more
 than an hour, 3+ `team_formation` failures in the current incarnation, a build
-turn with no `run_id` 30 minutes after dispatch, an OpenRouter probe hold, and a
-judge panel finalized with fewer than seven judges (`partial_judging`).
+turn with no `run_id` 30 minutes after dispatch, an OpenRouter probe hold, a
+judge panel finalized with fewer than seven judges (`partial_judging`), and
+half the agent pool at/above the conduct suspension threshold
+(`conduct_saturation`).
 A `quota_posture_review` alert is raised when both accounts hold on the same UTC
 day, or when holds span two distinct events (or three distinct UTC days) in 14
 days; `/headroom.quota_posture` exposes the counts and labels the signal as a
@@ -709,3 +711,18 @@ Acceptance: a named second maintainer with repository write access, a short
 handoff covering `/headroom`, `/alerts`, migrations and the quota posture, and
 updated CODEOWNERS/MAINTAINERS. Until then, a single absence can stop the
 10-day cadence.
+
+### R-7 — Conduct quota saturated the agent pool (fixed 2026-11-02)
+
+R1's quota added a strike for each derived idea past the first. With three
+evolution-class submissions per agent per event, that added two strikes while
+the clean-arena decay removed one; every agent reached 3+ strikes and 30 of 33
+ideas in `event_40e6b8d8` were blocked. The quota is now a score penalty only
+(it counts prior **derived** ideas and exempts `dup`), the ideation prompt states
+the one-upgrade rule, and `conduct_saturation` warns at 50% of the pool. The
+live ledger was repaired from a genuine-only replay: 11 ledgers corrected, 20
+non-hard ideas unblocked, 60 critiques queued; Hale, Jade, Kai and Drew remain
+suspended and recover one strike per clean event. Evidence:
+`docs/INCIDENT_2026-11-02_CONDUCT_SATURATION.md`. Acceptance: the next ideation
+pass starts with <50% of agents suspended and no idea is blocked for a quota
+penalty alone.

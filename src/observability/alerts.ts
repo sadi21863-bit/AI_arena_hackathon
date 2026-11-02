@@ -21,6 +21,11 @@ import type { Env } from "../env";
 import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
 import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
 import { partialJudgingAlert } from "./partial-judging";
+import {
+  CONDUCT_SATURATION_RATIO,
+  PRIVILEGE_LIMIT,
+  conductSaturationDue,
+} from "../conduct/limits";
 
 export const SUBREQUEST_WARN_THRESHOLD = 45;
 
@@ -34,7 +39,8 @@ export interface OpsAlert {
     | "dispatch_no_run"
     | "quota_hold"
     | "quota_posture_review"
-    | "partial_judging";
+    | "partial_judging"
+    | "conduct_saturation";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -280,6 +286,44 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
     }
   } catch (err) {
     console.log(`quota-posture alert check failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+  }
+
+  // Conduct saturation: the 2026-11-02 incident blocked 30/33 ideas before
+  // anyone saw that the whole pool was suspended. Check the ledger itself, not
+  // only an event's output, so the warning arrives before the ideation pass.
+  try {
+    const conduct = await env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN COALESCE(conduct_strikes, 0) >= ? THEN 1 ELSE 0 END) AS suspended
+       FROM archive_agents`,
+    )
+      .bind(PRIVILEGE_LIMIT)
+      .first<{ total: number; suspended: number }>();
+    const total = conduct?.total ?? 0;
+    const suspended = conduct?.suspended ?? 0;
+    if (conductSaturationDue(suspended, total) && !(await recentAlertExists(env, "conduct_saturation", null, null))) {
+      const result = await raiseAlert(env, {
+        kind: "conduct_saturation",
+        severity: "warning",
+        event_id: null,
+        task_type: null,
+        message:
+          `${suspended}/${total} agents are at or above ${PRIVILEGE_LIMIT} conduct strikes; new ideas from ` +
+          "them are stored as blocked. This is the 2026-11-02 saturation shape (quota strikes outran the " +
+          "per-event decay). Review recent conduct classifications and the ledger before the next ideation " +
+          "pass; do not mass-reset strikes without a recorded reason.",
+        details: JSON.stringify({
+          suspended,
+          total,
+          threshold: PRIVILEGE_LIMIT,
+          ratio: CONDUCT_SATURATION_RATIO,
+        }),
+      });
+      raised += 1;
+      if (result.pushed) pushed += 1;
+    }
+  } catch (err) {
+    console.log(`conduct-saturation alert check failed (non-fatal): ${err instanceof Error ? err.message : err}`);
   }
 
   return { raised, pushed };

@@ -25,6 +25,7 @@ import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { weightedPanelScore } from "../src/judges/panel-score.ts";
 import { partialJudgingAlert } from "../src/observability/partial-judging.ts";
 import { MAX_DERIVED_PER_EVENT, QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "../src/conduct/quota.ts";
+import { CONDUCT_SATURATION_RATIO, PRIVILEGE_LIMIT, conductSaturationDue } from "../src/conduct/limits.ts";
 
 // Cohen's kappa: known 2x2 example. fail=0, weak=1, pass=2.
 // A: fail, fail, pass, pass; B: fail, fail, pass, weak.
@@ -227,5 +228,15 @@ assert.equal(quotaPenalty("dup", 5), 0);
 assert.equal(quotaPenalty("evolution", 0), 0, "the first derived idea is legal");
 assert.equal(quotaPenalty("evolution", 1), QUOTA_PENALTY, "the second derived idea is penalized");
 assert.equal(quotaPenalty("violation", 1), -1);
+
+// Conduct saturation tripwire: half the pool at/above the suspension threshold
+// is the shape that blocked 30/33 live ideas on 2026-11-02.
+assert.equal(PRIVILEGE_LIMIT, 3);
+assert.equal(CONDUCT_SATURATION_RATIO, 0.5);
+assert.equal(conductSaturationDue(5, 12), false);
+assert.equal(conductSaturationDue(6, 12), true);
+assert.equal(conductSaturationDue(7, 12), true);
+assert.equal(conductSaturationDue(0, 12), false);
+assert.equal(conductSaturationDue(0, 0), false, "no agents must not divide by zero");
 
 console.log("ops rule tests passed");
