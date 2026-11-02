@@ -742,7 +742,8 @@ async function ensureHackathonWorkQueued(env: Env, event: EventRow): Promise<Hac
       const dispatchKey = openRouterKeyForTeam(team.team_name, env.OPEN_ROUTER_API_KEY, env.OPEN_ROUTER_API_KEY_2);
       if (!(await buildDispatchBudgetAllows(dispatchKey))) {
         // Probe refused: make the hold durable instead of leaving the event
-        // looking merely quiet. Deduped per event/24h inside the helper.
+        // looking merely quiet. Deduped per team/24h inside the helper, so the
+        // second account's hold is visible.
         try {
           await recordQuotaHold(env, event.id, team.team_name);
         } catch (err) {
