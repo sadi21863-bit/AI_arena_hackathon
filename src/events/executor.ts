@@ -189,7 +189,10 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   if (!idea?.title || !idea.problem || !idea.solution) throw new Error(`Malformed idea JSON from ${agent.id}: ${text.slice(0, 200)}`);
   const researchAnchor =
     typeof idea.research_anchor === "string" && idea.research_anchor.trim()
-      ? idea.research_anchor.trim().slice(0, 500)
+      // The prompt asks for at most 240 characters. Enforce it here too, so a
+      // model that ignores the bound cannot put an essay in a field the Ideas
+      // Board renders inline.
+      ? idea.research_anchor.trim().slice(0, 240)
       : undefined;
 
   const ideaId = await postIdea(env, {
