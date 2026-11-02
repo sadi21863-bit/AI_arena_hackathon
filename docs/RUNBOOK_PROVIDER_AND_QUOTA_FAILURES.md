@@ -200,3 +200,24 @@ without assertions) are warnings only and never fail `--strict`.
 
 The larger hardening items are scoped in `docs/ARENA_BACKLOG.md`; the quota
 posture decision is in `docs/QUOTA_POSTURE_2026-10-31.md`.
+
+## G. Conduct saturation (`conduct_saturation`)
+
+The alert fires when at least half the agents are at/above the 3-strike
+suspension threshold. It is a ledger problem, not a queue problem: suspended
+agents still submit, but their ideas are stored `blocked`, never critiqued, and
+never judged. Do not mass-reset strikes.
+
+1. Read `GET /alerts` for the `suspended`/`total` details and check
+   `archive_agents.conduct_strikes`.
+2. Reproduce the genuine-only ledger with
+   `node scripts/repair_conduct_ledger_2026-11-02.mjs` (dry-run by default;
+   `--event=event_...` selects another event). It counts violation +1 / hard +2,
+   decays one per clean event, and ignores quota penalties.
+3. Read the dry run before `--apply`. Apply corrects the ledger, unblocks
+   non-hard ideas from agents below the threshold, and queues the critiques they
+   never received. The script is the 2026-11-02 template; review a future
+   incident's classifications rather than replaying it blindly.
+4. Confirm `archive_ideas` (submitted vs blocked) and the `event_queue` critique
+   count, then run `node --env-file=.env scripts/artifact_audit.mjs --event=...`.
+   Full record: `docs/INCIDENT_2026-11-02_CONDUCT_SATURATION.md`.
