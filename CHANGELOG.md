@@ -17,6 +17,12 @@ notes what changed behavior in production and why.
   the anchor and architecture-scope interventions the morning after the phase,
   rather than waiting for judging. The audit also no longer falls back to an
   unrelated cycle's hackathon when the selected ideathon is still in flight.
+- **Admin account probe cannot echo key material.** A provider error body is
+  untrusted, so `GET /admin/quota/accounts` (and `npm run quota:probe`) now
+  redact the presented key before truncating the error, and the Worker probe
+  times out after 10 seconds instead of hanging the request. A regression test
+  returns a 401 whose body echoes the Authorization header and asserts neither
+  key appears in the response.
 
 ## 2026-11-01
 

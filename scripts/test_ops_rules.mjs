@@ -108,6 +108,22 @@ const sameAccount = await probeOpenRouterAccounts({
 assert.equal(sameAccount.independent, false);
 assert.match(sameAccount.verdict, /SAME account/);
 
+// A provider error body is untrusted: even if it echoes the Authorization
+// header, the admin-only response must not contain either key.
+globalThis.fetch = async (_url, init) =>
+  new Response(
+    JSON.stringify({ error: { message: `invalid credential ${init?.headers?.Authorization ?? ""}` } }),
+    { status: 401 },
+  );
+const failedProbe = await probeOpenRouterAccounts({
+  OPEN_ROUTER_API_KEY: "k1-secret",
+  OPEN_ROUTER_API_KEY_2: "k2-secret",
+});
+assert.equal(failedProbe.accounts[0].http_status, 401);
+assert.match(failedProbe.verdict, /probe failed/);
+assert.equal(JSON.stringify(failedProbe).includes("k1-secret"), false, "error body must not echo key 1");
+assert.equal(JSON.stringify(failedProbe).includes("k2-secret"), false, "error body must not echo key 2");
+
 globalThis.fetch = realFetch;
 
 // Quota posture: both accounts on the same UTC day, OR two distinct events,

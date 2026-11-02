@@ -68,6 +68,17 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Provider errors are untrusted text. A malformed or hostile error body could
+ * echo the Authorization value, and this endpoint is the one place a key is
+ * deliberately sent to a third party. Redact before truncating so a key can
+ * never appear even partially.
+ */
+function redact(text: string, secret: string | undefined): string {
+  if (!secret) return text;
+  return text.split(secret).join("[redacted]");
+}
+
 async function probeAccount(
   slot: 1 | 2,
   envName: string,
@@ -92,6 +103,8 @@ async function probeAccount(
   try {
     const res = await fetch("https://openrouter.ai/api/v1/key", {
       headers: { Authorization: `Bearer ${key}` },
+      // An admin check must not hang the request if the provider stalls.
+      signal: AbortSignal.timeout(10000),
     });
     const body = (await res.json().catch(() => ({}))) as {
       data?: {
@@ -113,7 +126,7 @@ async function probeAccount(
         ...empty,
         configured: true,
         http_status: res.status,
-        error: JSON.stringify(body.error ?? body).slice(0, 200),
+        error: redact(JSON.stringify(body.error ?? body), key).slice(0, 200),
       };
     }
     const daily = data.free_model_daily_requests;
@@ -135,7 +148,7 @@ async function probeAccount(
     return {
       ...empty,
       configured: true,
-      error: err instanceof Error ? err.message : String(err),
+      error: redact(err instanceof Error ? err.message : String(err), key).slice(0, 200),
     };
   }
 }

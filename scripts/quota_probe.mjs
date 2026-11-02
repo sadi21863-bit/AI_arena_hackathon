@@ -38,6 +38,9 @@ const slots = [
 ];
 const sha8 = (value) =>
   value ? crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 8) : null;
+// A provider error body is untrusted text; never let it echo the key.
+const redact = (text, secret) =>
+  secret ? String(text).split(secret).join("[redacted]") : String(text);
 
 const results = [];
 for (const { slot, names } of slots) {
@@ -56,7 +59,7 @@ for (const { slot, names } of slots) {
     row.http_status = res.status;
     const data = body.data;
     if (!res.ok || !data) {
-      row.error = JSON.stringify(body.error ?? body).slice(0, 200);
+      row.error = redact(JSON.stringify(body.error ?? body), env[name]).slice(0, 200);
     } else {
       row.key_label = data.label ?? null;
       row.account_sha8 = sha8(data.creator_user_id);
@@ -68,7 +71,7 @@ for (const { slot, names } of slots) {
       row.expires_at = data.expires_at ?? null;
     }
   } catch (err) {
-    row.error = err instanceof Error ? err.message : String(err);
+    row.error = redact(err instanceof Error ? err.message : String(err), env[name]);
   }
   results.push(row);
 }
