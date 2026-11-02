@@ -23,6 +23,7 @@ import {
 } from "../src/observability/quota-posture.ts";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { weightedPanelScore } from "../src/judges/panel-score.ts";
+import { partialJudgingAlert } from "../src/observability/partial-judging.ts";
 
 // Cohen's kappa: known 2x2 example. fail=0, weak=1, pass=2.
 // A: fail, fail, pass, pass; B: fail, fail, pass, weak.
@@ -191,5 +192,22 @@ assert.equal(
 );
 assert.equal(weightedPanelScore([]), 0, "no judge rows must not divide by zero");
 assert.equal(weightedPanelScore([{ score: 8, weight: 0 }]), 0, "zero weight must not divide by zero");
+
+// The watchdog alert must name the degraded panel and map the target type to
+// the queue task it came from. The DB insert/dedupe lives in alerts.ts; this
+// asserts the payload contract without a live database.
+const partial = partialJudgingAlert("event_x", "idea", "idea_y", 1, 7);
+assert.equal(partial.kind, "partial_judging");
+assert.equal(partial.severity, "warning");
+assert.equal(partial.event_id, "event_x");
+assert.equal(partial.task_type, "judge_idea");
+assert.match(partial.message, /1\/7 judges/);
+assert.deepEqual(JSON.parse(partial.details), {
+  target_type: "idea",
+  target_id: "idea_y",
+  judges: 1,
+  panel_size: 7,
+});
+assert.equal(partialJudgingAlert("event_x", "team", "team_y", 6, 7).task_type, "judge_team");
 
 console.log("ops rule tests passed");

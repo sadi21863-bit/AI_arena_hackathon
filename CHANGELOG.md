@@ -34,8 +34,11 @@ notes what changed behavior in production and why.
   was stored as ~1.2 and lost to every full panel for a reason unrelated to
   quality. Partial panels now divide by the present weight sum; a full
   seven-judge panel is unchanged. Fewer judges still means a noisier estimate —
-  this removes the scale bias, not the variance. Live data has no partial panel
-  (155/155 targets have all seven rows), so no historical score is rewritten.
+  this removes the scale bias, not the variance. The watchdog also raises a
+  `partial_judging` alert (per event/task/24h) naming the target, so a degraded
+  panel is visible instead of disappearing into the archive. Live data has no
+  partial panel (155/155 targets have all seven rows), so no historical score is
+  rewritten.
 
 ## 2026-11-01
 

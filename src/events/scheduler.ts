@@ -41,7 +41,7 @@ import { pairwiseSimilarities } from "../agents/memory";
 import { applyEventRatings } from "../agents/ratings";
 import { reconcileBuildTurns, teamHasOpenTurn } from "./build-turns";
 import { buildDispatchBudgetAllows, openRouterKeyForTeam } from "./build-quota";
-import { recordQuotaHold } from "../observability/alerts";
+import { recordPartialJudging, recordQuotaHold } from "../observability/alerts";
 import { finalizeWithPartialScores } from "../judges/scoring";
 import { recordEventQuality } from "../judges/quality-snapshot";
 import { DAILY_CAPS, TASK_MODELS, unitsUsedToday } from "../router";
@@ -488,7 +488,14 @@ async function ensureIdeathonJudging(env: Env, eventId: string): Promise<"ready_
   const unjudged: { id: string }[] = [];
   for (const idea of toJudge.results) {
     if ((judgeFailureCounts.get(idea.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
-      const score = await finalizeWithPartialScores(env, { targetType: "idea", targetId: idea.id, phase: "ideathon" });
+      const { score, judges, panelSize } = await finalizeWithPartialScores(env, { targetType: "idea", targetId: idea.id, phase: "ideathon" });
+      if (judges < panelSize) {
+        try {
+          await recordPartialJudging(env, eventId, "idea", idea.id, judges, panelSize);
+        } catch (err) {
+          console.log(`partial-judging alert failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+      }
       await env.DB.prepare(`UPDATE archive_ideas SET ideathon_score = ?, status = 'judged' WHERE id = ?`).bind(score, idea.id).run();
     } else {
       unjudged.push(idea);
@@ -879,7 +886,14 @@ async function ensureHackathonJudging(env: Env, eventId: string): Promise<"ready
       continue;
     }
     if ((judgeFailureCounts.get(team.id) ?? 0) >= MAX_ITEM_ATTEMPTS) {
-      const hackathonScore = await finalizeWithPartialScores(env, { targetType: "team", targetId: team.id, phase: "hackathon" });
+      const { score: hackathonScore, judges, panelSize } = await finalizeWithPartialScores(env, { targetType: "team", targetId: team.id, phase: "hackathon" });
+      if (judges < panelSize) {
+        try {
+          await recordPartialJudging(env, eventId, "team", team.id, judges, panelSize);
+        } catch (err) {
+          console.log(`partial-judging alert failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+      }
       const idea = await env.DB.prepare(`SELECT ideathon_score FROM archive_ideas WHERE id = ?`).bind(team.idea_id).first<{ ideathon_score: number | null }>();
       const finalScore = (idea?.ideathon_score ?? 0) * 0.3 + hackathonScore * 0.7;
       await env.DB.prepare(`UPDATE hackathon_teams SET hackathon_score = ?, final_score = ?, status = 'judged' WHERE id = ?`)

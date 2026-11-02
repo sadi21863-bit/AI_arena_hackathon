@@ -20,6 +20,7 @@
 import type { Env } from "../env";
 import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
 import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
+import { partialJudgingAlert } from "./partial-judging";
 
 export const SUBREQUEST_WARN_THRESHOLD = 45;
 
@@ -32,7 +33,8 @@ export interface OpsAlert {
     | "formation_failures"
     | "dispatch_no_run"
     | "quota_hold"
-    | "quota_posture_review";
+    | "quota_posture_review"
+    | "partial_judging";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -306,6 +308,29 @@ export async function recordQuotaHold(env: Env, eventId: string, teamName: strin
       "until the UTC reset; the other team's account is independent. Do not rotate keys or add a provider.",
     details: JSON.stringify({ team_name: teamName, account, remaining_floor: QUOTA_DISPATCH_FLOOR }),
   });
+  return result.pushed;
+}
+
+/**
+ * Called by the scheduler's stall watchdog when it finalizes a target with a
+ * partial judge panel. The renormalized score is on the right scale, but a
+ * 1-of-7 result is not a full-panel verdict and must not disappear into the
+ * archive as if it were. Deduped per event/task/24h; details name the target.
+ */
+export async function recordPartialJudging(
+  env: Env,
+  eventId: string,
+  targetType: "idea" | "team",
+  targetId: string,
+  judges: number,
+  panelSize: number,
+): Promise<boolean> {
+  const taskType = targetType === "idea" ? "judge_idea" : "judge_team";
+  if (await recentAlertExists(env, "partial_judging", eventId, taskType)) return false;
+  const result = await raiseAlert(
+    env,
+    partialJudgingAlert(eventId, targetType, targetId, judges, panelSize),
+  );
   return result.pushed;
 }
 

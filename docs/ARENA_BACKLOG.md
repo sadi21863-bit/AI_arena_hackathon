@@ -569,7 +569,8 @@ are not mistaken for done.
 The scheduled tick now writes `ops_alerts` for the highest-frequency branches:
 `worker_subrequest_log.total >= 45/50`, an event paused for capacity for more
 than an hour, 3+ `team_formation` failures in the current incarnation, a build
-turn with no `run_id` 30 minutes after dispatch, and an OpenRouter probe hold.
+turn with no `run_id` 30 minutes after dispatch, an OpenRouter probe hold, and a
+judge panel finalized with fewer than seven judges (`partial_judging`).
 A `quota_posture_review` alert is raised when both accounts hold on the same UTC
 day, or when holds span two distinct events (or three distinct UTC days) in 14
 days; `/headroom.quota_posture` exposes the counts and labels the signal as a

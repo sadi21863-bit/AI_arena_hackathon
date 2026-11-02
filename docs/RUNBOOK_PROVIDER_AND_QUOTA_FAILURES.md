@@ -113,8 +113,10 @@ revived; their abandonment means the work itself is stuck.
 `ensureIdeathonJudging`/`ensureHackathonJudging` also finalize a target with
 whatever judge rows exist once one judge has failed `MAX_ITEM_ATTEMPTS` times
 (`finalizeWithPartialScores`). That score is renormalized over the judges that
-answered, so it stays comparable to a full panel; check `judge_scores` row
-counts if a winner looks surprising after a judge outage. The normalization
+answered, so it stays comparable to a full panel; the finalization raises a
+`partial_judging` alert (§E) naming the target, and the row also shows the
+judge count. Check `judge_scores` if a winner looks surprising after a judge
+outage. The normalization
 does not make a one-judge panel as reliable as a seven-judge one — the
 confidence label still owns that caveat.
 
@@ -129,6 +131,10 @@ to `ops_alerts`:
 - 3+ `team_formation` failures in the current incarnation (`formation_failures`);
 - a build turn still without a `run_id` 30 minutes after dispatch
   (`dispatch_no_run`);
+- a target finalized with fewer than seven judges after repeated failures
+  (`partial_judging`). The score is renormalized over the judges that answered,
+  so it is comparable in scale, but the ranking is not a full-panel result and
+  the missing judge is a provider-health signal;
 - the OpenRouter probe refusing a dispatch because the free-tier floor is
   reached (`quota_hold`);
 - both accounts holding on the same UTC day, or holds across 2+ events / 3+
@@ -165,6 +171,7 @@ The remaining thresholds are still manual:
 | OpenRouter remaining | ≤ floor (10) | **automated** (`quota_hold` when the probe refuses a dispatch) |
 | quota holds across cycles | both accounts same day / 2 events / 3 UTC days in 14d | **automated** (`quota_posture_review`, 7-day dedupe; proxy for revisit trigger #1) |
 | `hackathon_teams.repo_url IS NULL` while `building` | any | formation failed; `dispatch_no_run`/`formation_failures` catch the aftermath |
+| judge panel finalized | k < 7 answered | **automated** (`partial_judging`, per event/task/24h) |
 | event `paused_capacity` | > 1h | **automated** (`capacity_pause`) |
 
 ## F. Ranking confidence (post-event)

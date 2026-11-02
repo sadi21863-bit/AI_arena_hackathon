@@ -203,7 +203,7 @@ async function collaborationBonusFor(env: Env, targetType: "idea" | "team", targ
 export async function finalizeWithPartialScores(
   env: Env,
   opts: { targetType: "idea" | "team"; targetId: string; phase: "ideathon" | "hackathon" }
-): Promise<number> {
+): Promise<{ score: number; judges: number; panelSize: number }> {
   const existing = await env.DB.prepare(
     `SELECT score, weight FROM judge_scores WHERE target_type = ? AND target_id = ? AND phase = ?`
   ).bind(opts.targetType, opts.targetId, opts.phase).all<{ score: number; weight: number }>();
@@ -217,5 +217,9 @@ export async function finalizeWithPartialScores(
     ? (await env.DB.prepare(`SELECT conduct_penalty FROM archive_ideas WHERE id = ?`).bind(opts.targetId).first<{ conduct_penalty: number | null }>())?.conduct_penalty ?? 0
     : 0;
 
-  return Math.min(10, total + collaborationBonus + conductPenalty);
+  return {
+    score: Math.min(10, total + collaborationBonus + conductPenalty),
+    judges: existing.results.length,
+    panelSize: JUDGES.length,
+  };
 }
