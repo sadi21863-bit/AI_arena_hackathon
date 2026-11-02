@@ -28,6 +28,14 @@ notes what changed behavior in production and why.
   `{pending:0,in_progress:0,completed:0,failed:0}`, which reads exactly like a
   quiet event and misled an ops check on 2026-11-02. `/events/:id` already did
   this; the counter now matches it.
+- **Partial judging stays on the same 0–10 scale.** The stall watchdog
+  (`MAX_ITEM_ATTEMPTS`) finalizes a target with whatever judge rows answered.
+  It summed `score × weight` without renormalizing, so a single judge's 8/10
+  was stored as ~1.2 and lost to every full panel for a reason unrelated to
+  quality. Partial panels now divide by the present weight sum; a full
+  seven-judge panel is unchanged. Fewer judges still means a noisier estimate —
+  this removes the scale bias, not the variance. Live data has no partial panel
+  (155/155 targets have all seven rows), so no historical score is rewritten.
 
 ## 2026-11-01
 

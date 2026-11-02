@@ -9,6 +9,7 @@ import type { Env } from "../env";
 import { routeInference } from "../router";
 import { extractJson } from "../agents/json-helpers";
 import { JUDGES, type Judge } from "./personas";
+import { weightedPanelScore } from "./panel-score";
 
 interface JudgeScoreJson {
   score: number;
@@ -192,10 +193,12 @@ async function collaborationBonusFor(env: Env, targetType: "idea" | "team", targ
  * the whole event's judged/complete transition (and, via ensureArenaCadence's
  * stillRunning check, every future Arena cycle behind it) forever.
  *
- * Same weighted-sum + collaboration-bonus math as scoreTarget's own tail —
- * this is deliberately "judge with whoever answered", the same standard
+ * Same collaboration-bonus/conduct-penalty math as scoreTarget's tail — this
+ * is deliberately "judge with whoever answered", the same standard
  * Promise.allSettled already applies within one scoring attempt, just applied
- * across attempts instead of within one.
+ * across attempts instead of within one. The weighted total is renormalized
+ * over the judges that did answer, so a partial panel stays on the same 0-10
+ * scale as a full one.
  */
 export async function finalizeWithPartialScores(
   env: Env,
@@ -205,7 +208,7 @@ export async function finalizeWithPartialScores(
     `SELECT score, weight FROM judge_scores WHERE target_type = ? AND target_id = ? AND phase = ?`
   ).bind(opts.targetType, opts.targetId, opts.phase).all<{ score: number; weight: number }>();
 
-  const total = existing.results.reduce((sum, row) => sum + row.score * row.weight, 0);
+  const total = weightedPanelScore(existing.results);
   const collaborationBonus = await collaborationBonusFor(env, opts.targetType, opts.targetId);
 
   // Same conduct_penalty as scoreTarget's tail — see its comment; the

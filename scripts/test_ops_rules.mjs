@@ -22,6 +22,7 @@ import {
   quotaPostureTrigger,
 } from "../src/observability/quota-posture.ts";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
+import { weightedPanelScore } from "../src/judges/panel-score.ts";
 
 // Cohen's kappa: known 2x2 example. fail=0, weak=1, pass=2.
 // A: fail, fail, pass, pass; B: fail, fail, pass, weak.
@@ -162,5 +163,33 @@ assert.deepEqual(
   [],
 );
 assert.deepEqual(findOverScopedIdeas([{ id: "e", title: "Empty", build_scope: "" }]), []);
+
+// Partial judging: the stall watchdog finalizes with whoever answered. The
+// seven weights sum to 1, so a full panel must be unchanged; a partial panel
+// must be renormalized, or an 8/10 scored by one judge becomes ~1.2 and loses
+// to every full panel for a reason unrelated to quality.
+const ideathonWeights = [0.20, 0.20, 0.20, 0.15, 0.15, 0.05, 0.05];
+assert.equal(
+  Math.abs(ideathonWeights.reduce((sum, w) => sum + w, 0) - 1) < 1e-12,
+  true,
+  "ideathon weights must sum to 1",
+);
+assert.equal(
+  weightedPanelScore(ideathonWeights.map((weight) => ({ score: 8, weight }))),
+  8,
+  "a full panel is unchanged by renormalization",
+);
+assert.equal(
+  weightedPanelScore([{ score: 8, weight: 0.15 }]),
+  8,
+  "one of seven judges must stay on the 0-10 scale",
+);
+assert.equal(
+  Math.abs(weightedPanelScore([{ score: 9, weight: 0.2 }, { score: 7, weight: 0.15 }]) - 57 / 7) < 1e-12,
+  true,
+  "mixed partial panel is weighted by present judge weights",
+);
+assert.equal(weightedPanelScore([]), 0, "no judge rows must not divide by zero");
+assert.equal(weightedPanelScore([{ score: 8, weight: 0 }]), 0, "zero weight must not divide by zero");
 
 console.log("ops rule tests passed");

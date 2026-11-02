@@ -110,6 +110,14 @@ revived; their abandonment means the work itself is stuck.
    the next cycle. Verify with the `stillRunning` query / the next ideathon
    slot (`computeNextArenaStart`).
 
+`ensureIdeathonJudging`/`ensureHackathonJudging` also finalize a target with
+whatever judge rows exist once one judge has failed `MAX_ITEM_ATTEMPTS` times
+(`finalizeWithPartialScores`). That score is renormalized over the judges that
+answered, so it stays comparable to a full panel; check `judge_scores` row
+counts if a winner looks surprising after a judge outage. The normalization
+does not make a one-judge panel as reliable as a seven-judge one — the
+confidence label still owns that caveat.
+
 ## E. Alerts — durable, optionally pushed
 
 The highest-frequency branches are automated on the scheduled tick and written
