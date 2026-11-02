@@ -738,9 +738,17 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // needing the admin token.
     const queueStatusMatch = url.pathname.match(/^\/events\/([^/]+)\/queue-status$/);
     if (queueStatusMatch && request.method === "GET") {
+      // A typo'd/unknown event id used to return 200 with all-zero counts,
+      // which reads exactly like a healthy event with no work queued - it
+      // misled an ops check on 2026-11-02. Match /events/:id and 404 instead.
+      const eventId = queueStatusMatch[1];
+      const exists = await env.DB.prepare(`SELECT 1 FROM archive_events WHERE id = ?`)
+        .bind(eventId)
+        .first();
+      if (!exists) return Response.json({ error: "event not found" }, { status: 404 });
       const rows = await env.DB.prepare(
         `SELECT status, COUNT(*) as n FROM event_queue WHERE event_id = ? GROUP BY status`
-      ).bind(queueStatusMatch[1]).all<{ status: string; n: number }>();
+      ).bind(eventId).all<{ status: string; n: number }>();
       const counts = { pending: 0, in_progress: 0, completed: 0, failed: 0 };
       for (const row of rows.results) {
         if (row.status in counts) counts[row.status as keyof typeof counts] = row.n;

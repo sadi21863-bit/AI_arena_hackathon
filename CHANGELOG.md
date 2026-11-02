@@ -23,6 +23,11 @@ notes what changed behavior in production and why.
   times out after 10 seconds instead of hanging the request. A regression test
   returns a 401 whose body echoes the Authorization header and asserts neither
   key appears in the response.
+- **A typo'd event id is no longer a healthy-looking empty queue.**
+  `GET /events/:id/queue-status` returns 404 for an unknown event instead of
+  `{pending:0,in_progress:0,completed:0,failed:0}`, which reads exactly like a
+  quiet event and misled an ops check on 2026-11-02. `/events/:id` already did
+  this; the counter now matches it.
 
 ## 2026-11-01
 
