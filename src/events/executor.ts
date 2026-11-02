@@ -11,6 +11,7 @@ import { extractJson } from "../agents/json-helpers";
 import { getAgent, type AgentRow } from "../agents/personas";
 import { deepResearch, deepResearchWithExtract } from "../agents/research";
 import { postIdea, critiqueIdea, reviseIdea, proposeCollaboration, respondToCollaboration } from "../agents/interactions";
+import { isDerivedClass } from "../conduct/quota";
 import { recallMemory, recallLessons, queryArchive, getVectorsByIds, cosineSimilarity } from "../agents/memory";
 import { chroniclePhase } from "../agents/chronicle";
 import { createTeamRepo, syncTeamHarness } from "../github/repos";
@@ -147,13 +148,21 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   // and requiring a genuinely different problem/target user attacks the
   // actual cause instead.
   const priorIdeas = await env.DB.prepare(
-    `SELECT title, one_liner FROM archive_ideas WHERE event_id = ? AND agent_id = ? ORDER BY created_at ASC`
-  ).bind(item.event_id, agent.id).all<{ title: string; one_liner: string }>();
+    `SELECT title, one_liner, recycle_class FROM archive_ideas WHERE event_id = ? AND agent_id = ? ORDER BY created_at ASC`
+  ).bind(item.event_id, agent.id).all<{ title: string; one_liner: string; recycle_class: string | null }>();
+  const usedUpgrade = priorIdeas.results.some((p) => isDerivedClass(p.recycle_class));
   const priorIdeasText = priorIdeas.results.length
     ? `\n\nYou already submitted these idea(s) earlier this event:\n` +
       priorIdeas.results.map((p) => `- "${p.title}": ${p.one_liner}`).join("\n") +
       `\nYour new idea must target a genuinely different problem and user than every idea above — not a rename, feature variant, or rephrasing of one of them.`
     : "";
+  // R1 quota: one derived/upgrade submission per event, two fresh ones. The
+  // model sees the archive every time and would otherwise choose an upgrade
+  // three times, which is exactly the shape that saturated the strike ledger
+  // before the 2026-11-02 quota fix.
+  const upgradeQuotaText = usedUpgrade
+    ? `\n\nYou have already used your one derived/upgrade submission this event. This idea MUST be fresh: a genuinely different problem and target user, not an upgrade or variant of any idea above.`
+    : `\n\nAcross your three submissions this event, at most one may be a derived upgrade of a past idea. If you use that slot now, your other submissions must be fresh.`;
 
   // Recycle sweep (ARENA_BACKLOG "prior-idea recycle"): the archive holds
   // every idea this agent has ever submitted, across events, embedded in
@@ -179,10 +188,11 @@ async function handleSubmitIdea(env: Env, item: QueueItem, agent: AgentRow): Pro
   const compressedContext = compressContext(rawContext);
   const text = await callAgent(env, agent, "design",
     `${compressedContext}\n\n` +
-    `Submit ONE product idea grounded in that research — a new idea, or a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
+    `Submit ONE product idea grounded in that research — a new idea, or (at most once per event) a substantially improved upgrade of one of your past ideas from the list above. Respond with ONLY a JSON object: ` +
     `{"title": string, "one_liner": string, "problem": string, "solution": string, "target_user": string, "build_scope": string, "research_anchor": string}. ` +
     `research_anchor must be a short quote or source from the research context above (max 240 characters) that this idea is grounded in — do not leave it empty or invent a source. ` +
-    `build_scope should be a short buildable-in-days scope, not a vague vision.`
+    `build_scope should be a short buildable-in-days scope, not a vague vision.` +
+    upgradeQuotaText
   );
 
   const idea = extractJson<IdeaJson>(text);

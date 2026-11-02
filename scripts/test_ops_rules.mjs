@@ -24,6 +24,7 @@ import {
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { weightedPanelScore } from "../src/judges/panel-score.ts";
 import { partialJudgingAlert } from "../src/observability/partial-judging.ts";
+import { MAX_DERIVED_PER_EVENT, QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "../src/conduct/quota.ts";
 
 // Cohen's kappa: known 2x2 example. fail=0, weak=1, pass=2.
 // A: fail, fail, pass, pass; B: fail, fail, pass, weak.
@@ -209,5 +210,22 @@ assert.deepEqual(JSON.parse(partial.details), {
   panel_size: 7,
 });
 assert.equal(partialJudgingAlert("event_x", "team", "team_y", 6, 7).task_type, "judge_team");
+
+// R1 quota: one derived submission per event, and the extra ones are a score
+// penalty only. `dup` is R6 (no strike, not quota); a pre-conduct null class is
+// not derived. Counting every prior idea instead of only derived ones would
+// penalize a fresh-first agent's first legitimate evolution.
+assert.equal(MAX_DERIVED_PER_EVENT, 1);
+assert.equal(isDerivedClass(null), false);
+assert.equal(isDerivedClass("fresh"), false);
+assert.equal(isDerivedClass("dup"), false);
+for (const cls of ["evolution", "marginal", "violation", "hard"]) {
+  assert.equal(isDerivedClass(cls), true, `${cls} is derived`);
+}
+assert.equal(quotaPenalty("fresh", 5), 0);
+assert.equal(quotaPenalty("dup", 5), 0);
+assert.equal(quotaPenalty("evolution", 0), 0, "the first derived idea is legal");
+assert.equal(quotaPenalty("evolution", 1), QUOTA_PENALTY, "the second derived idea is penalized");
+assert.equal(quotaPenalty("violation", 1), -1);
 
 console.log("ops rule tests passed");

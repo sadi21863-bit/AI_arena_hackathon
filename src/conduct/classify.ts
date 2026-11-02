@@ -16,7 +16,8 @@
  *          -2.0 + 2 strikes).
  *   R6     dup vs ANY earlier idea in the same event (>=0.90): -1.0, no strike.
  *   R1     quota: max 1 derived submission per event; each derived past the
- *          first gets -1.0 + 1 strike.
+ *          first gets a -1.0 score penalty (no strike — R4 strikes fire only
+ *          at measured >=0.92; the old quota strike saturated every ledger).
  *   R4     strike ladder on archive_agents.conduct_strikes; >=3 = privilege
  *          loss (postIdea stores the idea with status 'blocked' — recorded
  *          and visible, never judged or formed into a team). Clean-arena
@@ -30,6 +31,7 @@
 
 import type { Env } from "../env";
 import { cosineSimilarity, getVectorsByIds } from "../agents/memory";
+import { QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "./quota";
 
 export const CONDUCT_BANDS = {
   fresh: 0.8,     // below: fresh
@@ -47,11 +49,11 @@ export const CONDUCT_PENALTIES = {
   violationRepeat: -3.0,
   hard: -2.0,
   dup: -1.0,
-  quota: -1.0,
+  quota: QUOTA_PENALTY,
 } as const;
 
+export { MAX_DERIVED_PER_EVENT } from "./quota";
 export const PRIVILEGE_LIMIT = 3; // strikes before submission privilege is lost (R4)
-export const MAX_DERIVED_PER_EVENT = 1; // R1 quota
 
 export type ConductClass = "fresh" | "evolution" | "marginal" | "violation" | "hard" | "dup";
 
@@ -82,9 +84,9 @@ export async function classifyIdea(
   // Comparison set: the agent's own prior work across events (R2/R3 band) and
   // every earlier idea in this event (R6 dup) — one query, partitioned in JS.
   const rows = await env.DB.prepare(
-    `SELECT id, event_id, agent_id FROM archive_ideas
+    `SELECT id, event_id, agent_id, recycle_class FROM archive_ideas
      WHERE status != 'blocked' AND (agent_id = ? OR event_id = ?)`
-  ).bind(opts.agentId, opts.eventId).all<{ id: string; event_id: string; agent_id: string }>();
+  ).bind(opts.agentId, opts.eventId).all<{ id: string; event_id: string; agent_id: string; recycle_class: string | null }>();
 
   const ownPriorIds = rows.results.filter((r) => r.agent_id === opts.agentId).map((r) => r.id);
   const sameEventIds = rows.results.filter((r) => r.event_id === opts.eventId).map((r) => r.id);
@@ -152,18 +154,16 @@ export async function classifyIdea(
     }
   }
 
-  // R1 quota: count this agent's already-submitted derived ideas in this event.
-  if (verdict.cls !== "fresh") {
-    const derivedSoFar = rows.results.filter(
-      (r) => r.agent_id === opts.agentId && r.event_id === opts.eventId
-    ).length;
-    if (derivedSoFar >= MAX_DERIVED_PER_EVENT) {
-      verdict = {
-        ...verdict,
-        penalty: verdict.penalty + CONDUCT_PENALTIES.quota,
-        strikes: verdict.strikes + 1,
-      };
-    }
+  // R1 quota: a score penalty for the second and later derived idea in this
+  // event — not a strike. Counting only derived prior ideas is the rule the
+  // design states ("max 1 may derive"); counting every prior idea penalized a
+  // fresh-first agent's first legitimate evolution. `dup` is R6, not quota.
+  const derivedSoFar = rows.results.filter(
+    (r) => r.agent_id === opts.agentId && r.event_id === opts.eventId && isDerivedClass(r.recycle_class)
+  ).length;
+  const quota = quotaPenalty(verdict.cls, derivedSoFar);
+  if (quota !== 0) {
+    verdict = { ...verdict, penalty: verdict.penalty + quota };
   }
 
   // R4 decay: -1 strike per clean arena, at most once per event, lazily at the
