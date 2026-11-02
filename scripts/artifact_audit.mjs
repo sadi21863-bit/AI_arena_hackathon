@@ -769,9 +769,7 @@ async function main() {
       console.log(`  UNANCHORED ${idea.id} "${idea.title}" (no research_anchor)`);
     }
     for (const idea of semantic.over_scoped_ideas.slice(0, 5)) {
-      console.log(
-        `  OVER-SCOPED ${idea.id} "${idea.title}" (build_scope names Kubernetes/blockchain/training/multi-cloud outside "out of scope")`,
-      );
+      console.log(`  OVER-SCOPED ${idea.id} "${idea.title}" (${idea.terms.join(", ")})`);
     }
     for (const build of semantic.thin_builds.slice(0, 5)) {
       console.log(

@@ -128,10 +128,11 @@ assert.equal(quotaPostureTrigger(0, 1, 2), null);
 // Architecture over-scope tripwire: a banned term is a warning, but a
 // sentence that explicitly excludes it is compliant (the prompt tells the
 // model to list these under "out of scope").
-assert.deepEqual(
-  findOverScopedIdeas([{ id: "a", title: "K8s app", build_scope: "Deploy the service on Kubernetes with a multi-region database." }]).map((i) => i.id),
-  ["a"],
-);
+const overScoped = findOverScopedIdeas([
+  { id: "a", title: "K8s app", build_scope: "Deploy the service on Kubernetes with a multi-region database." },
+]);
+assert.deepEqual(overScoped.map((i) => i.id), ["a"]);
+assert.deepEqual([...overScoped[0].terms].sort(), ["kubernetes", "multi-region"]);
 assert.deepEqual(
   findOverScopedIdeas([{ id: "b", title: "Scoped", build_scope: "One repo, one command. Out of scope: Kubernetes, blockchain, custom model training." }]),
   [],

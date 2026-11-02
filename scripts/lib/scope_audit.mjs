@@ -11,21 +11,30 @@
  * Kept in its own module so `scripts/test_ops_rules.mjs` can exercise the
  * negation handling without importing the audit script's network setup.
  */
-const BANNED_SCOPE_RE =
-  /\b(kubernetes|k8s|blockchain|distributed ledger|smart contracts?|custom (?:model )?training|multi-cloud|multi-region)\b/i;
+const BANNED_SCOPE_PATTERN =
+  "\\b(kubernetes|k8s|blockchain|distributed ledger|smart contracts?|custom (?:model )?training|multi-cloud|multi-region)\\b";
 const SCOPE_EXCLUSION_RE = /\b(out of scope|not in scope|excluded|no |not |without |avoid )/i;
 
 export function findOverScopedIdeas(ideas) {
-  return ideas
-    .filter((idea) => {
-      const plan = typeof idea.build_scope === "string" ? idea.build_scope.trim() : "";
-      if (!plan) return false;
-      return plan
-        .split(/(?<=[.!?])\s+|\n+/)
-        .some((sentence) => BANNED_SCOPE_RE.test(sentence) && !SCOPE_EXCLUSION_RE.test(sentence));
-    })
-    .map((idea) => ({
+  const out = [];
+  for (const idea of ideas) {
+    const plan = typeof idea.build_scope === "string" ? idea.build_scope.trim() : "";
+    if (!plan) continue;
+
+    const terms = new Set();
+    for (const sentence of plan.split(/(?<=[.!?])\s+|\n+/)) {
+      if (SCOPE_EXCLUSION_RE.test(sentence)) continue;
+      for (const match of sentence.match(new RegExp(BANNED_SCOPE_PATTERN, "gi")) ?? []) {
+        terms.add(match.toLowerCase());
+      }
+    }
+    if (terms.size === 0) continue;
+
+    out.push({
       id: idea.id,
       title: typeof idea.title === "string" ? idea.title.trim() : "",
-    }));
+      terms: [...terms],
+    });
+  }
+  return out;
 }
