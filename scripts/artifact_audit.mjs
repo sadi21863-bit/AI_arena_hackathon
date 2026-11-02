@@ -29,6 +29,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -264,6 +265,29 @@ function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
     .filter((idea) => idea.status === "judged" && !text(idea.research_anchor))
     .map((idea) => ({ id: idea.id, title: text(idea.title) }));
 
+  // Coverage is informational, not a warning: it makes the ideation prompt's
+  // 240-character anchor request observable the morning after ideation, rather
+  // than only after architecture and judging (2+ days later). It is a process
+  // metric, never part of an idea's score.
+  const finalistIdeas = rawIdeas.filter(
+    (idea) => idea.status === "judged" || idea.status === "architecture_complete",
+  );
+  const anchorCoverage = {
+    ideas: rawIdeas.length,
+    anchored: rawIdeas.filter((idea) => text(idea.research_anchor)).length,
+    finalists: finalistIdeas.length,
+    finalists_anchored: finalistIdeas.filter((idea) => text(idea.research_anchor)).length,
+  };
+
+  // The architecture prompt explicitly bans Kubernetes, blockchain/ledger,
+  // custom model training, multi-cloud and multi-region compliance from the
+  // MVP. Build scope was the discriminating criterion in the semantic
+  // calibration (kappa 0.630) and over-scoping is the recurring failure, so
+  // flag a finalist plan that mentions a banned term outside a sentence that
+  // says it is out of scope. Warning-only and deterministic - not a quality
+  // score, and a compliant "out of scope: Kubernetes" line must not trip it.
+  const overScopedIdeas = findOverScopedIdeas(finalistIdeas);
+
   const thinBuilds = builds
     .filter((build) => build.code?.thin)
     .map((build) => ({
@@ -282,6 +306,8 @@ function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
     orphan_critiques: orphanCritiques,
     generic_ideas: genericIdeas,
     unanchored_ideas: unanchoredIdeas,
+    anchor_coverage: anchorCoverage,
+    over_scoped_ideas: overScopedIdeas,
     thin_builds: thinBuilds,
     unasserted_tests: unassertedTests,
     warnings:
@@ -289,6 +315,7 @@ function semanticAudit(rawIdeas, rawCritiques, builds, allIdeaIds) {
       orphanCritiques.length +
       genericIdeas.length +
       unanchoredIdeas.length +
+      overScopedIdeas.length +
       thinBuilds.length +
       unassertedTests.length,
   };
@@ -473,6 +500,8 @@ function compactResult(result) {
       orphan_critiques: result.semantic.orphan_critiques.slice(0, 10),
       generic_ideas: result.semantic.generic_ideas.slice(0, 10),
       unanchored_ideas: result.semantic.unanchored_ideas.slice(0, 10),
+      anchor_coverage: result.semantic.anchor_coverage,
+      over_scoped_ideas: result.semantic.over_scoped_ideas.slice(0, 10),
       thin_builds: result.semantic.thin_builds,
       unasserted_tests: result.semantic.unasserted_tests,
     },
@@ -554,7 +583,10 @@ async function main() {
     );
     if (child.length) {
       hackathon = child[0];
-    } else {
+    } else if (event.status === "judged") {
+      // Only a judged ideathon should have produced a child. Falling back for
+      // an in-flight ideathon would audit an unrelated cycle's repos and then
+      // claim the child "produced no repos" - it simply has not run yet.
       const latest = await d1(
         `SELECT e.id, e.parent_event_id, e.status, e.start_date FROM archive_events e
          WHERE e.type = 'hackathon' AND e.status = 'complete'
@@ -634,6 +666,8 @@ async function main() {
       orphan_critiques: semantic.orphan_critiques.length,
       generic_ideas: semantic.generic_ideas.length,
       unanchored_ideas: semantic.unanchored_ideas.length,
+      anchor_coverage: semantic.anchor_coverage,
+      over_scoped_ideas: semantic.over_scoped_ideas.length,
       thin_builds: semantic.thin_builds.length,
       unasserted_tests: semantic.unasserted_tests.length,
       warnings: semantic.warnings,
@@ -670,7 +704,7 @@ async function main() {
     if (hackathon) {
       console.log(
         `Build cycle: ${hackathon.id} (${hackathon.status}, parent ${hackathon.parent_event_id})` +
-          (fallback ? " — fallback: the selected ideathon's child produced no repos" : ""),
+          (fallback ? " - fallback: no complete child hackathon with repos; auditing the latest complete hackathon" : ""),
       );
     } else {
       console.log("Build cycle: none (no complete hackathon with repos)");
@@ -707,10 +741,15 @@ async function main() {
     }
 
     console.log(
-      `\nSemantic (warnings only): ${semantic.near_duplicate_pairs.length} near-duplicate idea pair(s), ` +
+      `\nResearch anchors (informational): ${semantic.anchor_coverage.anchored}/${semantic.anchor_coverage.ideas} idea(s), ` +
+        `${semantic.anchor_coverage.finalists_anchored}/${semantic.anchor_coverage.finalists} finalist(s). Not a score or gate.`,
+    );
+    console.log(
+      `Semantic (warnings only): ${semantic.near_duplicate_pairs.length} near-duplicate idea pair(s), ` +
         `${semantic.orphan_critiques.length} orphan critique(s), ` +
         `${semantic.generic_ideas.length} generic-phrase idea(s), ` +
         `${semantic.unanchored_ideas.length} unanchored finalist(s), ` +
+        `${semantic.over_scoped_ideas.length} over-scoped finalist plan(s), ` +
         `${semantic.thin_builds.length} thin build(s), ` +
         `${semantic.unasserted_tests.length} test set(s) without assertions`,
     );
@@ -728,6 +767,11 @@ async function main() {
     }
     for (const idea of semantic.unanchored_ideas.slice(0, 5)) {
       console.log(`  UNANCHORED ${idea.id} "${idea.title}" (no research_anchor)`);
+    }
+    for (const idea of semantic.over_scoped_ideas.slice(0, 5)) {
+      console.log(
+        `  OVER-SCOPED ${idea.id} "${idea.title}" (build_scope names Kubernetes/blockchain/training/multi-cloud outside "out of scope")`,
+      );
     }
     for (const build of semantic.thin_builds.slice(0, 5)) {
       console.log(

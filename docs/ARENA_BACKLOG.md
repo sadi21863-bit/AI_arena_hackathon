@@ -645,6 +645,14 @@ tests without assertions. It catches the historical duplicate shape:
 `event_2eaf0bb2` flags `Facilify` ×2, `ForensicsHub Compliance Module` ×3 and
 `ESIGN Compliance Toolkit` ×2 at 100%, plus `Memorix`/`Memorix Pro` at 86%.
 
+The 2026-11-02 pass added two checks tied to the prompt fixes: research-anchor
+coverage (informational, so the 240-character anchor request is observable the
+morning after ideation) and over-scoped finalist plans (a banned term in
+`build_scope` outside an "out of scope" sentence; build scope was the
+discriminating criterion at κ=0.630). It also stopped the audit from falling
+back to an unrelated cycle's hackathon while the selected ideathon is still in
+flight, which made the old "child produced no repos" label false.
+
 The first single-reviewer semantic sample is
 `docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md` (raw:
 `docs/SEMANTIC_SAMPLE_2026-10-31.md`). It found **0/34 ideas with a

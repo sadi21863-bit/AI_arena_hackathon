@@ -3,6 +3,21 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-11-02
+
+- **Research anchors are bounded where they are stored.** The ideation prompt
+  asks for at most 240 characters; `handleSubmitIdea` now truncates at that
+  bound instead of accepting 500, so an over-long anchor cannot reach the
+  archive or the Ideas Board's inline rendering.
+- **The audit can see the two prompt fixes before judging.** Warning-only,
+  deterministic checks now report research-anchor coverage (informational, not a
+  score) and flag an over-scoped finalist plan whose `build_scope` names
+  Kubernetes, blockchain/ledger, custom model training, multi-cloud or
+  multi-region outside a sentence that puts it "out of scope." This verifies
+  the anchor and architecture-scope interventions the morning after the phase,
+  rather than waiting for judging. The audit also no longer falls back to an
+  unrelated cycle's hackathon when the selected ideathon is still in flight.
+
 ## 2026-11-01
 
 - **Quota posture corrected: two independent accounts, not one.** Measured

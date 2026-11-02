@@ -21,6 +21,7 @@ import {
   quotaPostureReviewDue,
   quotaPostureTrigger,
 } from "../src/observability/quota-posture.ts";
+import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 
 // Cohen's kappa: known 2x2 example. fail=0, weak=1, pass=2.
 // A: fail, fail, pass, pass; B: fail, fail, pass, weak.
@@ -123,5 +124,26 @@ assert.equal(quotaPostureTrigger(1, 2, 3), "both_accounts_same_day", "same-day b
 assert.equal(quotaPostureTrigger(0, 2, 3), "events", "events wins over days");
 assert.equal(quotaPostureTrigger(0, 1, 3), "days");
 assert.equal(quotaPostureTrigger(0, 1, 2), null);
+
+// Architecture over-scope tripwire: a banned term is a warning, but a
+// sentence that explicitly excludes it is compliant (the prompt tells the
+// model to list these under "out of scope").
+assert.deepEqual(
+  findOverScopedIdeas([{ id: "a", title: "K8s app", build_scope: "Deploy the service on Kubernetes with a multi-region database." }]).map((i) => i.id),
+  ["a"],
+);
+assert.deepEqual(
+  findOverScopedIdeas([{ id: "b", title: "Scoped", build_scope: "One repo, one command. Out of scope: Kubernetes, blockchain, custom model training." }]),
+  [],
+);
+assert.deepEqual(
+  findOverScopedIdeas([{ id: "c", title: "Negated", build_scope: "No Kubernetes. No multi-cloud. The app writes to SQLite." }]),
+  [],
+);
+assert.deepEqual(
+  findOverScopedIdeas([{ id: "d", title: "Plain", build_scope: "Static frontend plus a small Node service with SQLite storage." }]),
+  [],
+);
+assert.deepEqual(findOverScopedIdeas([{ id: "e", title: "Empty", build_scope: "" }]), []);
 
 console.log("ops rule tests passed");

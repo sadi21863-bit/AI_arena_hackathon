@@ -13,8 +13,8 @@ name: Artifact audit
 #
 # Requires repo secrets CF_ACCOUNT_ID and CF_API_TOKEN (already present for
 # deploy-worker/deploy-pages). Runs on the default branch, newest judged
-# ideathon; when that ideathon's child produced no repos it falls back to the
-# latest complete hackathon and says so in the output.
+# ideathon; when that judged ideathon has no complete child with repos it falls
+# back to the latest complete hackathon and says so in the output.
 
 on:
   schedule:
