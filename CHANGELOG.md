@@ -23,11 +23,14 @@ notes what changed behavior in production and why.
   times out after 10 seconds instead of hanging the request. A regression test
   returns a 401 whose body echoes the Authorization header and asserts neither
   key appears in the response.
-- **A typo'd event id is no longer a healthy-looking empty queue.**
-  `GET /events/:id/queue-status` returns 404 for an unknown event instead of
-  `{pending:0,in_progress:0,completed:0,failed:0}`, which reads exactly like a
-  quiet event and misled an ops check on 2026-11-02. `/events/:id` already did
-  this; the counter now matches it.
+- **A typo'd event id is no longer a healthy-looking empty event.** Every
+  public `GET /events/:id/<subroute>` now returns 404 for an unknown event
+  instead of an empty 200. `queue-status` used to answer with all-zero counts,
+  which reads exactly like a quiet event and misled an ops check on 2026-11-02;
+  `queue-items`, `teams`, `timeline`, `changes`, `tribunal`, `journal`,
+  `roster`, `chronicle`, `agent-activity`, `agent-artifacts`, `build-turns`,
+  `collaborations` and `judge-scores` had the same ambiguity. `/events/:id`
+  already did this; the subroutes now match it.
 - **Partial judging stays on the same 0–10 scale.** The stall watchdog
   (`MAX_ITEM_ATTEMPTS`) finalizes a target with whatever judge rows answered.
   It summed `score × weight` without renormalizing, so a single judge's 8/10

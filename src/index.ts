@@ -732,20 +732,26 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       });
     }
 
+    // Every public /events/:id/<subroute> below is a read. Resolve the id once,
+    // here, so the whole family 404s like /events/:id instead of returning an
+    // empty 200 that reads exactly like a quiet-but-healthy event. A typo'd
+    // queue-status id did that during an ops check on 2026-11-02; fixing only
+    // that route would leave the same ambiguity in its siblings.
+    const eventSubrouteMatch = url.pathname.match(/^\/events\/([^/]+)\/[^/]+$/);
+    if (eventSubrouteMatch && request.method === "GET") {
+      const exists = await env.DB.prepare(`SELECT 1 FROM archive_events WHERE id = ?`)
+        .bind(eventSubrouteMatch[1])
+        .first();
+      if (!exists) return Response.json({ error: "event not found" }, { status: 404 });
+    }
+
     // Observatory Live view (spec §11): aggregate queue-item counts by status
     // for one event, so a "what's happening right now" view can show a
     // simple health meter without exposing individual queue payloads or
     // needing the admin token.
     const queueStatusMatch = url.pathname.match(/^\/events\/([^/]+)\/queue-status$/);
     if (queueStatusMatch && request.method === "GET") {
-      // A typo'd/unknown event id used to return 200 with all-zero counts,
-      // which reads exactly like a healthy event with no work queued - it
-      // misled an ops check on 2026-11-02. Match /events/:id and 404 instead.
       const eventId = queueStatusMatch[1];
-      const exists = await env.DB.prepare(`SELECT 1 FROM archive_events WHERE id = ?`)
-        .bind(eventId)
-        .first();
-      if (!exists) return Response.json({ error: "event not found" }, { status: 404 });
       const rows = await env.DB.prepare(
         `SELECT status, COUNT(*) as n FROM event_queue WHERE event_id = ? GROUP BY status`
       ).bind(eventId).all<{ status: string; n: number }>();
