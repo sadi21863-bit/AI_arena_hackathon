@@ -748,8 +748,8 @@ async function main() {
       `Semantic (warnings only): ${semantic.near_duplicate_pairs.length} near-duplicate idea pair(s), ` +
         `${semantic.orphan_critiques.length} orphan critique(s), ` +
         `${semantic.generic_ideas.length} generic-phrase idea(s), ` +
-        `${semantic.unanchored_ideas.length} unanchored finalist(s), ` +
-        `${semantic.over_scoped_ideas.length} over-scoped finalist plan(s), ` +
+        `${semantic.unanchored_ideas.length}/${semantic.anchor_coverage.finalists} unanchored finalist(s), ` +
+        `${semantic.over_scoped_ideas.length}/${semantic.anchor_coverage.finalists} over-scoped finalist plan(s), ` +
         `${semantic.thin_builds.length} thin build(s), ` +
         `${semantic.unasserted_tests.length} test set(s) without assertions`,
     );

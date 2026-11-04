@@ -63,9 +63,13 @@ notes what changed behavior in production and why.
   (deduped 24h).
 - **First live evidence for the anchor and scope fixes.** The repaired
   `event_40e6b8d8` audits 33/33 ideas with 33/33 research anchors, 0 contract
-  failures and 0 semantic warnings. The 2026-11-02 audit of the historical
-  `event_dc3df601` also passed and persisted: 34/34 ideas, 21/21 critiques, 2/2
-  builds, 9 warnings (the old unanchored/over-scoped plans).
+  failures and 0 semantic warnings in the current population. Finalist-only
+  checks are reported as `0/0` and are not an all-clear until architecture
+  selects the finalists; the audit now prints that denominator. The 2026-11-02
+  audit of the historical `event_dc3df601` also passed and persisted: 34/34
+  ideas, 21/21 critiques, 2/2 builds, 9 warnings (the old
+  unanchored/over-scoped plans, now 7/7 finalists unanchored and 1/7
+  over-scoped).
 
 ## 2026-11-01
 
