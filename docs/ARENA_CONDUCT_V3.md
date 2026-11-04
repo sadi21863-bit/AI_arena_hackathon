@@ -180,6 +180,12 @@ outlier judge) — bounded by judges_sim's panel result (1 judge ≈ 41% winner-
 hit vs 69.5% at 7), inference-cost per arena (266 calls), and live
 re-calibration of the bands on real Week-8 sim values.
 
+Production note (2026-11-02): the stall watchdog's partial-panel finalization
+now renormalizes over the judges that answered, so a k<7 panel stays on the
+0–10 scale, and it raises a `partial_judging` alert naming the target. That
+removes the scale bias, not the variance described above — the outlier-judge
+and reduced-k robustness question stays open.
+
 ## 9. Reproduce
 
 ```bash
