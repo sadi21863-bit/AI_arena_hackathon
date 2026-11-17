@@ -12,7 +12,10 @@ current events are small; `--n=N` samples when needed.
 ## Contracts
 
 **Idea** — `title` ≥3, `one_liner` ≥40, `problem` ≥60, `solution` ≥80
-characters; no `TBD`/`TODO`/`lorem ipsum`/`placeholder`; `problem` is not
+characters; no marker-shaped placeholder text (`TBD`, `TODO:`/`TODO-`/a bare
+`TODO` field, `lorem ipsum`, `[insert …]`, `<placeholder>`, `{{insert …}}`);
+a legitimate phrase such as "placeholder rules" is not a failure (narrowed
+2026-11-17, see `docs/ARTIFACT_AUDIT_2026-11-17.md`); `problem` is not
 identical to `solution`. Finalists (`judged`, `architecture_complete`) also
 need `build_scope` ≥80. A blocked idea without `build_scope` is a note, not a
 failure: it never reached architecture.

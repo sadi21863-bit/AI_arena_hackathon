@@ -656,6 +656,11 @@ discriminating criterion at κ=0.630). It also stopped the audit from falling
 back to an unrelated cycle's hackathon while the selected ideathon is still in
 flight, which made the old "child produced no repos" label false.
 
+2026-11-17: the placeholder contract was narrowed after it failed a legitimate
+"placeholder rules" build scope for five daily runs; the same selected cycle's
+beta repo genuinely lacks `VERIFICATION_REPORT.md`, recorded in
+`docs/ARTIFACT_AUDIT_2026-11-17.md` and left red rather than backfilled.
+
 The first single-reviewer semantic sample is
 `docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md` (raw:
 `docs/SEMANTIC_SAMPLE_2026-10-31.md`). It found **0/34 ideas with a

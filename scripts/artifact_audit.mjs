@@ -110,7 +110,13 @@ async function gh(pathname) {
 }
 
 const text = (v) => (typeof v === "string" ? v.trim() : "");
-const PLACEHOLDER_RE = /\b(TBD|TODO|lorem ipsum|placeholder)\b/i;
+// A bare "placeholder" is too ambiguous to be a contract failure: a build
+// scope may legitimately say "placeholder rules" (stub/mock rules), and
+// "Todoist" must not trip a TODO check. Match marker-shaped text instead.
+// Found 2026-11-17: "module with placeholder rules" failed every daily audit
+// for five days as if the idea were unfinished.
+const PLACEHOLDER_RE =
+  /\bTBD\b|\bTODO\b(?=\s*[:：-]|\s*$)|lorem ipsum|\[(?:insert|placeholder|todo|tbd)[^\]]*\]|<(?:insert|placeholder|todo|tbd)>|\{\{\s*(?:insert|placeholder|todo|tbd)[^}]*\}\}/i;
 const IDEA_MIN = { title: 3, one_liner: 40, problem: 60, solution: 80, build_scope: 80 };
 
 function auditIdea(idea) {

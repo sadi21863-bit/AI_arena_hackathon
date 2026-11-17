@@ -3,6 +3,22 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-11-17
+
+- **The daily audit no longer fails on the word "placeholder".**
+  `PLACEHOLDER_RE` matched the bare word anywhere in an idea, so the legitimate
+  build instruction "an AI risk-flagging module with placeholder rules" failed
+  `--strict` for five days. The check now matches marker-shaped text only:
+  `TBD`, `TODO` with marker punctuation or at the end of a field, `lorem ipsum`,
+  `[insert …]`, `<placeholder>` and `{{insert …}}`. A "TODO app" is not a
+  placeholder.
+- **Known gap: the latest complete beta repo has no verification report.**
+  `arena-team-beta-d6c87ec8` (build cycle `event_3b985ab5`) has 23 product files
+  and commits through turn 6 but no `VERIFICATION_REPORT.md`; alpha's report
+  passes. The daily workflow will stay red on this cycle until the next complete
+  hackathon is selected. The report was not backfilled — see
+  `docs/ARTIFACT_AUDIT_2026-11-17.md`.
+
 ## 2026-11-02
 
 - **Research anchors are bounded where they are stored.** The ideation prompt
