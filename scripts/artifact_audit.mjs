@@ -369,12 +369,21 @@ async function auditBuild(team) {
     report_has_verdict: false,
   };
   const notes = [];
+  // A quota kill can end the turn before the agent writes its verification
+  // report. Waive that specific gap only when the team actually held on quota
+  // and no turn completed successfully; a successful turn had a chance to
+  // write the report, so a missing one there is still a contract failure.
+  const waived = new Set();
+  const quotaKilled =
+    Boolean(Number(team.quota_hold)) &&
+    Number(team.failed_turns) > 0 &&
+    Number(team.successful_turns) === 0;
   let productFiles = [];
   let testFiles = [];
   let verdict = null;
   const emptyCode = () => ({ sampled: 0, nonblank_lines: 0, max_file_lines: 0, assertion_hits: 0, thin: false });
   let code = emptyCode();
-  const failList = () => Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
+  const failList = () => Object.entries(checks).filter(([name, ok]) => !ok && !waived.has(name)).map(([name]) => name);
 
   if (!team.repo_url) {
     notes.push("repo_url is NULL (team formation did not finish)");
@@ -459,6 +468,13 @@ async function auditBuild(team) {
     } else {
       notes.push(`report content HTTP ${report.status}`);
     }
+  } else if (quotaKilled) {
+    waived.add("has_verification_report");
+    waived.add("report_has_verdict");
+    notes.push(
+      "VERIFICATION_REPORT.md is missing after a quota_hold with no successful turn — " +
+        "the free-tier handoff can kill the turn before the report; warning only",
+    );
   } else {
     notes.push("VERIFICATION_REPORT.md is missing");
   }
@@ -470,6 +486,7 @@ async function auditBuild(team) {
     pass: failed.length === 0,
     checks,
     failed,
+    waived: [...waived],
     notes,
     product_files: productFiles,
     test_files: testFiles,
@@ -636,7 +653,12 @@ async function main() {
       `SELECT t.id, t.team_name, t.repo_url, t.status,
          COUNT(b.turn_id) AS turns,
          SUM(CASE WHEN b.run_id IS NOT NULL THEN 1 ELSE 0 END) AS with_run,
-         SUM(CASE WHEN b.head_sha IS NOT NULL THEN 1 ELSE 0 END) AS with_sha
+         SUM(CASE WHEN b.head_sha IS NOT NULL THEN 1 ELSE 0 END) AS with_sha,
+         SUM(CASE WHEN b.conclusion = 'success' THEN 1 ELSE 0 END) AS successful_turns,
+         SUM(CASE WHEN b.conclusion = 'failure' THEN 1 ELSE 0 END) AS failed_turns,
+         EXISTS (SELECT 1 FROM ops_alerts a
+                 WHERE a.kind = 'quota_hold' AND a.event_id = t.event_id
+                   AND a.task_type = t.team_name) AS quota_hold
        FROM hackathon_teams t LEFT JOIN build_turns b ON b.team_id = t.id
        WHERE t.event_id = ? GROUP BY t.id ORDER BY t.team_name`,
       [hackathon.id],

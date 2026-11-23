@@ -1002,6 +1002,45 @@ jobs:
           echo "verification container exited $code (0 = checks passed, 1 = checks failed after $ATTEMPTS attempts — reported at the end so this turn's work is still committed)"
           exit 0
 
+      - name: Write harness verification report if absent
+        # A quota kill is the expected free-tier handoff, but it can land after
+        # the work is committed and before the agent writes its
+        # VERIFICATION_REPORT.md. The artifact audit treats a missing report as
+        # a contract failure, so record the actual Phase B result here. Never
+        # overwrite an agent-authored report: that one is the agent's own
+        # self-assessment, not the harness's.
+        if: ${{ !cancelled() }}
+        run: |
+          REPORT="${{ github.workspace }}/VERIFICATION_REPORT.md"
+          if [ -f "$REPORT" ]; then
+            echo "agent-authored VERIFICATION_REPORT.md present — leaving it untouched"
+            exit 0
+          fi
+          if [ "${{ steps.verify.outputs.verify_failed }}" = "true" ]; then
+            VERDICT="NOT READY"
+            RESULT="FAIL"
+            EXIT="1"
+            DETAIL="Phase B locked-down verification failed this turn. See VERIFICATION_FAILURE.log for the failing checks."
+          else
+            VERDICT="READY"
+            RESULT="PASS"
+            EXIT="0"
+            DETAIL="Phase B locked-down verification passed this turn (network=none)."
+          fi
+          {
+            echo "# Verification report — turn ${{ github.event.inputs.turn_id || github.event.client_payload.turn_id }} (harness-generated)"
+            echo
+            echo "| Phase | Command | Result | Exit |"
+            echo "|---|---|---|---|"
+            echo "| Build + typecheck + tests | Phase B locked-down verification (see job log) | $RESULT | $EXIT |"
+            echo
+            echo "## Verdict"
+            echo "$VERDICT"
+            echo
+            echo "$DETAIL The agent did not write a report before the turn ended; this file records the actual harness verification result."
+          } > "$REPORT"
+          echo "wrote harness VERIFICATION_REPORT.md with Verdict: $VERDICT"
+
       - name: Commit progress
         # The push uses a credential that carries the `workflows` OAuth scope:
         # GITHUB_TOKEN can never carry that scope (`workflows` is a

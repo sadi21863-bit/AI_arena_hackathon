@@ -661,6 +661,12 @@ flight, which made the old "child produced no repos" label false.
 beta repo genuinely lacks `VERIFICATION_REPORT.md`, recorded in
 `docs/ARTIFACT_AUDIT_2026-11-17.md` and left red rather than backfilled.
 
+2026-11-23: the next cycle reproduced the missing-report gap on a quota-killed
+turn. The harness now writes a fallback report from the Phase B result, and the
+audit waives a missing report only for a team with a `quota_hold` and no
+successful turn. The old beta report remains absent and is a warning, not a
+backfill.
+
 The first single-reviewer semantic sample is
 `docs/SEMANTIC_SAMPLE_REVIEW_2026-10-31.md` (raw:
 `docs/SEMANTIC_SAMPLE_2026-10-31.md`). It found **0/34 ideas with a

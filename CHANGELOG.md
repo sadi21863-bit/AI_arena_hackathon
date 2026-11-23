@@ -3,6 +3,20 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-11-23
+
+- **Quota-killed turns no longer leave the audit red forever.** The build-turn
+  workflow now writes a harness-generated `VERIFICATION_REPORT.md` from the
+  actual Phase B result when the agent did not, without overwriting an
+  agent-authored report. The artifact audit treats a missing report as a
+  warning only when the team has a `quota_hold` in that event and no successful
+  turn; a team with a successful turn and no report still fails. This closes
+  the recurrence in `event_b7474b18`, where alpha had 0 successful turns, 8
+  quota failures and no report.
+- **The old beta gap remains visible, not backfilled.** The 2026-11-17 note
+  said the historical beta report would not be fabricated; it still is not.
+  It now passes the strict build contract with the same quota-handoff warning.
+
 ## 2026-11-17
 
 - **The daily audit no longer fails on the word "placeholder".**

@@ -1,7 +1,8 @@
 # Artifact audit — 2026-11-17 (daily red, two causes)
 
-Status: the false positive is fixed; one genuine historical contract gap
-remains and is intentionally still red.
+Status: the false positive is fixed; a missing report is a strict failure
+unless the team had a `quota_hold` in that event and no successful turn
+(2026-11-23 policy).
 
 ## What was red
 
@@ -54,6 +55,28 @@ turn a measured gap into a fabricated artifact. The daily workflow stays red
 on this cycle, and that red is honest. This note is the record, so the red is
 not mistaken for a new outage or an audit bug.
 
+## 2026-11-23 recurrence and policy
+
+The next cycle reproduced the gap. `event_b7474b18` (complete 2026-11-22
+16:15Z) has alpha: 16 product files, 4 test files, 1,409 nonblank lines, no
+report; beta: 16/5/3,187 with `READY`. Both teams' turns were quota kills —
+alpha 0 success / 8 failure, beta 0/9 — and `quota_hold` alerts exist for both.
+The 2026-11-22 14:34Z audit ran before the event completed, so it still fell
+back to the old cycle; a manual run now selects the new one.
+
+Two changes:
+
+- The build-turn workflow writes a harness-generated `VERIFICATION_REPORT.md`
+  from the actual Phase B result when the agent did not. It never overwrites an
+  agent-authored report.
+- The audit treats a missing report as a warning, not a strict failure, only
+  when the team has a `quota_hold` in that event and **no successful turn**.
+  A team with a successful turn and no report still fails.
+
+The old beta repo still has no report and is not backfilled; it now shows the
+same quota-handoff warning. The audit output keeps the missing-report note in
+both cases, so the artifact is still visibly absent.
+
 ## Why it should clear
 
 The audit selects the newest judged ideathon and its complete child. The next
@@ -66,9 +89,8 @@ not in the audit — do not add an exception.
 
 ## Follow-up
 
-- [ ] On `event_b7474b18` completion, confirm both repos have
-  `VERIFICATION_REPORT.md` with a parseable `Verdict`.
-- [ ] If either is missing, treat it as a harness/prompt compliance gap (the
-  verification skill is baked and the turn prompt demands the report), not an
-  audit exception.
+- [ ] On the next cycle, confirm the harness-generated report appears when the
+  agent does not write one.
+- [ ] Keep the waiver narrow: do not extend it to a team with a successful turn
+  and no report.
 - [ ] Keep `--strict`; do not add a baseline that silences a missing report.

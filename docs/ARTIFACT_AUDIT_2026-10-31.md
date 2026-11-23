@@ -29,7 +29,10 @@ product file outside the scaffold/harness (`README`, `AGENTS`, `BACKLOG`,
 logs and the verification report are not product work); ≥1 test file; a
 `VERIFICATION_REPORT.md` with a parseable `Verdict` line. A `NOT READY`
 verdict is recorded as a note, not a contract failure — an honest failed
-security check is still an honest report.
+security check is still an honest report. A missing report is a warning only
+when the team has a `quota_hold` in that event and no successful turn
+(2026-11-23: the free-tier handoff can kill the turn before the report);
+otherwise it is a contract failure.
 
 ## Semantic layer (warnings only)
 
