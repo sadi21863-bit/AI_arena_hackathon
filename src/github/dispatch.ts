@@ -5,6 +5,7 @@
  */
 
 import type { Env } from "../env";
+import type { OpenRouterKeyPin } from "../events/build-quota";
 import { githubRequest } from "./client";
 
 export interface DispatchBuildTurnInput {
@@ -12,6 +13,8 @@ export interface DispatchBuildTurnInput {
   team: "alpha" | "beta";
   turnId: string;
   taskPrompt: string;
+  /** Dispatch-selected primary pool; absent means the workflow's repo-name default. */
+  keyPin?: OpenRouterKeyPin;
 }
 
 export async function dispatchBuildTurn(env: Env, input: DispatchBuildTurnInput): Promise<void> {
@@ -41,6 +44,7 @@ export async function dispatchBuildTurn(env: Env, input: DispatchBuildTurnInput)
       team: input.team,
       turn_id: input.turnId,
       task_prompt: input.taskPrompt,
+      key_pin: input.keyPin ?? "",
     },
   });
 }

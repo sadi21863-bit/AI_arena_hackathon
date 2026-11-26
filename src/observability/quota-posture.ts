@@ -7,11 +7,10 @@
  * `quota_hold` alert is the closest durable proxy: it is written when the
  * OpenRouter probe refuses a dispatch, not when a turn is provably missed.
  *
- * The two configured keys were measured to be two INDEPENDENT accounts on
- * 2026-11-01 (distinct creator_user_id/workspace, independent daily counters),
- * and teams are pinned one per account. A single hold therefore means one
- * team's day is spent, not that the arena is out of budget. The review trigger
- * reflects that:
+ * Since 2026-11-27 four keys are configured and measured to be four INDEPENDENT
+ * accounts (alpha owns 1/3, beta owns 2/4), each pair disjoint. A single hold
+ * therefore means one team's two-account budget is spent, not that the arena
+ * is out of budget. The review trigger reflects that:
  *
  *   - both accounts held on the same UTC day (arena-wide squeeze), or
  *   - holds on 2+ distinct events (the capacity problem is recurring), or
@@ -125,9 +124,9 @@ export async function loadQuotaPosture(env: Env): Promise<QuotaPosture> {
     review_due: trigger !== null,
     trigger,
     caveat:
-      "Proxy only: a quota_hold means one team's pinned account refused a dispatch, not that the arena is provably out of budget. " +
-      "The two configured keys are independent accounts (alpha -> 1, beta -> 2 when the second key is configured), so a single hold can coexist with a healthy build on the other. " +
-      "review_due fires when both accounts hold on the same UTC day, or when holds recur across 2+ events / 3+ days. " +
+      "Proxy only: a quota_hold means one team's pinned account(s) refused a dispatch, not that the arena is provably out of budget. " +
+      "The four configured keys are independent accounts in two disjoint pairs (alpha -> 1/3, beta -> 2/4), so a single team's hold can coexist with a healthy build on the other pair. " +
+      "review_due fires when two accounts hold on the same UTC day, or when holds recur across 2+ events / 3+ days. " +
       "It prompts an owner review of pinning and capacity; it never provisions keys or credit automatically.",
   };
 }

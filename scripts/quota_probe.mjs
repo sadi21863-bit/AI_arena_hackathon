@@ -35,6 +35,8 @@ const env = { ...readEnvFile(path.join(root, ".env")), ...process.env };
 const slots = [
   { slot: "account_1", names: ["OPEN_ROUTER_API_KEY_1", "OPEN_ROUTER_API_KEY"] },
   { slot: "account_2", names: ["OPEN_ROUTER_API_KEY_2"] },
+  { slot: "account_3", names: ["OPEN_ROUTER_API_KEY_3"] },
+  { slot: "account_4", names: ["OPEN_ROUTER_API_KEY_4"] },
 ];
 const sha8 = (value) =>
   value ? crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 8) : null;
@@ -95,11 +97,12 @@ if (jsonOut) {
     );
   }
   const ids = results.filter((row) => row.account_sha8).map((row) => row.account_sha8);
-  if (ids.length === 2) {
+  if (ids.length > 1) {
+    const independent = new Set(ids).size === ids.length;
     console.log(
-      ids[0] === ids[1]
-        ? "VERDICT: same account (keys share one free-tier daily cap)"
-        : "VERDICT: two independent accounts (separate daily counters)",
+      independent
+        ? `VERDICT: ${ids.length} independent accounts — alpha 1/3, beta 2/4 (${ids.length * 50}/day)`
+        : "VERDICT: DUPLICATE account ids — keys share one daily cap; overflow is not real",
     );
   }
 }

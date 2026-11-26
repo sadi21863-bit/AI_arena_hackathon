@@ -135,6 +135,11 @@ const BUILD_SECRET_SPEC: ReadonlyArray<{ name: string; required: boolean; value:
   // turns start on the "pinned pool is empty — starting on the failover
   // pool" warning path with nothing to fail over TO.
   { name: "OPEN_ROUTER_API_KEY_2", required: false, value: (env) => env.OPEN_ROUTER_API_KEY_2 },
+  // Per-team overflow accounts (2026-11-27): alpha spends 1 then 3, beta 2
+  // then 4. The scheduler probes all four and dispatches on the first with
+  // budget; a missing name is repaired here just like the 2026-10-13 switch.
+  { name: "OPEN_ROUTER_API_KEY_3", required: false, value: (env) => env.OPEN_ROUTER_API_KEY_3 },
+  { name: "OPEN_ROUTER_API_KEY_4", required: false, value: (env) => env.OPEN_ROUTER_API_KEY_4 },
   { name: "GROQ_API_KEY", required: false, value: (env) => env.GROQ_API_KEY },
   { name: "GROQ_API_KEY_2", required: false, value: (env) => env.GROQ_API_KEY_2 },
   { name: "OPENCODE_API_KEY", required: false, value: (env) => env.OPENCODE_API_KEY },

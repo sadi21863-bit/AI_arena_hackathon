@@ -23,6 +23,7 @@ import {
   beginSubrequestTracking, endSubrequestTracking, subrequestTotal, countDbStatement,
 } from "../observability/subrequests";
 import { requirePayloadField } from "./payload-utils";
+import type { OpenRouterKeyPin } from "./build-quota";
 import { recordBuildTurn, collectBuildEvidence, describeBuildEvidence, dispatchTurnIfNeeded } from "./build-turns";
 import { assignTeamMembers, nextBuildAuthor, recordTurnTaken, turnAttribution } from "./team-members";
 
@@ -955,6 +956,10 @@ async function handleDispatchBuildTurn(env: Env, item: QueueItem): Promise<void>
   const dispatched = await dispatchTurnIfNeeded(env, {
     repoFullName: team.repo_url, team: team.team_name,
     turnId,
+    // The scheduler probes every account this team owns and chooses the first
+    // with budget. Carry that pin to the workflow so it starts on the same
+    // account; repo-name default is used only when absent (formation turn 1).
+    keyPin: (item.payload as { keyPin?: OpenRouterKeyPin }).keyPin,
     // Same imperative-lead/reference-only-scope structure as turn 1's prompt
     // above — see docs/INVESTIGATION_2026-07-28.md NEW-1. Plan -> implement
     // -> self-verify + backlog-driven, same shape as turn 1 (2026-08-06).

@@ -33,16 +33,17 @@
  * counter (which audits the GitHub/D1-heavy paths) — it is at most one fetch
  * on a tick that was about to dispatch anyway.
  *
- * Team pinning mirrors team-build-turn.yml's TEAM_KEY_PIN (a repo whose name
- * contains 'beta' -> OPEN_ROUTER_API_KEY_2 when present, else key 1). Keep
- * the two in step; together they decide which account a team's turns spend.
+ * Team pinning mirrors team-build-turn.yml's TEAM_KEY_PIN, with a second
+ * account per team since 2026-11-27: alpha 1 -> 3, beta 2 -> 4. Keep both in
+ * step; together they decide which account a team's turns spend. The pairs
+ * are disjoint, so one team's exhausted day cannot consume the other's.
  *
- * Measured 2026-11-01: the two keys are two SEPARATE OpenRouter accounts
- * (distinct creator_user_id and workspace_id, independent
- * free_model_daily_requests counters), so pinning gives each team its own
- * 50-request/day cap - 100/day total. A hold on one account does not mean the
- * other is spent. The workflow deliberately vetoes cross-account failover on
- * quota death so one team's exhausted day cannot consume the other's.
+ * Measured 2026-11-01: the original two keys were two SEPARATE OpenRouter
+ * accounts (distinct creator_user_id and workspace_id, independent daily
+ * counters). Measured again 2026-11-27: keys 3/4 are two more independent
+ * free accounts. Pinning therefore gives each team 2 x 50 = 100 requests/day,
+ * 200/day total. The workflow vetoes cross-team failover; an exhausted team
+ * hands off and the scheduler spends its own overflow on the next dispatch.
  */
 
 export interface QuotaDecision {
@@ -68,15 +69,49 @@ export function nextUtcMidnightAfter(nowMs: number): number {
   return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
 }
 
-export type OpenRouterAccount = 1 | 2;
+export type OpenRouterAccount = 1 | 2 | 3 | 4;
+export type OpenRouterKeyPin = "KEY_1" | "KEY_2" | "KEY_3" | "KEY_4";
+
+export interface OpenRouterKeys {
+  key1?: string;
+  key2?: string;
+  key3?: string;
+  key4?: string;
+}
+
+/** The key behind one account slot. */
+export function keyForAccount(keys: OpenRouterKeys, account: OpenRouterAccount): string | undefined {
+  switch (account) {
+    case 1: return keys.key1;
+    case 2: return keys.key2;
+    case 3: return keys.key3;
+    case 4: return keys.key4;
+  }
+}
+
+export function pinForAccount(account: OpenRouterAccount): OpenRouterKeyPin {
+  return `KEY_${account}` as OpenRouterKeyPin;
+}
 
 /**
- * Which independent account a team's key belongs to. One source of truth for
- * the scheduler, hold attribution, and the workflow's TEAM_KEY_PIN.
+ * Accounts a team may spend, in order. Since 2026-11-27 each team owns TWO
+ * independent accounts: alpha 1 -> 3, beta 2 -> 4. When accounts 3/4 are not
+ * configured this is the old single-account posture. Beta with key 2 unset
+ * still falls back to account 1 (and its overflow 3), matching the historical
+ * rule; it never reaches accounts 2/4 unless key 2 is configured.
  *
- * `key2` matters: when the second key is unset, `openRouterKeyForTeam` falls
- * back to key 1, so beta is spending account 1. Attributing that hold to
- * account 2 would invent an arena-wide squeeze that did not happen.
+ * Crucially the two lists are disjoint: one team exhausting its day can never
+ * borrow the other team's budget. This is the isolation the 2026-10-17 dead-pin
+ * incident and the 2026-11-01 two-account decision were protecting.
+ */
+export function openRouterAccountsForTeam(teamName: string, keys: OpenRouterKeys): OpenRouterAccount[] {
+  const owned: OpenRouterAccount[] = teamName === "beta" && keys.key2 ? [2, 4] : [1, 3];
+  return owned.filter((account) => !!keyForAccount(keys, account));
+}
+
+/**
+ * Legacy single-account view, used by hold attribution and the two-key admin
+ * probes. The first configured account for the team is still the primary pin.
  */
 export function openRouterAccountForTeam(
   teamName: string,
@@ -86,15 +121,19 @@ export function openRouterAccountForTeam(
 }
 
 /**
- * Which pool a team's turns spend. Mirrors the workflow's TEAM_KEY_PIN:
- * beta is pinned to key 2 when configured, everything else key 1.
+ * First configured key for a team (the primary pin). Mirrors the workflow's
+ * default TEAM_KEY_PIN when no dispatch-selected pin is supplied.
  */
 export function openRouterKeyForTeam(
   teamName: string,
   key1: string | undefined,
-  key2: string | undefined
+  key2: string | undefined,
+  key3?: string,
+  key4?: string,
 ): string | undefined {
-  return openRouterAccountForTeam(teamName, key2) === 2 ? key2 : key1;
+  const keys: OpenRouterKeys = { key1, key2, key3, key4 };
+  const accounts = openRouterAccountsForTeam(teamName, keys);
+  return keyForAccount(keys, accounts[0] ?? 1);
 }
 
 /** Pure decision from an /api/v1/key response body. */

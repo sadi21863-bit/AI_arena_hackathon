@@ -18,7 +18,7 @@
  * without a row every 5 minutes.
  */
 import type { Env } from "../env";
-import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR } from "../events/build-quota";
+import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR, type OpenRouterAccount } from "../events/build-quota";
 import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
 import { partialJudgingAlert } from "./partial-judging";
 import {
@@ -335,22 +335,30 @@ export async function checkOperationalAlerts(env: Env): Promise<{ raised: number
  * held dispatch is only visible as an unchanged event. Deduped per team/24h,
  * so the second account's hold is not suppressed by the first.
  */
-export async function recordQuotaHold(env: Env, eventId: string, teamName: string): Promise<boolean> {
-  // Dedupe per team, not per event: alpha and beta are pinned to independent
-  // accounts, so suppressing the second team's hold would hide the arena-wide
-  // signal the posture review needs. See openRouterAccountForTeam.
+export async function recordQuotaHold(
+  env: Env,
+  eventId: string,
+  teamName: string,
+  accounts?: OpenRouterAccount[],
+): Promise<boolean> {
+  // Dedupe per team, not per event: the two teams own disjoint account pairs,
+  // so suppressing the second team's hold would hide the arena-wide signal
+  // the posture review needs. `accounts` names every account this team held.
   if (await recentAlertExists(env, "quota_hold", eventId, teamName)) return false;
-  const account = openRouterAccountForTeam(teamName, env.OPEN_ROUTER_API_KEY_2);
+  const exhausted = accounts?.length
+    ? accounts
+    : [openRouterAccountForTeam(teamName, env.OPEN_ROUTER_API_KEY_2)];
+  const account = exhausted[0];
   const result = await raiseAlert(env, {
     kind: "quota_hold",
     severity: "warning",
     event_id: eventId,
     task_type: teamName,
     message:
-      `build dispatch held for ${eventId} (${teamName}, account ${account}): the OpenRouter free-tier probe ` +
-      `on that account reports fewer than ${QUOTA_DISPATCH_FLOOR} requests remaining. This is a budget wait ` +
-      "until the UTC reset; the other team's account is independent. Do not rotate keys or add a provider.",
-    details: JSON.stringify({ team_name: teamName, account, remaining_floor: QUOTA_DISPATCH_FLOOR }),
+      `build dispatch held for ${eventId} (${teamName}, account ${account}${exhausted.length > 1 ? ` + ${exhausted.length - 1} overflow` : ""}): the OpenRouter free-tier probe ` +
+      `on every account this team owns reports fewer than ${QUOTA_DISPATCH_FLOOR} requests remaining. This is a budget wait ` +
+      "until the UTC reset; the other team's accounts are independent. Do not rotate keys or add a provider.",
+    details: JSON.stringify({ team_name: teamName, account, accounts_exhausted: exhausted, remaining_floor: QUOTA_DISPATCH_FLOOR }),
   });
   return result.pushed;
 }

@@ -76,6 +76,8 @@ export interface Env {
   // team repos by createTeamRepo for the same reason as the CF_* pair.
   OPEN_ROUTER_API_KEY?: string;
   OPEN_ROUTER_API_KEY_2?: string;
+  OPEN_ROUTER_API_KEY_3?: string;
+  OPEN_ROUTER_API_KEY_4?: string;
 
   // Optional push channel for operational alerts (2026-10-31). When set, the
   // scheduled tick POSTs a small JSON body (text/content + counts) for a

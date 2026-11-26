@@ -49,6 +49,10 @@ on:
         required: false
         default: "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
         type: string
+      key_pin:
+        description: "Dispatch-selected OpenRouter account (KEY_1..KEY_4); empty uses the repo-name default"
+        required: false
+        type: string
   repository_dispatch:
     types: [team-build-turn]
 
@@ -263,6 +267,8 @@ jobs:
           # a revert is a model change, not a re-scaffold; nothing dispatches on them.
           OR_KEY_1: ${{ secrets.OPEN_ROUTER_API_KEY }}
           OR_KEY_2: ${{ secrets.OPEN_ROUTER_API_KEY_2 }}
+          OR_KEY_3: ${{ secrets.OPEN_ROUTER_API_KEY_3 }}
+          OR_KEY_4: ${{ secrets.OPEN_ROUTER_API_KEY_4 }}
           # Runner-side pin for the key-selection block below. This MUST be a
           # step env var: ${{ }} does not interpolate inside run: shells, and
           # the docker -e flag further down only feeds the container. Found
@@ -272,7 +278,12 @@ jobs:
           # its own key sat as the unreachable fallback behind the QUOTA_DEATH
           # veto - so beta's quota probes read 0 forever while its key had 43
           # requests left.
-          TEAM_KEY_PIN: ${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }}
+          # Since 2026-11-27 the scheduler's dispatch payload carries the
+          # account it probed as available; repo-name is only the default for
+          # turn 1 (formation) and manual dispatches. Each team owns two
+          # disjoint accounts: KEY_1->KEY_3 overflow for alpha, KEY_2->KEY_4
+          # for beta. A turn never borrows the other team's account.
+          TEAM_KEY_PIN: ${{ inputs.key_pin || github.event.client_payload.key_pin || (contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1') }}
           # Model ids via env for the same interpolation reason as the prompt
           # (dispatch-controlled values, never inline). MODEL is the pinned
           # build model; FALLBACK_MODEL is attempt 3 when the pinned model
@@ -349,14 +360,18 @@ jobs:
             fi
           done
 
-          # Key selection: pinned pool first, other pool as failover.
-          if [ "$TEAM_KEY_PIN" = "KEY_2" ] && [ -n "$OR_KEY_2" ]; then
-            PRIMARY_KEY="$OR_KEY_2"
-            FALLBACK_KEY="$OR_KEY_1"
-          else
-            PRIMARY_KEY="$OR_KEY_1"
-            FALLBACK_KEY="$OR_KEY_2"
-          fi
+          # Key selection: pinned primary, then THIS TEAM'S overflow. The four
+          # keys are two disjoint pairs (alpha 1<->3, beta 2<->4), so a turn
+          # can never borrow the other team's budget. The scheduler chooses the
+          # pin after probing both of the team's accounts; repo-name is only a
+          # fallback for formation/manual turns.
+          case "$TEAM_KEY_PIN" in
+            KEY_2) PRIMARY_KEY="$OR_KEY_2"; OVERFLOW_KEY="$OR_KEY_4" ;;
+            KEY_3) PRIMARY_KEY="$OR_KEY_3"; OVERFLOW_KEY="$OR_KEY_1" ;;
+            KEY_4) PRIMARY_KEY="$OR_KEY_4"; OVERFLOW_KEY="$OR_KEY_2" ;;
+            *)     PRIMARY_KEY="$OR_KEY_1"; OVERFLOW_KEY="$OR_KEY_3" ;;
+          esac
+          FALLBACK_KEY="$OVERFLOW_KEY"
           if [ -z "$PRIMARY_KEY" ] && [ -n "$FALLBACK_KEY" ]; then
             echo "::warning::Pinned pool key is empty — starting on the failover pool"
             PRIMARY_KEY="$FALLBACK_KEY"
@@ -374,27 +389,26 @@ jobs:
           run_attempt() {
             ATTEMPT_KEY="$1"
             ATTEMPT_MODEL="$2"
-          # One OpenRouter key per team, pinned by repo name (*alpha* -> key 1,
-          # *beta* -> key 2 when present), WITH same-turn failover: if the
-          # pinned pool errors (429/quota/5xx signature in the turn logs)
-          # the attempt's logs are archived and the turn re-runs once on the
-          # other pool, then once more on FALLBACK_MODEL (different upstream —
-          # survives upstream outages that kill both pools identically).
+          # One OpenRouter key per ATTEMPT, pinned by the scheduler after it
+          # probes BOTH accounts the team owns (alpha 1/3, beta 2/4). If the
+          # pinned account errors (429/5xx signature in the turn logs) and it is
+          # NOT a quota death, the attempt's logs are archived and the turn
+          # re-runs once on the team's own overflow, then once more on
+          # FALLBACK_MODEL (different upstream — survives upstream outages that
+          # kill both accounts identically). Quota death still vetoes failover
+          # so an exhausted day cannot silently spend the next account; the
+          # scheduler picks that overflow as the primary on a later dispatch.
           # Healthy turns always take exactly one attempt on the pinned
-          # key+model, so attribution stays clean while a dead pool costs one
-          # failed attempt, not a dead team. Kept ABOVE `docker run`: comment
-          # lines inside the -e chain break it (`-e: command not found`,
+          # key+model, so attribution stays clean while a dead account costs
+          # one failed attempt, not a dead team. Kept ABOVE `docker run`:
+          # comment lines inside the -e chain break it (`-e: command not found`,
           # found live 2026-09-23).
-          # Measured 2026-11-01: the two configured keys ARE separate accounts
-          # on the same provider (independent daily counters), so the pin
-          # provides 2 x 50 requests/day. A second key on the SAME account
-          # would add no quota. Unset _2 behaves exactly like before.
-          # Cadence note (2026-10-15): with the free tier, a team's day is one
-          # budgeted session on its pinned pool (the scheduler holds dispatches
-          # when a pool's cap is spent — src/events/build-quota.ts), so the
-          # failover chain above is a recovery path for early deaths, not a
-          # second helping: by the time the daily cap is hit, the other pool is
-          # either unset (shared-pool case) or another team's account.
+          # Measured 2026-11-27: four independent free accounts (SHA prefixes
+          # dd3e918c / 22aca750 / 6eb130c8 / 7c98d5ba), two per team, so each
+          # team gets 2 x 50 = 100 requests/day without borrowing anyone else's.
+          # Cadence note: with the free tier, a team's day is at most two
+          # budgeted sessions (one per owned account); the scheduler holds
+          # dispatches once both are spent — src/events/build-quota.ts.
           # Git identity via env, not `git config`: with .git/config mounted
           # read-only (see RO_MOUNTS above), `git config user.name` would
           # fail with "could not lock config file" and every agent commit
@@ -413,7 +427,7 @@ jobs:
             -e NO_PROXY=localhost,127.0.0.1,host.docker.internal \
             -e OR_MODEL="$ATTEMPT_MODEL" \
             -e OPEN_ROUTER_API_KEY="$ATTEMPT_KEY" \
-            -e TEAM_KEY_PIN=${{ contains(github.repository, 'beta') && 'KEY_2' || 'KEY_1' }} \
+            -e TEAM_KEY_PIN="$TEAM_KEY_PIN" \
             -e HOME=/tmp \
             -e GIT_AUTHOR_NAME=arena-turn-agent \
             -e GIT_AUTHOR_EMAIL=arena-turn-agent@users.noreply.github.com \
@@ -465,11 +479,12 @@ jobs:
             # killed it. So a log-grep alone is dead code on exactly this
             # failure — probe the attempt's pool directly. remaining <= 0
             # means every further request 429s: kill now, hand off the
-            # commits, resume after the reset. Deliberately NO pool failover
-            # on quota death (attempt_failed vetoes it): FALLBACK_KEY is the
-            # OTHER team's account (TEAM_KEY_PIN), so retrying a spent cap
-            # there would just spend that team's day — the scheduler's probe
-            # (src/events/build-quota.ts) holds dispatches until reset.
+            # commits, resume after the reset. Deliberately NO same-turn
+            # failover on quota death: even this team's own overflow account
+            # is a separate daily budget that the scheduler should spend on a
+            # fresh dispatch (with its own turn prompt and commit handoff),
+            # not mid-turn as an apology retry. Never touch the other team's
+            # accounts — they are disjoint by design.
             QUOTA_LEFT=$(curl -s -m 10 -H "Authorization: Bearer $ATTEMPT_KEY" \
               https://openrouter.ai/api/v1/key 2>/dev/null \
               | jq -r '.data.free_model_daily_requests.remaining // empty' 2>/dev/null || true)
@@ -558,7 +573,8 @@ jobs:
             # provider DOES surface the daily-cap signature in the logs, it
             # must count as a provider error. (The probe path above sets
             # QUOTA_DEATH, which is vetoed in attempt_failed — an exhausted
-            # daily cap must not fail over to the other team's account.)
+            # daily cap must not fail over to a second account mid-turn; the
+            # scheduler spends the team's overflow on a fresh dispatch.
             # "Provider returned error"/"statusCode":404 added 2026-10-25:
             # NVIDIA retired the pinned super-120b endpoint provider-side and
             # opencode logged only that generic message plus a 404, with the
@@ -570,10 +586,11 @@ jobs:
               opencode-turn.log opencode-turn.err.log 2>/dev/null
           }
           attempt_failed() {
-            # QUOTA_DEATH vetoes failover on purpose: FALLBACK_KEY is the
-            # other team's account (TEAM_KEY_PIN), so an exhausted daily cap
-            # must not be paid for out of that team's day. The scheduler's
-            # probe (src/events/build-quota.ts) holds dispatches until reset.
+            # QUOTA_DEATH vetoes failover on purpose: FALLBACK_KEY is this
+            # team's own overflow account, but an exhausted daily cap must be
+            # a clean handoff; the scheduler picks the overflow as the primary
+            # on the next dispatch instead of spending it mid-turn. The other
+            # team's accounts are never in the candidate list.
             [ "$QUOTA_DEATH" != "1" ] && { [ "$code" != "0" ] || [ "$TIMED_OUT" = "1" ]; } && provider_error
           }
           # Never start a failover attempt the turn budget cannot pay for:
@@ -584,12 +601,12 @@ jobs:
 
           run_attempt "$PRIMARY_KEY" "$MODEL"
           if attempt_failed && budget_left && [ -n "$FALLBACK_KEY" ] && [ "$FALLBACK_KEY" != "$PRIMARY_KEY" ]; then
-            echo "::warning::Pinned pool errored (provider signature in logs) — failing over to the other pool for one retry"
+            echo "::warning::Pinned account errored (provider signature in logs) — failing over to this team's overflow account for one retry"
             mv opencode-turn.log opencode-turn.attempt1.log 2>/dev/null || true
             mv opencode-turn.err.log opencode-turn.attempt1.err.log 2>/dev/null || true
             run_attempt "$FALLBACK_KEY" "$MODEL"
             if attempt_failed && budget_left && [ -n "$FALLBACK_MODEL" ] && [ "$FALLBACK_MODEL" != "$MODEL" ]; then
-              echo "::warning::Both pools errored on $MODEL (provider signature in logs) — failing over to model $FALLBACK_MODEL for one retry"
+              echo "::warning::Both accounts errored on $MODEL (provider signature in logs) — failing over to model $FALLBACK_MODEL for one retry"
               mv opencode-turn.log opencode-turn.attempt2.log 2>/dev/null || true
               mv opencode-turn.err.log opencode-turn.attempt2.err.log 2>/dev/null || true
               run_attempt "$PRIMARY_KEY" "$FALLBACK_MODEL"

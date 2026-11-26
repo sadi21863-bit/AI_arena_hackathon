@@ -3,6 +3,20 @@
 Recent operator-visible changes. `git log` is the full record; this file
 notes what changed behavior in production and why.
 
+## 2026-11-27
+
+- **Two more OpenRouter accounts, one overflow pair per team.** The owner added
+  two keys; `GET /api/v1/key` measured them as independent free accounts
+  (`6eb130c8`, `7c98d5ba`, 0/50 each), distinct from the original pair
+  (`dd3e918c`, `22aca750`). Alpha now owns accounts **1 → 3**, beta **2 → 4**:
+  the scheduler probes both accounts a team owns and dispatches on the first
+  with budget, and the chosen pin travels in the dispatch payload so the
+  workflow starts on the same account. The pairs are disjoint — no turn can
+  borrow the other team's budget. Capacity is 100/day per team, 200/day total.
+  Worker secrets `OPEN_ROUTER_API_KEY_3/4` were set from `.env` without printing
+  values; team repos receive all four via `ensureTeamRepoSecrets`. A fifth
+  account or paid credit remains the owner decision.
+
 ## 2026-11-23
 
 - **Quota-killed turns no longer leave the audit red forever.** The build-turn

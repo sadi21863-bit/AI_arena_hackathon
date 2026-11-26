@@ -20,6 +20,8 @@ const src = readFileSync(join(here, "..", "src", "events", "build-quota.ts"), "u
 // which is the point: the checker must exercise the real file.
 const js = src
   .replace(/export interface QuotaDecision \{[\s\S]*?\n\}\n/g, "")
+  .replace(/export interface OpenRouterKeys \{[\s\S]*?\n\}\n/g, "")
+  .replace(/export type [^\n]*\n/g, "")
   .replace(/export (const|function|async function)/g, "$1")
   .replace(/new Map<string, QuotaDecision>\(\)/g, "new Map()")
   .replace(/nowMs: number/g, "nowMs")
@@ -34,7 +36,17 @@ const js = src
   .replace(/\): number \{/g, ") {")
   .replace(/\): string \| undefined \{/g, ") {")
   .replace(/\): QuotaDecision \{/g, ") {")
-  .replace(/\): Promise<boolean> \{/g, ") {");
+  .replace(/\): Promise<boolean> \{/g, ") {")
+  // 4-account pin types (2026-11-27)
+  .replace(/keys: OpenRouterKeys/g, "keys")
+  .replace(/account: OpenRouterAccount/g, "account")
+  .replace(/const owned: OpenRouterAccount\[\]/g, "const owned")
+  .replace(/const keys: OpenRouterKeys/g, "const keys")
+  .replace(/\): OpenRouterAccount\[\] \{/g, ") {")
+  .replace(/\): OpenRouterAccount \{/g, ") {")
+  .replace(/\): OpenRouterKeyPin \{/g, ") {")
+  .replace(/(key[1-4])\?: string/g, "$1")
+  .replace(/ as OpenRouterKeyPin/g, "");
 
 const mod = await import("data:text/javascript," + encodeURIComponent(js + "\nexport { QUOTA_DISPATCH_FLOOR, nextUtcMidnightAfter, openRouterKeyForTeam, quotaDecisionFor, buildDispatchBudgetAllows };"));
 const { QUOTA_DISPATCH_FLOOR, nextUtcMidnightAfter, openRouterKeyForTeam, quotaDecisionFor, buildDispatchBudgetAllows } = mod;
@@ -136,9 +148,17 @@ check("workflow marks the kill as a quota death", /QUOTA_DEATH=1/.test(wf));
 check("QUOTA_DEATH is initialised per attempt (set -u safe)", /QUOTA_DEATH=0/.test(wf));
 
 const failRegion = wf.slice(wf.indexOf("attempt_failed() {"), wf.indexOf("budget_left() {"));
-check("quota death vetoes pool/model failover (FALLBACK_KEY is the other team's account)",
+check("quota death vetoes pool/model failover (FALLBACK_KEY is the team's own overflow)",
   failRegion.length > 0 && failRegion.includes('QUOTA_DEATH" != "1"'),
   failRegion.length === 0 ? "attempt_failed region not found" : failRegion.split("\n")[1] ?? "");
+check("four account secrets are exposed to the turn workflow",
+  wf.includes("OR_KEY_3: ${{ secrets.OPEN_ROUTER_API_KEY_3 }}") &&
+  wf.includes("OR_KEY_4: ${{ secrets.OPEN_ROUTER_API_KEY_4 }}"));
+check("dispatch-selected pin overrides repo-name default",
+  wf.includes("inputs.key_pin || github.event.client_payload.key_pin"));
+check("each pin maps to its own team's overflow, never the other team's",
+  wf.includes('KEY_2) PRIMARY_KEY="$OR_KEY_2"; OVERFLOW_KEY="$OR_KEY_4"') &&
+  wf.includes('KEY_3) PRIMARY_KEY="$OR_KEY_3"; OVERFLOW_KEY="$OR_KEY_1"'));
 check("quota kill names the reset so a quiet day is explained",
   wf.includes("Quota resets at UTC midnight; committed work is the handoff."));
 

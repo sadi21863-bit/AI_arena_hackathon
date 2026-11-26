@@ -695,23 +695,24 @@ count as product work.
 subrequest caps and abandoned events. Keep it current when the model or harness
 changes.
 
-### R-5 — Build-account capacity (second account provisioned 2026-11-01)
+### R-5 — Build-account capacity (four accounts provisioned 2026-11-27)
 
-**Resolved for the second account.** Measurement on 2026-11-01 showed the two
-configured keys are two independent OpenRouter accounts (distinct
-`creator_user_id`/workspace, independent daily counters), not one account with
-two keys. They are pinned one per team: alpha → account 1, beta → account 2,
-giving 2 × 50 = 100 free requests/day. A hold is per account; the workflow
-vetoes cross-account failover on quota death, so one team's spent day cannot
-consume the other's. `docs/QUOTA_POSTURE_2026-10-31.md` records the corrected
-posture and the monitoring proxy (`/headroom.quota_posture`,
-`quota_posture_review`).
+**Resolved for two accounts per team.** Measurement on 2026-11-01 showed the
+first two keys are independent OpenRouter accounts; measurement on 2026-11-27
+showed the two keys the owner added are two more independent accounts. They are
+pinned in disjoint pairs: alpha → accounts 1 then 3, beta → accounts 2 then 4,
+giving 2 × 50 = 100 free requests/day **per team**, 200/day total. The
+scheduler probes both of a team's accounts and dispatches on the first with
+budget; the workflow keeps the same pin via the dispatch payload. A hold is per
+team, and no turn reaches the other team's accounts.
+`docs/QUOTA_POSTURE_2026-10-31.md` records the posture and monitoring proxy
+(`/headroom.quota_posture`, `quota_posture_review`).
 
-Still owner-gated: a **third** account or paid credits, only if both current
-accounts prove insufficient. Acceptance for the existing pin:
-`GET /admin/quota/accounts` reports two independent account hashes for the
-deployed keys, and the next hackathon's beta turn probes account 2 while both
-teams build within their own daily caps.
+Still owner-gated: a **fifth** account or paid credits, only if both two-account
+pairs prove insufficient. Acceptance for the existing pin: run
+`npm run quota:probe` (four distinct account hashes, 0/50 each at check time);
+the next hackathon's beta turn probes account 2 or 4 while both teams build
+within their own daily caps.
 
 ### R-6 — Bus factor / second maintainer (P1, blocked on owner)
 

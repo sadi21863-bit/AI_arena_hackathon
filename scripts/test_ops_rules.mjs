@@ -12,8 +12,14 @@
  */
 import assert from "node:assert/strict";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
-import { openRouterAccountForTeam, openRouterKeyForTeam } from "../src/events/build-quota.ts";
-import { accountIndependence, probeOpenRouterAccounts } from "../src/observability/quota-accounts.ts";
+import {
+  openRouterAccountForTeam,
+  openRouterAccountsForTeam,
+  openRouterKeyForTeam,
+  keyForAccount,
+  pinForAccount,
+} from "../src/events/build-quota.ts";
+import { accountIndependence, accountsIndependent, probeOpenRouterAccounts } from "../src/observability/quota-accounts.ts";
 import {
   QUOTA_POSTURE_BOTH_ACCOUNTS_DAYS_THRESHOLD,
   QUOTA_POSTURE_DAY_THRESHOLD,
@@ -68,18 +74,36 @@ assert.equal(openRouterKeyForTeam("beta", "k1", "k2"), "k2");
 assert.equal(openRouterKeyForTeam("beta", "k1", undefined), "k1", "unset key 2 falls back to key 1");
 assert.equal(openRouterKeyForTeam("alpha", "k1", "k2"), "k1");
 
+// Four accounts, two per team (measured 2026-11-27). The pairs are disjoint:
+// no team can spend the other's budget even when its own accounts are spent.
+const four = { key1: "k1", key2: "k2", key3: "k3", key4: "k4" };
+assert.deepEqual(openRouterAccountsForTeam("alpha", four), [1, 3]);
+assert.deepEqual(openRouterAccountsForTeam("beta", four), [2, 4]);
+assert.deepEqual(openRouterAccountsForTeam("gamma", four), [1, 3]);
+assert.deepEqual(openRouterAccountsForTeam("alpha", { key1: "k1" }), [1]);
+assert.deepEqual(openRouterAccountsForTeam("beta", { key1: "k1", key3: "k3" }), [1, 3]);
+assert.deepEqual(openRouterAccountsForTeam("beta", { key2: "k2", key4: "k4" }), [2, 4]);
+assert.equal(keyForAccount(four, 3), "k3");
+assert.equal(pinForAccount(4), "KEY_4");
+assert.equal(openRouterKeyForTeam("beta", "k1", "k2", "k3", "k4"), "k2");
+assert.equal(openRouterKeyForTeam("alpha", "k1", "k2", "k3", "k4"), "k1");
+
 // Independence must never be claimed from a missing or failed probe.
 assert.equal(accountIndependence(null, "abc"), null);
 assert.equal(accountIndependence("abc", null), null);
 assert.equal(accountIndependence("abc", "def"), true);
 assert.equal(accountIndependence("abc", "abc"), false);
+assert.equal(accountsIndependent(["a", "b", "c"]), true);
+assert.equal(accountsIndependent(["a", "a", "c"]), false);
+assert.equal(accountsIndependent(["a"]), null);
 
 // The admin probe must never echo key material, and must not claim
 // independence when the provider returns the same (or no) account id.
 const realFetch = globalThis.fetch;
 const fetchStub = (sameAccount) => async (_url, init) => {
   const auth = init?.headers?.Authorization ?? "";
-  const id = sameAccount ? "user_same" : auth.includes("k1") ? "user_a" : "user_b";
+  const n = auth.includes("k4") ? 4 : auth.includes("k3") ? 3 : auth.includes("k2") ? 2 : 1;
+  const id = sameAccount ? "user_same" : `user_${n}`;
   return new Response(
     JSON.stringify({
       data: {
@@ -99,10 +123,24 @@ const twoAccounts = await probeOpenRouterAccounts({
   OPEN_ROUTER_API_KEY_2: "k2-secret",
 });
 assert.equal(twoAccounts.independent, true);
-assert.match(twoAccounts.verdict, /two independent accounts/);
+assert.match(twoAccounts.verdict, /2 independent accounts/);
 assert.equal(twoAccounts.accounts[0].daily_remaining, 49);
 assert.equal(JSON.stringify(twoAccounts).includes("k1-secret"), false, "probe must not echo key 1");
 assert.equal(JSON.stringify(twoAccounts).includes("k2-secret"), false, "probe must not echo key 2");
+
+globalThis.fetch = fetchStub(false);
+const fourAccounts = await probeOpenRouterAccounts({
+  OPEN_ROUTER_API_KEY: "k1-secret",
+  OPEN_ROUTER_API_KEY_2: "k2-secret",
+  OPEN_ROUTER_API_KEY_3: "k3-secret",
+  OPEN_ROUTER_API_KEY_4: "k4-secret",
+});
+assert.equal(fourAccounts.independent, true);
+assert.match(fourAccounts.verdict, /4 independent accounts/);
+assert.equal(fourAccounts.accounts.length, 4);
+for (const secret of ["k1-secret", "k2-secret", "k3-secret", "k4-secret"]) {
+  assert.equal(JSON.stringify(fourAccounts).includes(secret), false, `probe must not echo ${secret.slice(0, 2)}`);
+}
 
 globalThis.fetch = fetchStub(true);
 const sameAccount = await probeOpenRouterAccounts({
@@ -110,7 +148,7 @@ const sameAccount = await probeOpenRouterAccounts({
   OPEN_ROUTER_API_KEY_2: "k2-secret",
 });
 assert.equal(sameAccount.independent, false);
-assert.match(sameAccount.verdict, /SAME account/);
+assert.match(sameAccount.verdict, /DUPLICATE account ids/);
 
 // A provider error body is untrusted: even if it echoes the Authorization
 // header, the admin-only response must not contain either key.

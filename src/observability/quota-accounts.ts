@@ -1,9 +1,9 @@
 /**
- * Build-account identity probe (2026-11-01).
+ * Build-account identity probe (2026-11-01; four slots since 2026-11-27).
  *
  * The quota posture depends on a fact the Worker cannot read from config: are
- * `OPEN_ROUTER_API_KEY` and `OPEN_ROUTER_API_KEY_2` two independent OpenRouter
- * accounts (2 x 50 free requests/day) or two keys on one account (50/day)?
+ * the configured keys independent OpenRouter accounts (each 50 free
+ * requests/day) or several keys on one account (50/day total)?
  * Secret values are write-only, so after a rotation the only way to know is to
  * ask the provider with the configured value.
  *
@@ -19,7 +19,7 @@
 import type { Env } from "../env";
 
 export interface AccountProbe {
-  slot: 1 | 2;
+  slot: 1 | 2 | 3 | 4;
   env_name: string;
   configured: boolean;
   http_status: number | null;
@@ -52,6 +52,13 @@ export function accountIndependence(
   return account1 !== account2;
 }
 
+/** true only when every configured account returned a different id. */
+export function accountsIndependent(ids: Array<string | null>): boolean | null {
+  const present = ids.filter((id): id is string => !!id);
+  if (present.length < 2) return null;
+  return new Set(present).size === present.length;
+}
+
 async function sha8(value: unknown): Promise<string | null> {
   if (typeof value !== "string" || value.length === 0) return null;
   const digest = await crypto.subtle.digest(
@@ -80,7 +87,7 @@ function redact(text: string, secret: string | undefined): string {
 }
 
 async function probeAccount(
-  slot: 1 | 2,
+  slot: 1 | 2 | 3 | 4,
   envName: string,
   key: string | undefined,
 ): Promise<AccountProbe> {
@@ -154,27 +161,25 @@ async function probeAccount(
 }
 
 export async function probeOpenRouterAccounts(env: Env): Promise<AccountProbeResult> {
-  const [account1, account2] = await Promise.all([
+  const [account1, account2, account3, account4] = await Promise.all([
     probeAccount(1, "OPEN_ROUTER_API_KEY", env.OPEN_ROUTER_API_KEY),
     probeAccount(2, "OPEN_ROUTER_API_KEY_2", env.OPEN_ROUTER_API_KEY_2),
+    probeAccount(3, "OPEN_ROUTER_API_KEY_3", env.OPEN_ROUTER_API_KEY_3),
+    probeAccount(4, "OPEN_ROUTER_API_KEY_4", env.OPEN_ROUTER_API_KEY_4),
   ]);
-  const accounts = [account1, account2];
-  const independent = accountIndependence(
-    account1.account_sha8,
-    account2.account_sha8,
-  );
+  const accounts = [account1, account2, account3, account4];
+  const independent = accountsIndependent(accounts.map((a) => a.account_sha8));
+  const configured = accounts.filter((a) => a.configured);
 
   let verdict: string;
-  if (!account1.configured && !account2.configured) {
+  if (configured.length === 0) {
     verdict = "no account configured";
-  } else if (!account2.configured) {
-    verdict = "account 2 not configured — single-account posture (50/day)";
-  } else if (account1.error || account2.error) {
-    verdict = "probe failed — independence unknown; do not assume 100/day";
+  } else if (configured.some((a) => a.error)) {
+    verdict = "probe failed — independence unknown; do not assume the full daily budget";
   } else if (independent === true) {
-    verdict = "two independent accounts (separate daily counters)";
+    verdict = `${configured.length} independent accounts — alpha 1/3 and beta 2/4, ${configured.length * 50}/day total`;
   } else if (independent === false) {
-    verdict = "SAME account — the two keys share one 50/day cap";
+    verdict = "DUPLICATE account ids — keys share one daily cap; per-team overflow is not real";
   } else {
     verdict = "independence unknown — the provider did not return account ids";
   }

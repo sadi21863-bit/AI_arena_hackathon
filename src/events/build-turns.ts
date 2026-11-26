@@ -16,6 +16,7 @@
  */
 
 import type { Env } from "../env";
+import type { OpenRouterKeyPin } from "./build-quota";
 import { listBuildTurnRuns, dispatchBuildTurn } from "../github/dispatch";
 import { ensureTeamRepoSecrets, syncTeamHarness } from "../github/repos";
 import { githubRequest } from "../github/client";
@@ -76,6 +77,8 @@ export async function dispatchTurnIfNeeded(
     team: "alpha" | "beta";
     turnId: string;
     taskPrompt: string;
+    /** Dispatch-selected primary pool; the workflow falls back to repo name. */
+    keyPin?: OpenRouterKeyPin;
     /**
      * Set when the calling item created this repo moments earlier, so both
      * pre-dispatch repairs are provably redundant: createTeamRepo already
