@@ -68,7 +68,8 @@ quota probe kills the container before a model call.
 3. Four configured keys are four independent accounts in two disjoint pairs
    (measured 2026-11-01 and 2026-11-27): alpha 1/3, beta 2/4, 100/day per team.
    A team's hold means **both** of its accounts are spent; the other pair keeps
-   building. A **fifth** account or paid credit is an owner decision, not an
+   building. No further account is planned; another one, or paid credit, is an
+   owner decision and only if both pairs are exhausted across cycles — never an
    automatic fix.
 4. After any key rotation, `GET /admin/quota/accounts` (admin bearer) re-checks
    that all four deployed slots are still independent accounts and reports each

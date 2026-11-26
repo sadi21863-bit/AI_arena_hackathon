@@ -87,8 +87,8 @@ When the free-tier probe reports a team's daily budget is gone, the product
 - the build turns on both of that team's accounts are deferred to the next UTC
   day;
 - the other team's independent pair keeps building;
-- no blind retries, key rotation, cross-team failover, paid fallback, or fifth
-  account;
+- no blind retries, key rotation, cross-team failover, paid fallback, or
+  additional accounts;
 - the event may finish the cycle with fewer turns, or with no winner if no team
   produced a buildable outcome — that is a degraded but honest result;
 - the hold is visible on `/headroom`, `/alerts` and in the event's
@@ -140,15 +140,16 @@ change the hold. Those remain owner decisions.
 
 | option | what it buys | cost / risk |
 |---|---|---|
-| Fifth independent OpenRouter account | ~50 more requests/day for one team | another credential to store, rotate and leak-check; still a free tier that can change |
+| Another independent account (not planned) | ~50 more requests/day for one team | another credential to store, rotate and leak-check; revisit only if both two-account pairs are exhausted across cycles |
 | Rebalance the pin | matches each team's actual burn | changes which team holds on a given day; no new capacity |
 | Paid OpenRouter credits | removes the daily free-tier cap | violates the project's free-providers constraint unless the owner explicitly changes that constraint |
 | Reduce turns per team per day | preserves a longer build window inside each cap | fewer iterations, lower build quality; already the default shape (2/day ceiling, often 1 substantive turn) |
 | Accept the degraded cycle | no new credential or spend | some cycles produce no winner; must stay visible in the archive |
 
 The second account was provisioned on 2026-11-01; the third and fourth were
-provisioned on 2026-11-27 after the owner added two keys. Adding a **fifth**
-account, or paid credit, is the remaining owner decision.
+provisioned on 2026-11-27 after the owner added two keys. **No further accounts
+are planned.** Revisit only if both two-account pairs are exhausted across
+cycles; paid credit remains an owner decision.
 
 ## Owner action
 
@@ -156,8 +157,8 @@ The second account was provisioned by the owner (confirmed 2026-11-01), and the
 third/fourth on 2026-11-27 from the two keys the owner added to `.env`. The
 remaining explicit decisions are:
 
-- approve or decline a fifth independent account (only if both two-account pairs
-  are insufficient);
+- approve or decline another independent account (not planned; revisit only if
+  both two-account pairs are exhausted across cycles);
 - approve or decline paid credits (would change the free-providers constraint);
 - supply an `ALERT_WEBHOOK_URL` if alerts should be pushed rather than pulled.
 

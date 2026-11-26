@@ -708,8 +708,9 @@ team, and no turn reaches the other team's accounts.
 `docs/QUOTA_POSTURE_2026-10-31.md` records the posture and monitoring proxy
 (`/headroom.quota_posture`, `quota_posture_review`).
 
-Still owner-gated: a **fifth** account or paid credits, only if both two-account
-pairs prove insufficient. Acceptance for the existing pin: run
+No further accounts are planned; revisit only if both two-account pairs are
+exhausted across cycles. Paid credits remain owner-gated. Acceptance for the
+existing pin: run
 `npm run quota:probe` (four distinct account hashes, 0/50 each at check time);
 the next hackathon's beta turn probes account 2 or 4 while both teams build
 within their own daily caps.

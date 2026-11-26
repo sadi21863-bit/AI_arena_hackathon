@@ -14,8 +14,9 @@ notes what changed behavior in production and why.
   workflow starts on the same account. The pairs are disjoint — no turn can
   borrow the other team's budget. Capacity is 100/day per team, 200/day total.
   Worker secrets `OPEN_ROUTER_API_KEY_3/4` were set from `.env` without printing
-  values; team repos receive all four via `ensureTeamRepoSecrets`. A fifth
-  account or paid credit remains the owner decision.
+  values; team repos receive all four via `ensureTeamRepoSecrets`. No further
+  accounts are planned; revisit only if both pairs are exhausted across cycles.
+  Paid credit remains the owner decision.
 
 ## 2026-11-23
 
