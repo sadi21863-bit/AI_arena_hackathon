@@ -30,6 +30,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
+import { completionTier, COMPLETION_TIERS } from "./lib/completion_tier.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -75,7 +76,7 @@ if (!account || !cfToken || !databaseId) {
   process.exit(1);
 }
 
-async function d1(sql, params = []) {
+export async function d1(sql, params = []) {
   const res = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${account}/d1/database/${databaseId}/query`,
     {
@@ -359,7 +360,7 @@ async function fetchCodeStats(repo, productFiles, testFiles) {
   return code;
 }
 
-async function auditBuild(team) {
+export async function auditBuild(team) {
   const checks = {
     repo_present: false,
     turns_ran: Number(team.with_run) >= 1 && Number(team.with_sha) >= 1,
@@ -398,6 +399,7 @@ async function auditBuild(team) {
       test_files: [],
       code,
       verdict,
+      tier: "empty",
     };
   }
 
@@ -415,6 +417,7 @@ async function auditBuild(team) {
       test_files: [],
       code,
       verdict,
+      tier: "empty",
     };
   }
   checks.repo_present = true;
@@ -433,6 +436,7 @@ async function auditBuild(team) {
       test_files: [],
       code,
       verdict,
+      tier: "empty",
     };
   }
   if (tree.json.truncated) notes.push("repo tree truncated; audit covered the returned entries only");
@@ -480,6 +484,13 @@ async function auditBuild(team) {
   }
 
   const failed = failList();
+  const tier = completionTier(team, {
+    product_files: productFiles,
+    test_files: testFiles,
+    code,
+    verdict,
+    checks,
+  });
   return {
     team: team.team_name,
     repo: team.repo_url,
@@ -492,6 +503,7 @@ async function auditBuild(team) {
     test_files: testFiles,
     code,
     verdict,
+    tier,
   };
 }
 
@@ -517,6 +529,7 @@ function compactResult(result) {
     ideathon: result.ideathon.id,
     hackathon: result.hackathon ? { id: result.hackathon.id, fallback: result.hackathon.fallback } : null,
     summary: result.summary,
+    tiers: result.builds.map((b) => ({ team: b.team, repo: b.repo, tier: b.tier })),
     failures,
     semantic: {
       near_duplicate_pairs: result.semantic.near_duplicate_pairs.slice(0, 10),
@@ -559,7 +572,8 @@ async function persistAudit(result) {
         generated_at: result.generated_at,
         ideathon: result.ideathon.id,
         hackathon: { id: result.hackathon.id, fallback: result.hackathon.fallback },
-        summary: { builds: result.summary.builds, failures: buildFailures, warnings: buildWarnings },
+        summary: { builds: result.summary.builds, failures: buildFailures, warnings: buildWarnings, tiers: result.summary.tiers },
+        tiers: compact.tiers,
         failures: { builds: compact.failures.builds },
         semantic: {
           thin_builds: result.semantic.thin_builds,
@@ -688,6 +702,9 @@ async function main() {
       total: builds.length,
       passed: builds.filter((b) => b.pass).length,
       failed: builds.filter((b) => !b.pass).length,
+      tiers: Object.fromEntries(
+        COMPLETION_TIERS.map((tier) => [tier, builds.filter((b) => b.tier === tier).length]),
+      ),
     },
     semantic: {
       near_duplicate_pairs: semantic.near_duplicate_pairs.length,
@@ -761,7 +778,7 @@ async function main() {
       console.log(
         `  ${build.pass ? "PASS" : "FAIL"} ${build.team} (${build.repo ?? "no repo"}) — ` +
           `${build.product_files.length} product files, ${build.test_files.length} test files, ` +
-          `${build.code?.nonblank_lines ?? 0} nonblank lines` +
+          `${build.code?.nonblank_lines ?? 0} nonblank lines, tier ${build.tier ?? "empty"}` +
           (build.verdict ? `, verdict ${build.verdict}` : "") +
           (build.failed.length ? `; failed: ${build.failed.join(", ")}` : "") +
           (build.notes.length ? `; ${build.notes.join("; ")}` : ""),
@@ -833,4 +850,7 @@ async function main() {
   if (strict && summary.failures > 0) process.exitCode = 1;
 }
 
-await main();
+// Only run the audit when invoked as a script; completion_tiers.mjs imports
+// d1/auditBuild and must not trigger a full audit on import.
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) await main();
