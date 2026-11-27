@@ -29,6 +29,7 @@ import {
 } from "../src/observability/quota-posture.ts";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { completionTier } from "./lib/completion_tier.mjs";
+import { hasSuccessfulTurn, allTurnsFailed } from "./lib/build_outcome.mjs";
 import { weightedPanelScore } from "../src/judges/panel-score.ts";
 import { partialJudgingAlert } from "../src/observability/partial-judging.ts";
 import { MAX_DERIVED_PER_EVENT, QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "../src/conduct/quota.ts";
@@ -220,6 +221,16 @@ assert.equal(completionTier({ successful_turns: 0 }, goodBuild), "partial", "0 s
 assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, verdict: "NOT READY" }), "partial");
 assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, code: { nonblank_lines: 12, assertion_hits: 4 } }), "scaffold");
 assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, product_files: [] }), "empty");
+
+// Build outcome (A5c): a failed run still has a run id and a head SHA, so
+// activity alone cannot say a team delivered anything. Zero successes must
+// fail, even when every turn failed for quota and the report is waived.
+assert.equal(hasSuccessfulTurn({ successful_turns: 0 }), false, "zero successful turns is not a build");
+assert.equal(hasSuccessfulTurn({ successful_turns: "0" }), false, "string zero is still zero");
+assert.equal(hasSuccessfulTurn({ successful_turns: 1 }), true);
+assert.equal(hasSuccessfulTurn({ successful_turns: null }), false);
+assert.equal(allTurnsFailed({ turns: 8, failed_turns: 8, successful_turns: 0 }), true);
+assert.equal(allTurnsFailed({ turns: 8, failed_turns: 7, successful_turns: 1 }), false);
 
 // Partial judging: the stall watchdog finalizes with whoever answered. The
 // seven weights sum to 1, so a full panel must be unchanged; a partial panel

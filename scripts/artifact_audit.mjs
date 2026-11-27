@@ -31,6 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { completionTier, COMPLETION_TIERS } from "./lib/completion_tier.mjs";
+import { hasSuccessfulTurn, allTurnsFailed } from "./lib/build_outcome.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -367,7 +368,7 @@ export async function auditBuild(team) {
     // Outcome, not just activity: a team with no successful build turn has not
     // delivered a build, whatever the harness report says. Quota waivers below
     // never touch this check.
-    has_successful_turn: Number(team.successful_turns) >= 1,
+    has_successful_turn: hasSuccessfulTurn(team),
     product_work: false,
     has_test: false,
     has_verification_report: false,
