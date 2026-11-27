@@ -1017,6 +1017,9 @@ jobs:
             echo "verify_failed=true" >> "$GITHUB_OUTPUT"
           fi
           echo "verification container exited $code (0 = checks passed, 1 = checks failed after $ATTEMPTS attempts — reported at the end so this turn's work is still committed)"
+          # Reached only if the whole block ran. A kill before this line leaves
+          # verify_ran unset, and the report step then writes UNVERIFIED, never READY.
+          echo "verify_ran=true" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Write harness verification report if absent
@@ -1033,7 +1036,12 @@ jobs:
             echo "agent-authored VERIFICATION_REPORT.md present — leaving it untouched"
             exit 0
           fi
-          if [ "${{ steps.verify.outputs.verify_failed }}" = "true" ]; then
+          if [ "${{ steps.verify.outputs.verify_ran }}" != "true" ]; then
+            VERDICT="UNVERIFIED"
+            RESULT="NOT RUN"
+            EXIT="2"
+            DETAIL="Phase B verification did not complete this turn (turn ended before verification finished). Nothing was verified; do not treat this as READY."
+          elif [ "${{ steps.verify.outputs.verify_failed }}" = "true" ]; then
             VERDICT="NOT READY"
             RESULT="FAIL"
             EXIT="1"

@@ -364,6 +364,10 @@ export async function auditBuild(team) {
   const checks = {
     repo_present: false,
     turns_ran: Number(team.with_run) >= 1 && Number(team.with_sha) >= 1,
+    // Outcome, not just activity: a team with no successful build turn has not
+    // delivered a build, whatever the harness report says. Quota waivers below
+    // never touch this check.
+    has_successful_turn: Number(team.successful_turns) >= 1,
     product_work: false,
     has_test: false,
     has_verification_report: false,
@@ -463,12 +467,13 @@ export async function auditBuild(team) {
     if (report.status === 200 && report.json?.content) {
       const content = Buffer.from(report.json.content, "base64").toString("utf8");
       const m = content.match(
-        /(?:^|\n)\s*(?:#+\s*)?\*{0,2}Verdict\*{0,2}\s*:?\s*\*{0,2}\s*(READY|NOT READY)/i,
+        /(?:^|\n)\s*(?:#+\s*)?\*{0,2}Verdict\*{0,2}\s*:?\s*\*{0,2}\s*(READY|NOT READY|UNVERIFIED)/i,
       );
       checks.report_has_verdict = !!m;
       verdict = m ? m[1].toUpperCase() : null;
       if (!m) notes.push("VERIFICATION_REPORT.md has no parseable Verdict line");
       else if (verdict === "NOT READY") notes.push("report verdict is NOT READY (honest output; not a contract failure)");
+      else if (verdict === "UNVERIFIED") notes.push("report verdict is UNVERIFIED: verification did not complete this turn (warning, not a contract failure)");
     } else {
       notes.push(`report content HTTP ${report.status}`);
     }
