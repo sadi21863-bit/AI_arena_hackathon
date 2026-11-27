@@ -68,10 +68,10 @@ assert.equal(agreementBand(null), "undefined");
 assert.equal(openRouterAccountForTeam("beta", "key2"), 2);
 assert.equal(openRouterAccountForTeam("alpha", "key2"), 1);
 assert.equal(openRouterAccountForTeam("gamma", "key2"), 1, "only beta is pinned to account 2");
-assert.equal(openRouterAccountForTeam("beta"), 1, "missing key 2 means beta spends account 1");
-assert.equal(openRouterAccountForTeam("beta", ""), 1, "empty key 2 is not configured");
+assert.equal(openRouterAccountForTeam("beta"), 2, "beta's primary pin is account 2 even when unset (fail closed)");
+assert.equal(openRouterAccountForTeam("beta", ""), 2, "empty key 2 still pins beta to account 2, never to alpha");
 assert.equal(openRouterKeyForTeam("beta", "k1", "k2"), "k2");
-assert.equal(openRouterKeyForTeam("beta", "k1", undefined), "k1", "unset key 2 falls back to key 1");
+assert.equal(openRouterKeyForTeam("beta", "k1", undefined), undefined, "unset key 2 never falls back to key 1 (fail closed)");
 assert.equal(openRouterKeyForTeam("alpha", "k1", "k2"), "k1");
 
 // Four accounts, two per team (measured 2026-11-27). The pairs are disjoint:
@@ -81,7 +81,8 @@ assert.deepEqual(openRouterAccountsForTeam("alpha", four), [1, 3]);
 assert.deepEqual(openRouterAccountsForTeam("beta", four), [2, 4]);
 assert.deepEqual(openRouterAccountsForTeam("gamma", four), [1, 3]);
 assert.deepEqual(openRouterAccountsForTeam("alpha", { key1: "k1" }), [1]);
-assert.deepEqual(openRouterAccountsForTeam("beta", { key1: "k1", key3: "k3" }), [1, 3]);
+assert.deepEqual(openRouterAccountsForTeam("beta", { key1: "k1", key3: "k3" }), [], "beta with only alpha's keys owns nothing");
+assert.deepEqual(openRouterAccountsForTeam("beta", {}), [], "beta with no keys holds");
 assert.deepEqual(openRouterAccountsForTeam("beta", { key2: "k2", key4: "k4" }), [2, 4]);
 assert.equal(keyForAccount(four, 3), "k3");
 assert.equal(pinForAccount(4), "KEY_4");
