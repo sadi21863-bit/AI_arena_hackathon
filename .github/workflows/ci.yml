@@ -8,16 +8,13 @@ name: Main Repo CI
 # path filter — touching them still runs this (cheap), but this
 # workflow never dispatches them.
 
+# No paths-ignore here: a docs-only PR must still run the required `check`
+# job, and a public/**-only PR must be checked before an accidental deploy.
+# The smoke test is cheap relative to a missed bad merge.
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - "public/**"
-      - "**.md"
   pull_request:
-    paths-ignore:
-      - "public/**"
-      - "**.md"
 
 permissions:
   contents: read
