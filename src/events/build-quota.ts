@@ -105,7 +105,9 @@ export function pinForAccount(account: OpenRouterAccount): OpenRouterKeyPin {
  * incident and the 2026-11-01 two-account decision were protecting.
  */
 export function openRouterAccountsForTeam(teamName: string, keys: OpenRouterKeys): OpenRouterAccount[] {
-  const owned: OpenRouterAccount[] = teamName === "beta" && keys.key2 ? [2, 4] : [1, 3];
+  // Fail closed: beta never falls back into alpha's pool. If its own keys are
+  // unset the list is empty, the scheduler holds the build and records a hold.
+  const owned: OpenRouterAccount[] = teamName === "beta" ? [2, 4] : [1, 3];
   return owned.filter((account) => !!keyForAccount(keys, account));
 }
 
@@ -117,7 +119,8 @@ export function openRouterAccountForTeam(
   teamName: string,
   key2?: string,
 ): OpenRouterAccount {
-  return teamName === "beta" && key2 ? 2 : 1;
+  void key2; // primary pin only; beta's primary is account 2 even when unset
+  return teamName === "beta" ? 2 : 1;
 }
 
 /**
@@ -133,7 +136,7 @@ export function openRouterKeyForTeam(
 ): string | undefined {
   const keys: OpenRouterKeys = { key1, key2, key3, key4 };
   const accounts = openRouterAccountsForTeam(teamName, keys);
-  return keyForAccount(keys, accounts[0] ?? 1);
+  return keyForAccount(keys, accounts[0] ?? (teamName === "beta" ? 2 : 1));
 }
 
 /** Pure decision from an /api/v1/key response body. */
