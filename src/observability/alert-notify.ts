@@ -50,7 +50,7 @@ export async function notifyWebhook(env: Env, alert: OpsAlert): Promise<boolean>
     await setNotified(env, alert.id);
     return true;
   } catch (err) {
-    await setNotifyError(env, err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300), alert.id);
+    await setNotifyError(env, alert.id, err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300));
     return false;
   }
 }

@@ -20,6 +20,7 @@
 import type { Env } from "../env";
 import { openRouterAccountForTeam, QUOTA_DISPATCH_FLOOR, type OpenRouterAccount } from "../events/build-quota";
 import { loadQuotaPosture, QUOTA_POSTURE_WINDOW_DAYS } from "./quota-posture";
+import { notifyWebhook } from "./alert-notify";
 import { partialJudgingAlert } from "./partial-judging";
 import {
   CONDUCT_SATURATION_RATIO,
@@ -69,8 +70,6 @@ async function recentAlertExists(
     .first<{ id: string }>();
   return !!row;
 }
-
-import { notifyWebhook } from "./alert-notify";
 
 async function raiseAlert(env: Env, alert: Omit<OpsAlert, "id" | "notified_at" | "notify_error" | "created_at">) {
   const row: OpsAlert = {

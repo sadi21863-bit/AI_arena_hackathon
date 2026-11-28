@@ -493,4 +493,21 @@ assert.equal(delivered.pushed, true);
 assert.equal(delivered.notified_at, "now");
 assert.equal(delivered.notify_error, null);
 
+// A receiver error or a thrown fetch must be visible in the row, not silent.
+const rejectedDb = alertDb();
+globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => "" });
+const rejected = await raiseTestAlert({ DB: rejectedDb, ALERT_WEBHOOK_URL: "https://receiver.test/hook" });
+globalThis.fetch = realFetch2;
+assert.equal(rejected.pushed, false);
+assert.equal(rejected.notified_at, null);
+assert.equal(rejected.notify_error, "webhook HTTP 500");
+
+const thrownDb = alertDb();
+globalThis.fetch = async () => { throw new Error("network down"); };
+const thrown = await raiseTestAlert({ DB: thrownDb, ALERT_WEBHOOK_URL: "https://receiver.test/hook" });
+globalThis.fetch = realFetch2;
+assert.equal(thrown.pushed, false);
+assert.equal(thrown.notified_at, null);
+assert.match(thrown.notify_error ?? "", /network down/);
+
 console.log("ops rule tests passed");
