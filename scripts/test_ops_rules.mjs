@@ -28,6 +28,7 @@ import {
   quotaPostureTrigger,
 } from "../src/observability/quota-posture.ts";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
+import { completionTier } from "./lib/completion_tier.mjs";
 import { weightedPanelScore } from "../src/judges/panel-score.ts";
 import { partialJudgingAlert } from "../src/observability/partial-judging.ts";
 import { MAX_DERIVED_PER_EVENT, QUOTA_PENALTY, isDerivedClass, quotaPenalty } from "../src/conduct/quota.ts";
@@ -204,6 +205,21 @@ assert.deepEqual(
   [],
 );
 assert.deepEqual(findOverScopedIdeas([{ id: "e", title: "Empty", build_scope: "" }]), []);
+
+// Completion tiers (A5): structural, never a quality certificate. The word
+// "substantial" is reserved for complete + the A5b rubric and is not emitted.
+const goodBuild = {
+  product_files: ["server.js", "public/index.html"],
+  test_files: ["tests/app.test.js"],
+  code: { nonblank_lines: 240, assertion_hits: 4 },
+  verdict: "READY",
+  checks: { repo_present: true, product_work: true, has_test: true },
+};
+assert.equal(completionTier({ successful_turns: 1 }, goodBuild), "complete");
+assert.equal(completionTier({ successful_turns: 0 }, goodBuild), "partial", "0 successful turns is not complete");
+assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, verdict: "NOT READY" }), "partial");
+assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, code: { nonblank_lines: 12, assertion_hits: 4 } }), "scaffold");
+assert.equal(completionTier({ successful_turns: 1 }, { ...goodBuild, product_files: [] }), "empty");
 
 // Partial judging: the stall watchdog finalizes with whoever answered. The
 // seven weights sum to 1, so a full panel must be unchanged; a partial panel
