@@ -45,6 +45,7 @@
 
 import type { Env } from "../env";
 import { rememberMemory, queryArchive, type RecalledMemory } from "./memory";
+import { recordCallAndGetId, recordResearchResults } from "./research-sources";
 
 const PER_EVENT_BUDGETS: Record<"ideathon" | "hackathon", number> = {
   ideathon: 20, // real usage today is ~4-5/agent; this is ceiling, not target
@@ -85,11 +86,7 @@ async function monthlyCallCount(env: Env): Promise<number> {
   return row?.n ?? 0;
 }
 
-async function recordCall(env: Env, eventId: string, agentId: string, phase: "ideathon" | "hackathon", query: string): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO research_calls (event_id, agent_id, phase, query) VALUES (?, ?, ?, ?)`
-  ).bind(eventId, agentId, phase, query.slice(0, 500)).run();
-}
+// Source-id writes live in research-sources.ts (pure helpers, directly testable).
 
 async function searchTavily(apiKey: string, query: string, maxResults: number): Promise<{ results: ResearchResult[]; answer?: string }> {
   const res = await fetch("https://api.tavily.com/search", {
@@ -191,7 +188,8 @@ export async function deepResearch(env: Env, input: DeepResearchInput): Promise<
 
   const apiKey = selectTavilyKey(env, callsSoFar); // round-robin by position in this month's call sequence
   const { results, answer } = await searchTavily(apiKey, input.query, input.maxResults ?? 5);
-  await recordCall(env, input.eventId, input.agentId, phase, input.query);
+  const callId = await recordCallAndGetId(env, input.eventId, input.agentId, phase, input.query);
+  await recordResearchResults(env, { eventId: input.eventId, agentId: input.agentId, callId, results });
 
   // N-2: past Arena history on the same question, alongside the live web.
   // Not counted against the Tavily budgets above — it costs one embedding,
@@ -273,7 +271,8 @@ export async function deepResearchWithExtract(env: Env, input: DeepResearchInput
     // Search failed — degrade, don't throw; caller is executor which expects a result that degrades to empty
     return { results: [], budgetExceeded: undefined };
   }
-  await recordCall(env, input.eventId, input.agentId, phase, input.query);
+  const callId = await recordCallAndGetId(env, input.eventId, input.agentId, phase, input.query);
+  await recordResearchResults(env, { eventId: input.eventId, agentId: input.agentId, callId, results: search.results });
 
   // Extract top 3 URLs if we still have budget for the second credit
   let extracted: { url: string; content: string }[] | undefined;
@@ -286,7 +285,7 @@ export async function deepResearchWithExtract(env: Env, input: DeepResearchInput
         const apiKey2 = selectTavilyKey(env, callsAfterSearch);
         const ext = await extractTavily(apiKey2, urls, input.query);
         extracted = ext.results;
-        await recordCall(env, input.eventId, input.agentId, phase, `${input.query} [extract: ${urls.length} urls]`);
+        await recordCallAndGetId(env, input.eventId, input.agentId, phase, `${input.query} [extract: ${urls.length} urls]`);
       } catch {
         // Extract failed — keep search results, don't fail the turn
         extracted = undefined;

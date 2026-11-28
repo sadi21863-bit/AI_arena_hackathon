@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { recordCallAndGetId, recordResearchResults } from "../src/agents/research-sources.ts";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
 import {
   openRouterAccountForTeam,
@@ -394,5 +395,50 @@ try {
     throw err;
   }
 }
+
+// A3 Step 2 write path: one batch per call, source ids, no full snippet text,
+// and failures never break research.
+const capturedBatches = [];
+const fakeDB = {
+  prepare(sql) {
+    return {
+      bind(...args) {
+        return { sql, args, async run() { return { meta: { last_row_id: 42 } }; } };
+      },
+    };
+  },
+  async batch(statements) { capturedBatches.push(statements); return []; },
+};
+const callId = await recordCallAndGetId({ DB: fakeDB }, "e1", "a1", "ideathon", "q");
+assert.equal(callId, "42", "recordCallAndGetId must return the id used as call_id");
+await recordResearchResults({ DB: fakeDB }, {
+  eventId: "e1", agentId: "a1", callId,
+  results: [
+    { source: "tavily", title: "T1", url: "https://example.test/1", snippet: "full snippet one" },
+    { source: "tavily", title: "T2", url: "https://example.test/2", snippet: "full snippet two" },
+  ],
+});
+assert.equal(capturedBatches.length, 1, "one batch per research call");
+assert.equal(capturedBatches[0].length, 2);
+assert.equal(capturedBatches[0][0].args[3], "S1");
+assert.equal(capturedBatches[0][1].args[3], "S2");
+for (const stmt of capturedBatches[0]) {
+  assert.ok(stmt.sql.includes("INSERT OR IGNORE"), "retries must be safe");
+  assert.equal(stmt.args[6].length, 64, "snippet hash is SHA-256 hex");
+  assert.ok(!stmt.args.includes("full snippet one") && !stmt.args.includes("full snippet two"));
+}
+capturedBatches.length = 0;
+await recordResearchResults({ DB: fakeDB }, {
+  eventId: "e1", agentId: "a1", callId,
+  results: Array.from({ length: 8 }, (_, i) => ({ source: "tavily", title: `T${i}`, url: `https://example.test/${i}`, snippet: "s" })),
+});
+assert.equal(capturedBatches[0].length, 5, "source list is capped at S1..S5");
+const originalWarn = console.warn;
+console.warn = () => {};
+await recordResearchResults({ DB: { ...fakeDB, async batch() { throw new Error("D1 down"); } } }, {
+  eventId: "e1", agentId: "a1", callId,
+  results: [{ source: "tavily", title: "T", url: "https://example.test/1", snippet: "s" }],
+}); // must not throw
+console.warn = originalWarn;
 
 console.log("ops rule tests passed");
