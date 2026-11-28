@@ -27,9 +27,11 @@ At `handleSubmitIdea`, before calling the LLM:
    recency:
    - take the best result from each call (`source_id = S1`);
    - drop duplicate URLs (Tavily repeats results across calls);
-   - rank remaining calls by query relevance to this agent's lens, keeping
-     the strongest match first;
-   - show up to **8** sources.
+   - rank remaining calls by **simple keyword overlap** between the call's
+     `research_calls.query` and the agent's lens/name tokens (lowercased,
+     stopword-free, count shared words); no embedding call and no LLM call —
+     Workers AI quota and the 50-subrequest cap have both bitten before;
+   - show up to **8** sources, with ties broken by `call_id` ascending.
    An idea about an earlier research topic must still be able to cite its own
    source, so "newest 5" is explicitly rejected.
 2. Give each selected row a prompt-local label `SRC-1 … SRC-n`. The label is
@@ -119,8 +121,18 @@ Per event, report:
 | `citation_concentration` | citations per `research_results.id`, plus the share of an agent's ideas that reuse one source |
 | `support_rate` | human/second-model sample: of ~10 anchors per event, how many have a claim that follows from the cited source |
 
-Baseline for comparison: 0/23 identifiable anchors in each of
-`event_40e6b8d8` and `event_c514ac4a`.
+There is **no support baseline**: the old anchors carry no source, so whether
+their claims follow from a source cannot be assessed. The decision bar must be
+fixed **before the cycle runs**, not chosen after seeing results:
+
+- sample 10 anchors per event with a human or second-model reviewer;
+- **pass bar**: at least **7 of 10** claims are supported by the cited source,
+  and **no more than 1** is fabricated (a source that does not say what the
+  anchor claims);
+- report the two numbers separately; do not average them into a score.
+
+`identifiable_rate` from 0/23 in the two earlier events is a coverage baseline
+only, not a support baseline.
 
 `match_rate` will be close to 100% once the prompt requires a label; it proves
 the format is followed, **not** that grounding improved. The required input
@@ -135,8 +147,8 @@ no score change, no rejection.
 Quality guardrails for the decision after one cycle:
 
 - **Revert Step 3** if `match_rate` < ~50% — models are ignoring the format.
-- **Revert Step 3** if `support_rate` from the human/second-model sample does
-  not improve on the ungrounded baseline, or if idea quality drops: compare
+- **Revert Step 3** if the sampled support bar is missed (fewer than 7/10
+  supported, or more than 1 fabricated), or if idea quality drops: compare
   near-duplicate pairs and judge score spread against the last three events.
   Anchoring many ideas to the same source is the main risk.
 - **Stop** if the added D1 reads/writes cause queue failures or subrequest
