@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { recordCallAndGetId, recordResearchResults } from "../src/agents/research-sources.ts";
+import { raiseTestAlert, WEBHOOK_UNCONFIGURED } from "../src/observability/alert-notify.ts";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
 import {
   openRouterAccountForTeam,
@@ -440,5 +441,56 @@ await recordResearchResults({ DB: { ...fakeDB, async batch() { throw new Error("
   results: [{ source: "tavily", title: "T", url: "https://example.test/1", snippet: "s" }],
 }); // must not throw
 console.warn = originalWarn;
+
+// Task 10: admin test alert persists evidence and distinguishes an
+// unconfigured receiver from a successful delivery.
+function alertDb() {
+  const rows = new Map();
+  return {
+    rows,
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async run() {
+              if (sql.includes("INSERT INTO ops_alerts")) {
+                rows.set(args[0], { id: args[0], notified_at: null, notify_error: null });
+              } else if (sql.includes("SET notified_at")) {
+                const row = rows.get(args[0]);
+                if (row) { row.notified_at = "now"; row.notify_error = null; }
+              } else if (sql.includes("SET notify_error")) {
+                const row = rows.get(args[1]);
+                if (row) row.notify_error = args[0];
+              }
+              return { meta: {} };
+            },
+            async first() {
+              const row = rows.get(args[0]);
+              return row ? { notified_at: row.notified_at, notify_error: row.notify_error } : null;
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+const unconfiguredDb = alertDb();
+const unconfigured = await raiseTestAlert({ DB: unconfiguredDb });
+assert.equal(unconfigured.pushed, false);
+assert.equal(unconfigured.notified_at, null);
+assert.equal(unconfigured.notify_error, WEBHOOK_UNCONFIGURED, "unset webhook must be explicit in the row");
+assert.equal(unconfiguredDb.rows.size, 1, "the row is persisted even when no webhook exists");
+
+const configuredDb = alertDb();
+const realFetch2 = globalThis.fetch;
+let posted = 0;
+globalThis.fetch = async () => { posted += 1; return { ok: true, status: 204, text: async () => "" }; };
+const delivered = await raiseTestAlert({ DB: configuredDb, ALERT_WEBHOOK_URL: "https://receiver.test/hook" });
+globalThis.fetch = realFetch2;
+assert.equal(posted, 1, "one POST to the configured receiver");
+assert.equal(delivered.pushed, true);
+assert.equal(delivered.notified_at, "now");
+assert.equal(delivered.notify_error, null);
 
 console.log("ops rule tests passed");

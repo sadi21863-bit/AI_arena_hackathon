@@ -40,7 +40,8 @@ export interface OpsAlert {
     | "quota_hold"
     | "quota_posture_review"
     | "partial_judging"
-    | "conduct_saturation";
+    | "conduct_saturation"
+    | "test_alert";
   severity: "warning" | "critical";
   event_id: string | null;
   task_type: string | null;
@@ -69,36 +70,7 @@ async function recentAlertExists(
   return !!row;
 }
 
-async function notifyWebhook(env: Env, alert: OpsAlert): Promise<boolean> {
-  if (!env.ALERT_WEBHOOK_URL) return false;
-  const text = `[${alert.severity.toUpperCase()}] ${alert.message}`;
-  try {
-    const res = await fetch(env.ALERT_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        content: text,
-        kind: alert.kind,
-        severity: alert.severity,
-        event_id: alert.event_id,
-        task_type: alert.task_type,
-        details: alert.details ? JSON.parse(alert.details) : null,
-      }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) throw new Error(`webhook HTTP ${res.status}`);
-    await env.DB.prepare(`UPDATE ops_alerts SET notified_at = datetime('now'), notify_error = NULL WHERE id = ?`)
-      .bind(alert.id)
-      .run();
-    return true;
-  } catch (err) {
-    await env.DB.prepare(`UPDATE ops_alerts SET notify_error = ? WHERE id = ?`)
-      .bind(err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300), alert.id)
-      .run();
-    return false;
-  }
-}
+import { notifyWebhook } from "./alert-notify";
 
 async function raiseAlert(env: Env, alert: Omit<OpsAlert, "id" | "notified_at" | "notify_error" | "created_at">) {
   const row: OpsAlert = {

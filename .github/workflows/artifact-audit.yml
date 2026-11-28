@@ -71,3 +71,21 @@ jobs:
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Notify webhook on audit failure
+        # Task 11: a strict audit failure is now expected on zero-success
+        # cycles. Without this it is only a red badge in the Actions tab.
+        if: failure()
+        shell: bash
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "::warning::ALERT_WEBHOOK_URL is not configured in repo secrets; audit failure remains in the step summary only"
+            exit 0
+          fi
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          TEXT="[CRITICAL] Artifact audit failed for $GITHUB_REPOSITORY: $RUN_URL"
+          PAYLOAD=$(jq -n --arg text "$TEXT" --arg run_url "$RUN_URL" '{text:$text, content:$text, kind:"artifact_audit_failure", severity:"critical", run_url:$run_url}')
+          curl -sS -m 15 -H "Content-Type: application/json" -d "$PAYLOAD" "$ALERT_WEBHOOK_URL" \
+            || echo "::warning::audit failure webhook delivery failed"
