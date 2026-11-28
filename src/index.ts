@@ -23,6 +23,7 @@ import { calibrationFailureSide, CALIBRATION_MIN, CALIBRATION_MAX } from "./judg
 import { buildEventQuality, type AuditSummary, type CalibrationRow, type QualityEventRow } from "./judges/quality";
 import type { JudgeScoreRow } from "./judges/confidence";
 import { checkOperationalAlerts, recentAlerts } from "./observability/alerts";
+import { raiseTestAlert } from "./observability/alert-notify";
 import { loadQuotaPosture } from "./observability/quota-posture";
 import { probeOpenRouterAccounts } from "./observability/quota-accounts";
 import { syncTeamHarness, checkHarnessDrift } from "./github/repos";
@@ -1293,6 +1294,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     if (url.pathname === "/admin/quota/accounts" && request.method === "GET") {
       if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
       return Response.json(await probeOpenRouterAccounts(env));
+    }
+
+    // Admin-only end-to-end alert delivery probe (Task 10). Writes a durable
+    // ops_alerts row first, then attempts the webhook, so a failed delivery is
+    // still inspectable on GET /alerts. With no ALERT_WEBHOOK_URL the row gets
+    // notify_error="webhook not configured" rather than a silent null.
+    if (url.pathname === "/admin/alerts/test" && request.method === "POST") {
+      if (!(await requireAdminToken(request, env))) return Response.json({ error: "unauthorized" }, { status: 401 });
+      return Response.json(await raiseTestAlert(env));
     }
 
     // spec §7.1: bearer-token, hashed, admin-only. Not in spec §10's table
