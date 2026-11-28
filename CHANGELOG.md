@@ -18,6 +18,15 @@ notes what changed behavior in production and why.
   accounts are planned; revisit only if both pairs are exhausted across cycles.
   Paid credit remains the owner decision.
 
+- **`agent_power` decision recorded (D3).** Single-turn is the default; the
+  `[team]` marker stays opt-in. Reason: the team-vs-single comparison is not
+  measurable with sufficient confidence while cycles end with 0 successful
+  turns, so it would measure quota exhaustion before capability. Neither arm is
+  claimed passed or failed. The comparison is recorded as
+  `team_vs_single_experiment`, a separate experiment gated on a cycle with ≥ 3
+  successful turns per team. Gate bookkeeping is done by
+  `scripts/check_agent_power_gate.py`, not by hand-editing `.arena/state.json`.
+
 ## 2026-11-23
 
 - **Quota-killed turns no longer leave the audit red forever.** The build-turn

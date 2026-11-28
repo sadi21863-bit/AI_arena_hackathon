@@ -1,9 +1,10 @@
 # Build Agent Empowerment — Phase 2 Spec (2026-08-11)
 
 **Status:** P1 + P2 implemented 2026-08-11, P3 prep (opt-in marker + arena-team
-skill) implemented 2026-08-11 — see Implementation log §4a. Pending: the
-live spike verification (image build + browser turn, needs the runner) and
-the team-vs-single comparison the spec defers to after the spike.
+skill) implemented 2026-08-11 — see Implementation log §4a. **Decision recorded
+2026-11-27:** single-turn stays the default and team-turn stays opt-in (see §4).
+The team-vs-single comparison is a separate experiment, not a gate blocker;
+neither arm is claimed passed or failed.
 
 ---
 
@@ -260,6 +261,19 @@ orchestration skill), executor.ts prompt variant.
   any tier-2 allowlist (D8) is worth it; propose gate closure notes for
   `post_beta_hardening` → next gate (`agent_power` or per backlog convention).
 
+### Decision recorded 2026-11-27 (owner decision D3)
+
+The `agent_power` gate is closed as **single-turn default, team-turn opt-in via
+the `[team]` marker**. Reason on record: the comparison is **not currently
+measurable with sufficient confidence** — the last completed cycle had 0
+successful build turns for either team, so it would measure quota exhaustion
+before capability. This decision does **not** claim that team turns are better
+or worse. The pending comparison is moved to a separate item labelled
+`team_vs_single_experiment`; it runs only in a cycle where both teams get at
+least 3 successful turns under the four-account capacity, and it is reported
+with its own confidence rather than as a gate result. Tier-2 allowlist expansion
+stays deferred.
+
 ## 4a. Implementation log (2026-08-11)
 
 Landed in this session (all of P1 + P2; P3 is config-only prep, agents deferred):
@@ -387,9 +401,10 @@ override any of them and the corresponding work follows.
    chromium implemented first — live-cycle safety; revisit at P4 if the spike
    shows it flaky.]**
 2. **Team turn:** default mode or per-turn opt-in via a prompt flag/param?
-   **[Answered 2026-08-11: opt-in via the `[team]` task_prompt marker —
-   shipped in P3 prep. Default-vs-opt-in is decided by the P3 comparison
-   turn after the spike.]**
+   **[Decided 2026-11-27, D3: single-turn is the default; `[team]` marker stays
+   opt-in. The comparison is an experiment
+   (`team_vs_single_experiment`), not a gate; neither arm is claimed passed or
+   failed. Reason: not measurable with sufficient confidence at current quota.]**
 3. **Tier-2 now?** Any of Penpot/Vela/Context7 worth a network-scope expansion
    before the next live cycle, or defer to P4? **[Deferred to P4 — no scope
    expansion mid-cycle.]**
