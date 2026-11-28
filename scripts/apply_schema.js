@@ -53,6 +53,9 @@ const MIGRATIONS = [
   { file: "schema.sql", sentinel: { type: "table", name: "archive_events" } },
   { file: "schema_week3_event_queue.sql", sentinel: { type: "table", name: "event_queue" } },
   { file: "schema_research_budget.sql", sentinel: { type: "table", name: "research_calls" } },
+  // A3 Step 1: result identifiers, not full page text. Must follow the
+  // research_calls table whose id becomes research_results.call_id.
+  { file: "schema_research_results.sql", sentinel: { type: "table", name: "research_results" } },
   { file: "schema_hackathon_events.sql", sentinel: { type: "table", name: "hackathon_teams" } },
   { file: "schema_week5_tribunal.sql", sentinel: { type: "table", name: "judge_scores" } },
   { file: "schema_week5b_judge_scores_unique.sql", sentinel: { type: "index", name: "idx_judge_scores_unique" } },

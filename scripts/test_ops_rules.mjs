@@ -11,6 +11,9 @@
  * Run with: npm run test:ops
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { agreementBand, cohenKappa } from "./lib/agreement.mjs";
 import {
   openRouterAccountForTeam,
@@ -338,5 +341,58 @@ assert.equal(conductSaturationDue(6, 12), true);
 assert.equal(conductSaturationDue(7, 12), true);
 assert.equal(conductSaturationDue(0, 12), false);
 assert.equal(conductSaturationDue(0, 0), false, "no agents must not divide by zero");
+
+// A3 Step 1 migration: additive table for research source identifiers. The
+// full snippet must NOT be stored; only a hash and the numbered label.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const migration = fs.readFileSync(path.join(repoRoot, "db", "schema_research_results.sql"), "utf8");
+assert.ok(migration.includes("CREATE TABLE IF NOT EXISTS research_results"), "migration must be idempotent");
+for (const col of [
+  "event_id", "agent_id", "call_id", "source_id", "url", "title", "snippet_hash",
+]) {
+  assert.ok(migration.includes(col), `research_results must have ${col}`);
+}
+assert.ok(migration.includes("UNIQUE (call_id, source_id)"), "retries must not duplicate sources");
+assert.ok(!/\bsnippet\s+TEXT\b/i.test(migration), "full snippet text must not be stored");
+const applySchema = fs.readFileSync(path.join(repoRoot, "scripts", "apply_schema.js"), "utf8");
+const registration = '{ file: "schema_research_results.sql", sentinel: { type: "table", name: "research_results" } }';
+assert.ok(applySchema.includes(registration), "migration must be registered with a sentinel");
+const regAt = applySchema.indexOf(registration);
+assert.ok(
+  regAt > applySchema.indexOf('file: "schema_research_budget.sql"') &&
+    regAt < applySchema.indexOf('file: "schema_hackathon_events.sql"'),
+  "research_results must be ordered after research_calls",
+);
+assert.ok(
+  fs.readFileSync(path.join(repoRoot, "db", "APPLY_ORDER.md"), "utf8").includes("`schema_research_results.sql`"),
+  "apply order doc must list the migration",
+);
+
+// Apply the migration to an in-memory SQLite database when node:sqlite is
+// available, and prove the uniqueness contract with a real insert.
+try {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  db.exec(migration);
+  const cols = db.prepare("PRAGMA table_info(research_results)").all().map((c) => c.name);
+  assert.ok(cols.includes("source_id") && cols.includes("snippet_hash"));
+  const insert = db.prepare(
+    "INSERT INTO research_results (event_id, agent_id, call_id, source_id, url, title, snippet_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  insert.run("e1", "a1", 7, "S1", "https://example.test/a", "A title", "abc123");
+  assert.throws(
+    () => insert.run("e1", "a1", 7, "S1", "https://example.test/b", "B title", "def456"),
+    /UNIQUE/,
+    "same call/source must be rejected",
+  );
+  insert.run("e1", "a1", 7, "S2", "https://example.test/b", "B title", "def456");
+  db.close();
+} catch (err) {
+  if (err?.code === "ERR_MODULE_NOT_FOUND" || /Unknown module.*node:sqlite/.test(String(err))) {
+    console.log("node:sqlite unavailable — migration dynamic checks skipped");
+  } else {
+    throw err;
+  }
+}
 
 console.log("ops rule tests passed");

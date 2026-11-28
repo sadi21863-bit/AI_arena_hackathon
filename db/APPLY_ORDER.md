@@ -16,21 +16,22 @@ node scripts/apply_schema.js --remote --status
 | 2 | `schema.sql` | — (Week 1 core: `archive_events`, `archive_agents`, `archive_ideas`, `archive_interactions`, `model_registry`, `provider_usage_log`, `admin_tokens`) |
 | 3 | `schema_week3_event_queue.sql` | — |
 | 4 | `schema_research_budget.sql` | — |
-| 5 | `schema_hackathon_events.sql` | `schema.sql` (ALTERs `archive_events`); creates `hackathon_teams` |
-| 6 | `schema_week5_tribunal.sql` | #5 (ALTERs `hackathon_teams`); creates `judge_scores` |
-| 7 | `schema_week5b_judge_scores_unique.sql` | #6 |
-| 8 | `schema_week8_cron_heartbeat.sql` | — |
-| 9 | `schema_week8_judge_model_tracking.sql` | #6 (ALTERs `judge_scores`) + `schema.sql` |
-| 10 | `schema_build_turns.sql` | — |
-| 11 | `schema_team_members.sql` | — |
-| 12 | `schema_week8_event_id_indexes.sql` | #2, #3 (indexes their tables) |
-| 13 | `schema_week8_stall_tracking.sql` | #2, #3 |
-| 14 | `schema_week9_conduct.sql` | #2 (ALTERs `archive_ideas` + `archive_agents`) |
-| 15 | `schema_week10_queue_journal.sql` | #3 (references `event_queue.id` by value; creates `queue_journal`) |
-| 16 | `schema_week10_capacity_pause.sql` | #2 (ALTERs `archive_events`: `paused_from`/`paused_at`/`pause_reason`) |
-| 17 | `schema_week10_event_quality.sql` | #2 (references `archive_events.id` by value; creates `event_quality`) |
-| 18 | `schema_week10_ops_alerts.sql` | — (creates `ops_alerts`) |
-| 19 | `schema_week10b_quality_snapshots.sql` | #2 (references `archive_events.id` by value; creates `event_quality_snapshots`) |
+| 5 | `schema_research_results.sql` | #4 (uses `research_calls.id` as `call_id` by value) |
+| 6 | `schema_hackathon_events.sql` | `schema.sql` (ALTERs `archive_events`); creates `hackathon_teams` |
+| 7 | `schema_week5_tribunal.sql` | #6 (ALTERs `hackathon_teams`); creates `judge_scores` |
+| 8 | `schema_week5b_judge_scores_unique.sql` | #7 |
+| 9 | `schema_week8_cron_heartbeat.sql` | — |
+| 10 | `schema_week8_judge_model_tracking.sql` | #7 (ALTERs `judge_scores`) + `schema.sql` |
+| 11 | `schema_build_turns.sql` | — |
+| 12 | `schema_team_members.sql` | — |
+| 13 | `schema_week8_event_id_indexes.sql` | #2, #3 (indexes their tables) |
+| 14 | `schema_week8_stall_tracking.sql` | #2, #3 |
+| 15 | `schema_week9_conduct.sql` | #2 (ALTERs `archive_ideas` + `archive_agents`) |
+| 16 | `schema_week10_queue_journal.sql` | #3 (references `event_queue.id` by value; creates `queue_journal`) |
+| 17 | `schema_week10_capacity_pause.sql` | #2 (ALTERs `archive_events`: `paused_from`/`paused_at`/`pause_reason`) |
+| 18 | `schema_week10_event_quality.sql` | #2 (references `archive_events.id` by value; creates `event_quality`) |
+| 19 | `schema_week10_ops_alerts.sql` | — (creates `ops_alerts`) |
+| 20 | `schema_week10b_quality_snapshots.sql` | #2 (references `archive_events.id` by value; creates `event_quality_snapshots`) |
 
 `seed_agents.sql` is **not** in the list. It is data, not schema — re-running it
 against a live archive would be a data change rather than a no-op. Apply it by
@@ -38,8 +39,8 @@ hand exactly once when bootstrapping a new database.
 
 ## Which files are safe to re-run
 
-Files 1, 10, 11, 12, 13, 17, 18 and 19 use `IF NOT EXISTS` throughout and are idempotent.
-**Files 2-9, 14 and 15 are not** — they use bare `CREATE TABLE` and `ALTER TABLE ADD
+Files 1, 5, 11, 12, 13, 14, 18, 19 and 20 use `IF NOT EXISTS` throughout and are idempotent.
+**Files 2-4, 6-9, 15 and 16 are not** — they use bare `CREATE TABLE` and `ALTER TABLE ADD
 COLUMN`, both of which error on a second run. That's exactly why the tracking
 table exists: "apply everything and let the duplicates fail harmlessly" was
 never a safe recovery path, and before `schema_migrations` there was no way to
