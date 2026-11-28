@@ -377,13 +377,10 @@ export async function auditBuild(team) {
   const notes = [];
   // A quota kill can end the turn before the agent writes its verification
   // report. Waive that specific gap only when the team actually held on quota
-  // and no turn completed successfully; a successful turn had a chance to
-  // write the report, so a missing one there is still a contract failure.
+  // and EVERY turn it ran failed; a successful turn had a chance to write the
+  // report, so a missing one there is still a contract failure.
   const waived = new Set();
-  const quotaKilled =
-    Boolean(Number(team.quota_hold)) &&
-    Number(team.failed_turns) > 0 &&
-    Number(team.successful_turns) === 0;
+  const quotaKilled = Boolean(Number(team.quota_hold)) && allTurnsFailed(team);
   let productFiles = [];
   let testFiles = [];
   let verdict = null;
@@ -510,6 +507,7 @@ export async function auditBuild(team) {
     code,
     verdict,
     tier,
+    zero_success: !hasSuccessfulTurn(team),
   };
 }
 
@@ -787,6 +785,7 @@ async function main() {
           `${build.code?.nonblank_lines ?? 0} nonblank lines, tier ${build.tier ?? "empty"}` +
           (build.verdict ? `, verdict ${build.verdict}` : "") +
           (build.failed.length ? `; failed: ${build.failed.join(", ")}` : "") +
+          (build.zero_success ? "; ZERO SUCCESS — --strict fails while has_successful_turn is active" : "") +
           (build.notes.length ? `; ${build.notes.join("; ")}` : ""),
       );
     }
