@@ -90,6 +90,40 @@ assert.equal(pinForAccount(4), "KEY_4");
 assert.equal(openRouterKeyForTeam("beta", "k1", "k2", "k3", "k4"), "k2");
 assert.equal(openRouterKeyForTeam("alpha", "k1", "k2", "k3", "k4"), "k1");
 
+// Exhaustive set/unset matrix (2^4 = 16 combinations). A team may only ever
+// spend its own pair; an unset key must never fall back across the boundary.
+const ALPHA_ACCOUNTS = [1, 3];
+const BETA_ACCOUNTS = [2, 4];
+let combinations = 0;
+for (let mask = 0; mask < 16; mask += 1) {
+  const keys = {
+    key1: mask & 1 ? "k1" : undefined,
+    key2: mask & 2 ? "k2" : undefined,
+    key3: mask & 4 ? "k3" : undefined,
+    key4: mask & 8 ? "k4" : undefined,
+  };
+  for (const [team, owned] of [
+    ["alpha", ALPHA_ACCOUNTS],
+    ["beta", BETA_ACCOUNTS],
+    ["gamma", ALPHA_ACCOUNTS],
+  ]) {
+    const accounts = openRouterAccountsForTeam(team, keys);
+    assert.ok(accounts.every((a) => owned.includes(a)), `${team} escaped its pool for mask ${mask}: ${accounts}`);
+    assert.equal(new Set(accounts).size, accounts.length, `duplicate account for ${team} mask ${mask}`);
+  }
+  const alpha = openRouterAccountsForTeam("alpha", keys);
+  const beta = openRouterAccountsForTeam("beta", keys);
+  assert.equal(alpha.some((a) => BETA_ACCOUNTS.includes(a)), false, `alpha borrowed beta for mask ${mask}`);
+  assert.equal(beta.some((a) => ALPHA_ACCOUNTS.includes(a)), false, `beta borrowed alpha for mask ${mask}`);
+  const betaKey = openRouterKeyForTeam("beta", keys.key1, keys.key2, keys.key3, keys.key4);
+  assert.ok(
+    betaKey === undefined || betaKey === keys.key2 || betaKey === keys.key4,
+    `beta key fell back outside its pool for mask ${mask}: ${betaKey ?? "unset"}`,
+  );
+  combinations += 1;
+}
+assert.equal(combinations, 16, "all 16 set/unset combinations were checked");
+
 // Independence must never be claimed from a missing or failed probe.
 assert.equal(accountIndependence(null, "abc"), null);
 assert.equal(accountIndependence("abc", null), null);
