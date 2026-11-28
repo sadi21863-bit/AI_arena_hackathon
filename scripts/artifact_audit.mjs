@@ -31,6 +31,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { findOverScopedIdeas } from "./lib/scope_audit.mjs";
 import { completionTier, COMPLETION_TIERS } from "./lib/completion_tier.mjs";
+import { hasSuccessfulTurn, allTurnsFailed } from "./lib/build_outcome.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const args = process.argv.slice(2);
@@ -364,6 +365,10 @@ export async function auditBuild(team) {
   const checks = {
     repo_present: false,
     turns_ran: Number(team.with_run) >= 1 && Number(team.with_sha) >= 1,
+    // Outcome, not just activity: a team with no successful build turn has not
+    // delivered a build, whatever the harness report says. Quota waivers below
+    // never touch this check.
+    has_successful_turn: hasSuccessfulTurn(team),
     product_work: false,
     has_test: false,
     has_verification_report: false,
@@ -372,13 +377,10 @@ export async function auditBuild(team) {
   const notes = [];
   // A quota kill can end the turn before the agent writes its verification
   // report. Waive that specific gap only when the team actually held on quota
-  // and no turn completed successfully; a successful turn had a chance to
-  // write the report, so a missing one there is still a contract failure.
+  // and EVERY turn it ran failed; a successful turn had a chance to write the
+  // report, so a missing one there is still a contract failure.
   const waived = new Set();
-  const quotaKilled =
-    Boolean(Number(team.quota_hold)) &&
-    Number(team.failed_turns) > 0 &&
-    Number(team.successful_turns) === 0;
+  const quotaKilled = Boolean(Number(team.quota_hold)) && allTurnsFailed(team);
   let productFiles = [];
   let testFiles = [];
   let verdict = null;
@@ -463,12 +465,13 @@ export async function auditBuild(team) {
     if (report.status === 200 && report.json?.content) {
       const content = Buffer.from(report.json.content, "base64").toString("utf8");
       const m = content.match(
-        /(?:^|\n)\s*(?:#+\s*)?\*{0,2}Verdict\*{0,2}\s*:?\s*\*{0,2}\s*(READY|NOT READY)/i,
+        /(?:^|\n)\s*(?:#+\s*)?\*{0,2}Verdict\*{0,2}\s*:?\s*\*{0,2}\s*(READY|NOT READY|UNVERIFIED)/i,
       );
       checks.report_has_verdict = !!m;
       verdict = m ? m[1].toUpperCase() : null;
       if (!m) notes.push("VERIFICATION_REPORT.md has no parseable Verdict line");
       else if (verdict === "NOT READY") notes.push("report verdict is NOT READY (honest output; not a contract failure)");
+      else if (verdict === "UNVERIFIED") notes.push("report verdict is UNVERIFIED: verification did not complete this turn (warning, not a contract failure)");
     } else {
       notes.push(`report content HTTP ${report.status}`);
     }
@@ -504,6 +507,7 @@ export async function auditBuild(team) {
     code,
     verdict,
     tier,
+    zero_success: !hasSuccessfulTurn(team),
   };
 }
 
@@ -781,6 +785,7 @@ async function main() {
           `${build.code?.nonblank_lines ?? 0} nonblank lines, tier ${build.tier ?? "empty"}` +
           (build.verdict ? `, verdict ${build.verdict}` : "") +
           (build.failed.length ? `; failed: ${build.failed.join(", ")}` : "") +
+          (build.zero_success ? "; ZERO SUCCESS — --strict fails while has_successful_turn is active" : "") +
           (build.notes.length ? `; ${build.notes.join("; ")}` : ""),
       );
     }
