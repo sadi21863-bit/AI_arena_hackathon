@@ -172,8 +172,8 @@
       }
     },
     "agent_power": {
-      "status": "pass",
-      "checked_at": "2026-11-27T17:40:51.400770+00:00",
+      "status": "decided",
+      "checked_at": "2026-11-28T03:13:00.673694+00:00",
       "details": {
         "definition": "docs/SPEC_AGENT_EMPOWERMENT_2026-08-11.md — P1 (Playwright MCP + ui-verify/skill-creator skills) and P2 (prompt browser self-verify + .arena/skills discovery) landed 2026-08-11; P3 (team turn with subagents) is config-only prep, deferred.",
         "decision": "single-turn default; team-turn opt-in via the [team] marker",

@@ -3,7 +3,9 @@
 
 The decision is a document, not a measurement: single-turn stays the default,
 team-turn stays opt-in via the `[team]` marker, and the comparison moves to a
-separate experiment. This script refuses to write `.arena/state.json` unless
+separate experiment. The gate status is `decided` (deliberately not `pass`):
+the decision is closed, but the experiment is not a completed measurement.
+This script refuses to write `.arena/state.json` unless
 both the spec and CHANGELOG contain that decision. It replaces only the
 `agent_power` gate block, preserving every other byte of the file.
 """
@@ -65,7 +67,7 @@ def main() -> int:
     end += len("\n    }")
 
     gate = dict(original["gates"]["agent_power"])
-    gate["status"] = "pass"
+    gate["status"] = "decided"
     gate["checked_at"] = datetime.now(timezone.utc).isoformat()
     detail = gate.get("details", {})
     gate["details"] = {
@@ -86,7 +88,7 @@ def main() -> int:
         return 1
 
     STATE.write_text(expected, encoding="utf-8")
-    print("agent_power gate recorded as pass (decision only; experiment pending)")
+    print("agent_power gate recorded as decided (decision only; experiment pending)")
     return 0
 
 
