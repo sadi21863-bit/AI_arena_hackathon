@@ -4,8 +4,10 @@
  *
  * Non-empty coverage was solved in 2026-11-02; this reports the four proposed
  * verifiability rates instead of pretending a non-empty string is evidence.
- * "traceable" is deliberately NOT measured by a script: it needs a human or
- * second-model sample. No hard rejection rule is implied.
+ * "identifiable" requires a URL/DOI, an attribution phrase, or a year+source
+ * type — a bare "report" or "study" no longer counts. "traceable" is
+ * deliberately NOT measured by a script: it needs a human or second-model
+ * sample. No hard rejection rule is implied.
  *
  * Usage: node scripts/anchor_verifiability.mjs [--event=event_...]
  */
@@ -35,7 +37,10 @@ const ideas = await d1(
   [event.id],
 );
 const anchors = ideas.map((i) => String(i.research_anchor ?? "").trim()).filter(Boolean);
-const identifiableRe = /(https?:\/\/|doi\b|\b(?:report|study|paper|regulation|directive|dataset|survey|standard)\b)/i;
+// Identifiable means a concrete source, not merely the word "report" or
+// "study". Require a URL/DOI, an attribution phrase, or a year+source type.
+const identifiableRe =
+  /(https?:\/\/|doi\s*:|10\.\d{4,9}\/|\b(?:according to|per|from|in)\s+(?:the\s+)?(?:20\d{2}\s+)?(?:report|study|paper|dataset|survey|regulation|directive|standard)\b|\b(?:report|study|paper|dataset|survey|regulation|directive|standard)\s+(?:by|from|published|titled|named|called)\b|\b20\d{2}\s+(?:report|study|survey)\b)/i;
 const specificRe = /\d|["“”‘’]/;
 const identifiable = anchors.filter((a) => identifiableRe.test(a));
 const specific = anchors.filter((a) => specificRe.test(a));
