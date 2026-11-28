@@ -23,16 +23,24 @@ which row was shown with each idea.
 At `handleSubmitIdea`, before calling the LLM:
 
 1. Query only the **current event's** `research_results` rows for that agent,
-   newest first, capped at 5 distinct rows. Prefer rows whose call has
-   `source_id = S1` so the strongest result from each call is represented.
+   joined to `research_calls` on `call_id`. Selection is relevance-based, not
+   recency:
+   - take the best result from each call (`source_id = S1`);
+   - drop duplicate URLs (Tavily repeats results across calls);
+   - rank remaining calls by query relevance to this agent's lens, keeping
+     the strongest match first;
+   - show up to **8** sources.
+   An idea about an earlier research topic must still be able to cite its own
+   source, so "newest 5" is explicitly rejected.
 2. Give each selected row a prompt-local label `SRC-1 … SRC-n`. The label is
-   unique within this one prompt and is not the stored `source_id`.
+   unique within this one prompt and is **not** the stored `source_id` or the
+   row id.
 3. Show a short numbered list, e.g.:
 
    ```
    Sources from your research this event (cite one by label):
-   SRC-1 [S2, call 41] "Logistics bottlenecks in EU cold chains" — https://example.test/a
-   SRC-2 [S1, call 43] "SME cold-storage cost survey (2025)" — https://example.test/b
+   SRC-1 [call 41, S2] "Logistics bottlenecks in EU cold chains" — https://example.test/a
+   SRC-2 [call 43, S1] "SME cold-storage cost survey (2025)" — https://example.test/b
    ```
 
 4. Replace the clipped Vectorize-recall block with this list for the purpose
@@ -58,6 +66,8 @@ CREATE TABLE IF NOT EXISTS idea_sources (
   idea_id TEXT,
   label TEXT NOT NULL,                  -- SRC-1 … SRC-n shown in this prompt
   research_result_id INTEGER NOT NULL,  -- research_results.id actually shown
+  source_url TEXT,                      -- copied from that row for public display
+  source_title TEXT,                    -- copied from that row for public display
   anchor_label TEXT,                    -- parsed from the submitted idea
   anchor_matched INTEGER,               -- 1/0, NULL until checked
   checked_at DATETIME,
@@ -72,8 +82,10 @@ CREATE INDEX IF NOT EXISTS idx_idea_sources_idea
 
 `queue_item_id` is the idempotency key: the idea may not exist until
 `postIdea` returns, so rows are written at submission time with the queue id
-and backfilled with `idea_id` immediately after insertion. A retry hits the
-UNIQUE key and does not duplicate the mapping.
+and backfilled with `idea_id` immediately after insertion. **A retry reuses
+the stored mapping** — it must not re-query sources, because a new query could
+return different rows from those the model actually saw. The UNIQUE key makes
+that reuse automatic.
 
 The existing `research_anchor` column is unchanged. `source_id` in
 `research_results` stays `S1..S5` per call and is **not** renamed.
@@ -101,12 +113,21 @@ Per event, report:
 |---|---|
 | `anchored` | submitted ideas with non-empty `research_anchor` |
 | `source_rows_available` | ideas whose submission had ≥1 current-event research row |
-| `match_rate` | `anchor_matched=1` / `source_rows_available` |
+| `match_rate` | `anchor_matched=1` / `source_rows_available` — **formatting compliance only** |
 | `no_sources_rate` | `anchor_matched IS NULL` / submitted ideas |
 | `identifiable_rate` | existing `anchor_verifiability.mjs` rate, tracked separately |
+| `citation_concentration` | citations per `research_results.id`, plus the share of an agent's ideas that reuse one source |
+| `support_rate` | human/second-model sample: of ~10 anchors per event, how many have a claim that follows from the cited source |
 
 Baseline for comparison: 0/23 identifiable anchors in each of
 `event_40e6b8d8` and `event_c514ac4a`.
+
+`match_rate` will be close to 100% once the prompt requires a label; it proves
+the format is followed, **not** that grounding improved. The required input
+for the Step 4 decision is `support_rate` from the human or second-model
+sample, not `match_rate`. Also report `citation_concentration`: if every idea
+from an agent cites the same source, originality is at risk even with a high
+match rate.
 
 Report the first full cycle after Step 3 ships, then the next one. No gate,
 no score change, no rejection.
@@ -114,13 +135,25 @@ no score change, no rejection.
 Quality guardrails for the decision after one cycle:
 
 - **Revert Step 3** if `match_rate` < ~50% — models are ignoring the format.
-- **Revert Step 3** if idea quality drops: compare near-duplicate pairs and
-  judge score spread against the last three events. Anchoring many ideas to
-  the same five sources could reduce originality; this is the main risk.
+- **Revert Step 3** if `support_rate` from the human/second-model sample does
+  not improve on the ungrounded baseline, or if idea quality drops: compare
+  near-duplicate pairs and judge score spread against the last three events.
+  Anchoring many ideas to the same source is the main risk.
 - **Stop** if the added D1 reads/writes cause queue failures or subrequest
   errors.
 
-## 5. Order and approvals
+## 5. Public visibility (the product win)
+
+A raw `SRC-2:` label means nothing to a reader. Resolve it through
+`idea_sources` to the copied `source_title` and `source_url`, and return those
+with the idea (e.g. in `/ideas` and the Archive) so the Observatory can show
+a real, clickable citation. The mapping row is the single source of truth for
+what was shown; do not re-derive the URL from `research_results` at read time.
+
+If no mapping exists (ideas from before Step 3), the UI shows the legacy
+`research_anchor` text exactly as it does today.
+
+## 6. Order and approvals
 
 1. Additive `idea_sources` migration, applied through `apply_schema.js`
    (schema before code) — owner approval for the apply.
