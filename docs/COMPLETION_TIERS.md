@@ -38,21 +38,28 @@ Produced by `node scripts/completion_tiers.mjs --last=6`:
 
 Counts: 3 `complete`, 8 `partial`, 0 `empty`, 0 `scaffold` in this window.
 
-### Hand-check of six repos
+### Hand-check of six repos — structure only
 
-Tree check via the GitHub API (`git/trees/main?recursive=1`) on 2026-11-27:
+Tree check via the GitHub API (`git/trees/main?recursive=1`) on 2026-11-27.
+This hand-check verified **structure only** — product/test file counts, report
+presence and verdict shape. It did **not** assess code quality, relevance or
+usability. The tier labels matched the audit's own structural inputs in these
+six cases; that is a consistency check, not proof the repos are good or that
+the thresholds are final.
 
-| repo | report file | test files in tree | tier agreed? |
+| repo | report file | test files in tree | structural agreement |
 |---|---|---:|---|
-| `arena-team-alpha-d3e2e7be` | yes | 4 | yes — `complete` (3,273 lines, READY, 1 success) |
-| `arena-team-beta-d3e2e7be` | yes | 2 | yes — `partial` (415 lines, verdict not parseable, 0 successes) |
-| `arena-team-alpha-6ee918ee` | no | 5 | yes — `partial` (no report, 0 successes) |
-| `arena-team-beta-6ee918ee` | yes | 6 | yes — `partial` (report present but 0 successes) |
-| `arena-team-alpha-c5ad953c` | yes | 25 | yes — `complete` |
-| `arena-team-beta-c5ad953c` | yes | 18 | yes — `complete` |
+| `arena-team-alpha-d3e2e7be` | yes | 4 | `complete` (3,273 lines, READY, 1 success) |
+| `arena-team-beta-d3e2e7be` | yes | 2 | `partial` (415 lines, verdict not parseable, 0 successes) |
+| `arena-team-alpha-6ee918ee` | no | 5 | `partial` (no report, 0 successes) |
+| `arena-team-beta-6ee918ee` | yes | 6 | `partial` (report present but 0 successes) |
+| `arena-team-alpha-c5ad953c` | yes | 25 | `complete` |
+| `arena-team-beta-c5ad953c` | yes | 18 | `complete` |
 
-The known-weak beta repo of `event_3b985ab5` is correctly `partial`, not
-`complete`. No hand-checked repo was misclassified.
+Note on outcomes: `complete` requires **at least one** successful build turn,
+not a clean run. In `event_3b985ab5` alpha reached `complete` with **1 success
+out of 10 turns** (9 failed). That is the intended floor for this tier; a high
+success ratio belongs to the A5b quality rubric, not to completion.
 
 ## How to rerun
 
